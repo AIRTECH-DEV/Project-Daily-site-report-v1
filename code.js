@@ -22,8 +22,13 @@ const VRV_ORDERS_GID = 290389899;
 const NONVRV_ORDERS_SHEET_ID = '1hPvEw0rxaOmg2JDtdp9q8XqjbrV98PZL2jiZVz6XWFI';
 const NONVRV_ORDERS_GID = 1766836681;
 
-const PARENT_FOLDER_ID = '1xlYIM-BH80gbymALM6ehIF5NwhZzAAGP';
+const PARENT_FOLDER_ID = '1jdw5IgOuvn1M9xF5aeI00XN8A76sPI4W';
 const LOGO_URL = 'https://drive.google.com/file/d/1TU2KKJN4AQKkG7nMtMlCoiYX1wMD2QtB/view?usp=drive_link';
+const TEMPLATE_DOC_ID = '1_dsXZdnwCajnmrfk4w3BgJI9-rz_vdDsCEJhHDisELo';
+
+// Edit these two values only if you want to test one exact response row.
+const TEST_PDF_TAB_NAME = 'Non-VRV';
+const TEST_PDF_ROW_NUMBER = 2;
 
 /**
  * Run this once from the Apps Script editor after updating appsscript.json.
@@ -115,6 +120,28 @@ function findColIndex(headers, mustInclude, mustExclude) {
   return -1;
 }
 
+function formatPdfCellValue(value) {
+  if (value === null || value === undefined || value === '') return 'N/A';
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'dd-MMM-yyyy HH:mm');
+  }
+  return value.toString();
+}
+
+function setTableColumnWidth(table, columnIndex, width) {
+  if (typeof table.setColumnWidth === 'function') {
+    table.setColumnWidth(columnIndex, width);
+    return;
+  }
+
+  for (let row = 0; row < table.getNumRows(); row++) {
+    const tableRow = table.getRow(row);
+    if (tableRow.getNumCells() > columnIndex) {
+      tableRow.getCell(columnIndex).setWidth(width);
+    }
+  }
+}
+
 function getOrCreateProjectFolder(projectName) {
   const parent = DriveApp.getFolderById(PARENT_FOLDER_ID);
   const name = projectName || 'General_Reports';
@@ -128,6 +155,124 @@ function saveBase64File(fileObj, folder, prefix) {
   const blob = Utilities.newBlob(bytes, fileObj.mimeType, prefix + '_' + fileObj.name);
   const file = folder.createFile(blob);
   return file.getUrl();
+}
+
+function generateMissingSiteReportPDFs() {
+  generateSiteReportPDFsForRows(false);
+}
+
+function regenerateAllSiteReportPDFs() {
+  generateSiteReportPDFsForRows(true);
+}
+
+function testLatestSiteReportPDF() {
+  const target = findLatestSiteReportRow_();
+  if (!target) {
+    throw new Error('No saved site report rows found in VRV or Non-VRV tabs.');
+  }
+
+  return testSiteReportPDFForRow_(target.sheet, target.headers, target.rowNum);
+}
+
+function testConfiguredSiteReportPDF() {
+  const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
+  const sheet = ss.getSheetByName(TEST_PDF_TAB_NAME);
+  if (!sheet) {
+    throw new Error('Test tab not found: ' + TEST_PDF_TAB_NAME);
+  }
+  if (TEST_PDF_ROW_NUMBER < 2 || TEST_PDF_ROW_NUMBER > sheet.getLastRow()) {
+    throw new Error('Test row ' + TEST_PDF_ROW_NUMBER + ' is outside the data range.');
+  }
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  return testSiteReportPDFForRow_(sheet, headers, TEST_PDF_ROW_NUMBER);
+}
+
+function findLatestSiteReportRow_() {
+  const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
+  let latest = null;
+
+  Object.keys(TAB_NAMES).forEach(function (key) {
+    const sheet = ss.getSheetByName(TAB_NAMES[key]);
+    if (!sheet || sheet.getLastRow() < 2) return;
+
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const timestampCol = findColIndex(headers, 'timestamp');
+    const rowNum = sheet.getLastRow();
+    let sortValue = rowNum;
+
+    if (timestampCol > -1) {
+      const stamp = sheet.getRange(rowNum, timestampCol + 1).getValue();
+      if (Object.prototype.toString.call(stamp) === '[object Date]') {
+        sortValue = stamp.getTime();
+      }
+    }
+
+    if (!latest || sortValue > latest.sortValue) {
+      latest = { sheet: sheet, headers: headers, rowNum: rowNum, sortValue: sortValue };
+    }
+  });
+
+  return latest;
+}
+
+function testSiteReportPDFForRow_(sheet, headers, rowNum) {
+  const projectCol = findColIndex(headers, 'select project name');
+  const pdfIdCol = findColIndex(headers, 'pdf id');
+  const mailStatusCol = findColIndex(headers, 'mail status');
+  const projectName = projectCol > -1
+    ? (sheet.getRange(rowNum, projectCol + 1).getValue() || 'General_Reports').toString().trim()
+    : 'General_Reports';
+
+  const folder = getOrCreateProjectFolder(projectName);
+  const pdfFile = generateSiteReportPDF(sheet, headers, rowNum, projectName, folder);
+
+  if (pdfIdCol > -1) {
+    sheet.getRange(rowNum, pdfIdCol + 1).setValue(pdfFile.getId());
+  }
+  if (mailStatusCol > -1) {
+    sheet.getRange(rowNum, mailStatusCol + 1).setValue('PDF TEST GENERATED');
+  }
+
+  Logger.log('Test PDF created for ' + sheet.getName() + ' row ' + rowNum + ': ' + pdfFile.getUrl());
+  return pdfFile.getUrl();
+}
+
+function generateSiteReportPDFsForRows(regenerateExisting) {
+  const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
+  Object.keys(TAB_NAMES).forEach(function (key) {
+    const sheet = ss.getSheetByName(TAB_NAMES[key]);
+    if (!sheet || sheet.getLastRow() < 2) return;
+
+    const lastCol = sheet.getLastColumn();
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const projectCol = findColIndex(headers, 'select project name');
+    const pdfIdCol = findColIndex(headers, 'pdf id');
+    const mailStatusCol = findColIndex(headers, 'mail status');
+    if (pdfIdCol === -1) return;
+
+    for (let rowNum = 2; rowNum <= sheet.getLastRow(); rowNum++) {
+      if (!regenerateExisting && sheet.getRange(rowNum, pdfIdCol + 1).getValue()) continue;
+
+      try {
+        const projectName = projectCol > -1
+          ? (sheet.getRange(rowNum, projectCol + 1).getValue() || 'General_Reports').toString().trim()
+          : 'General_Reports';
+        const folder = getOrCreateProjectFolder(projectName);
+        const pdfFile = generateSiteReportPDF(sheet, headers, rowNum, projectName, folder);
+        sheet.getRange(rowNum, pdfIdCol + 1).setValue(pdfFile.getId());
+        if (mailStatusCol > -1) {
+          sheet.getRange(rowNum, mailStatusCol + 1).setValue('PDF GENERATED');
+        }
+      } catch (err) {
+        const message = err && err.message ? err.message : err.toString();
+        Logger.log('generateMissingSiteReportPDFs row ' + rowNum + ' failed: ' + message);
+        if (mailStatusCol > -1) {
+          sheet.getRange(rowNum, mailStatusCol + 1).setValue('PDF FAILED: ' + message);
+        }
+      }
+    }
+  });
 }
 
 /**
@@ -193,125 +338,329 @@ function submitSiteReport(payload) {
     const newRow = sheet.getLastRow() + 1;
     sheet.getRange(newRow, 1, 1, headers.length).setValues([row]);
 
+    let pdfUrl = '';
+    const mailStatusCol = findColIndex(headers, 'mail status');
+    const pdfIdCol = findColIndex(headers, 'pdf id');
+
     try {
       const pdfFile = generateSiteReportPDF(sheet, headers, newRow, projectName, folder);
-      const pdfIdCol = findColIndex(headers, 'pdf id');
       if (pdfIdCol > -1 && pdfFile) {
         sheet.getRange(newRow, pdfIdCol + 1).setValue(pdfFile.getId());
       }
+      if (mailStatusCol > -1) {
+        sheet.getRange(newRow, mailStatusCol + 1).setValue('PDF GENERATED');
+      }
+      pdfUrl = pdfFile ? pdfFile.getUrl() : '';
     } catch (pdfErr) {
-      Logger.log('PDF generation failed: ' + pdfErr);
+      const pdfMessage = pdfErr && pdfErr.message ? pdfErr.message : pdfErr.toString();
+      Logger.log('PDF generation failed: ' + pdfMessage);
+      if (mailStatusCol > -1) {
+        sheet.getRange(newRow, mailStatusCol + 1).setValue('PDF FAILED: ' + pdfMessage);
+      }
+      return { success: false, error: 'Data saved, but PDF generation failed: ' + pdfMessage };
     }
 
-    return { success: true, row: newRow };
+    return { success: true, row: newRow, pdfUrl: pdfUrl };
   } catch (err) {
     Logger.log('submitSiteReport error: ' + err);
     return { success: false, error: err.message };
   }
 }
 
-/**
- * Same letterhead/table/photo layout as the original autoGeneratePDF,
- * sourced from a row number instead of a Form-submit event.
- */
 function generateSiteReportPDF(sheet, headers, rowNum, projectName, folder) {
   const rowData = sheet.getRange(rowNum, 1, 1, headers.length).getValues()[0];
-
-  const doc = DocumentApp.create('Temp_Report_' + projectName);
-  const body = doc.getBody();
-  body.setMarginTop(36).setMarginLeft(40).setMarginRight(40).setMarginBottom(36);
-
-  const headerTable = body.appendTable([['']]);
-  const cell = headerTable.getRow(0).getCell(0);
-  headerTable.setBorderWidth(0);
-  cell.setBackgroundColor('#FFFFFF');
-  cell.setPaddingTop(20).setPaddingBottom(15);
-  headerTable.setColumnWidth(0, 520);
-
-  try {
-    const logoId = LOGO_URL.match(/[-\w]{25,}/)[0];
-    const logoBlob = DriveApp.getFileById(logoId).getBlob();
-    const image = cell.appendImage(logoBlob);
-    const ratio = image.getWidth() / image.getHeight();
-    image.setWidth(560);
-    image.setHeight(560 / ratio);
-    image.getParent().asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-
-    const companyText = cell.appendParagraph('Site Report');
-    companyText.setAlignment(DocumentApp.HorizontalAlignment.CENTER)
-      .setBold(true).setForegroundColor('#721c24').setFontSize(16).setSpacingBefore(10);
-  } catch (err) {
-    cell.appendParagraph('VAKHARIA AIRTECH PVT. LTD.')
-      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-  }
-
-  const drawingPhotoColIdx = findColIndex(headers, 'upload photo here');
-  if (drawingPhotoColIdx > -1) {
-    const drawingVal = rowData[drawingPhotoColIdx];
-    if (drawingVal && drawingVal !== 'N/A' && drawingVal !== '') {
-      try {
-        const idMatch = drawingVal.toString().match(/[-\w]{25,}/);
-        if (idMatch) {
-          const imgBlob = DriveApp.getFileById(idMatch[0]).getBlob();
-          body.appendParagraph('\nDRAWING CHANGE PHOTO:').setBold(true);
-          const dImg = body.appendImage(imgBlob);
-          const dRatio = dImg.getWidth() / dImg.getHeight();
-          dImg.setWidth(450).setHeight(450 / dRatio);
-          body.appendParagraph('');
-        }
-      } catch (e) {
-        body.appendParagraph('Could not load drawing image: ' + e.message);
-      }
-    }
-  }
-
-  body.appendParagraph('\n');
-  const excludeHeaders = [
-    'email address', 'mail status', 'pdf id',
-    'measurement report created today', 'upload the measurement report here',
-    'what is the next plan for this site tomorrow', 'upload photo here'
-  ];
-  const tableData = [];
-  headers.forEach(function (header, idx) {
-    const hLower = (header || '').toString().toLowerCase();
-    const skip = excludeHeaders.some(function (ex) { return hLower.indexOf(ex) !== -1; });
-    if (skip) return;
-    const value = rowData[idx] || 'N/A';
-    if (hLower.indexOf('upload site photo') !== -1 && value !== 'N/A') {
-      tableData.push([header, 'Images attached below']);
-    } else {
-      tableData.push([header, value]);
-    }
+  const data = {};
+  headers.forEach(function (header, index) {
+    data[header] = rowData[index] || '';
   });
-  const table = body.appendTable(tableData);
-  table.setBorderWidth(1);
-  table.setColumnWidth(0, 150);
 
-  const sitePhotoColIdx = findColIndex(headers, 'upload site photo');
-  if (sitePhotoColIdx > -1 && rowData[sitePhotoColIdx]) {
-    const entries = rowData[sitePhotoColIdx].toString().split(',');
-    body.appendParagraph('\nSITE PHOTO:').setBold(true);
-    entries.forEach(function (entry) {
-      try {
-        const idMatch = entry.trim().match(/[-\w]{25,}/);
-        if (idMatch) {
-          const blob = DriveApp.getFileById(idMatch[0]).getBlob();
-          const img = body.appendImage(blob);
-          const r = img.getWidth() / img.getHeight();
-          img.setWidth(450).setHeight(450 / r);
-          img.getParent().asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-          body.appendParagraph('');
-        }
-      } catch (e) {
-        body.appendParagraph('Could not load image: ' + e.message);
-      }
+  return buildDocAndExportPDF(headers, rowData, data, projectName, folder, false);
+}
+
+function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder, isTest) {
+  const tempName = 'Temp_' + projectName + '_' + new Date().getTime();
+  const tempFolder = DriveApp.getFolderById(PARENT_FOLDER_ID);
+  const copyFile = DriveApp.getFileById(TEMPLATE_DOC_ID).makeCopy(tempName, tempFolder);
+  const docId = copyFile.getId();
+  const doc = DocumentApp.openById(docId);
+  const body = doc.getBody();
+
+  body.clear();
+
+  const RED = '#D0312D';
+  const DARK = '#1A1A1A';
+  const GRAY = '#777777';
+  const LGRAY = '#AAAAAA';
+  const AMBER = '#C8860A';
+  const GREEN = '#1A7A4A';
+  const WHITE = '#FFFFFF';
+  const BGRAY = '#F5F5F5';
+
+  let ts = data.Timestamp ? data.Timestamp.toString() : '';
+  let tsFormatted = ts;
+  try {
+    const d = new Date(ts);
+    if (!isNaN(d.getTime())) {
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      tsFormatted = d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() +
+        ' | ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+  } catch (ex) {}
+
+  const titleTable = body.appendTable([['', '']]);
+  titleTable.setBorderWidth(0);
+  titleTable.setBorderColor(WHITE);
+
+  const leftCell = titleTable.getCell(0, 0);
+  leftCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(4);
+  leftCell.setBackgroundColor(WHITE);
+  const titlePara = leftCell.getChild(0).asParagraph();
+  titlePara.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  titlePara.setSpacingBefore(0).setSpacingAfter(0);
+  titlePara.clear();
+  titlePara.appendText('SITE ').setFontFamily('Arial').setFontSize(22).setBold(true).setForegroundColor(DARK);
+  titlePara.appendText('REPORT').setFontFamily('Arial').setFontSize(22).setBold(true).setForegroundColor(RED);
+
+  const rightCell = titleTable.getCell(0, 1);
+  rightCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(4).setPaddingRight(0);
+  rightCell.setBackgroundColor(WHITE);
+  const datePara = rightCell.getChild(0).asParagraph();
+  datePara.setAlignment(DocumentApp.HorizontalAlignment.RIGHT);
+  datePara.setSpacingBefore(0).setSpacingAfter(0);
+  datePara.clear();
+  datePara.appendText(tsFormatted)
+    .setFontFamily('Courier New').setFontSize(11).setBold(true).setForegroundColor(AMBER);
+
+  const redLine = body.appendParagraph('');
+  redLine.setSpacingBefore(4).setSpacingAfter(10);
+  redLine.editAsText().setForegroundColor(RED);
+
+  appendSectionHeader(body, "TODAY'S ACTIVITY", RED);
+  const activityValue = data["Today's Activity"] || 'N/A';
+  const actPara = body.appendParagraph(activityValue.toString());
+  actPara.setSpacingBefore(2).setSpacingAfter(12);
+  actPara.editAsText()
+    .setFontFamily('Arial').setFontSize(13).setBold(true).setForegroundColor(DARK);
+
+  body.appendParagraph('').setSpacingAfter(8);
+  appendSectionHeader(body, 'PROJECT DETAILS', RED);
+
+  function shouldSkipHeader(headerText) {
+    const lower = headerText.toLowerCase();
+    const skipPatterns = [
+      'email address',
+      'mail status',
+      'pdf id',
+      'timestamp',
+      "today's activity",
+      'if yes: upload the measurement report',
+      'upload site photo',
+      'site photos',
+      'if yes :upload photo here',
+      'if yes: upload photo here'
+    ];
+    return skipPatterns.some(function (pattern) {
+      return lower.indexOf(pattern) !== -1;
     });
   }
 
+  const tableData = [];
+  headers.forEach(function (header, index) {
+    if (shouldSkipHeader(header || '')) return;
+    let value = formatPdfCellValue(rowData[index]);
+    if (!value || value.trim() === '') value = 'N/A';
+    tableData.push([(header || '').toString().toUpperCase(), value]);
+  });
+
+  if (tableData.length > 0) {
+    const detailTable = body.appendTable(tableData);
+    detailTable.setBorderWidth(0);
+    styleDetailTable(detailTable, BGRAY, GRAY, DARK, GREEN, AMBER, LGRAY, WHITE);
+  }
+
+  body.appendParagraph('').setSpacingAfter(8);
+
+  let drawingInserted = false;
+  headers.forEach(function (header, index) {
+    if (drawingInserted) return;
+    const lower = (header || '').toString().toLowerCase();
+    const value = formatPdfCellValue(rowData[index]);
+    if (lower.indexOf('changes in drawing') !== -1 &&
+      (lower.indexOf('upload') !== -1 || lower.indexOf('photo here') !== -1) &&
+      value !== 'N/A' && value.trim() !== '') {
+      try {
+        const drawingId = value.match(/[-\w]{25,}/);
+        if (drawingId) {
+          body.appendParagraph('').setSpacingBefore(20).setSpacingAfter(4);
+          appendSectionHeader(body, 'DRAWING CHANGE PHOTO', RED);
+          const imgBlob = DriveApp.getFileById(drawingId[0]).getBlob();
+          const img = body.appendImage(imgBlob);
+          img.setWidth(250).setHeight(180);
+          body.appendParagraph('').setSpacingAfter(10);
+          drawingInserted = true;
+        }
+      } catch (err) {
+        Logger.log('Drawing photo error: ' + err);
+      }
+    }
+  });
+
+  let sitePhotoKey = null;
+  for (let index = 0; index < headers.length; index++) {
+    const lower = (headers[index] || '').toString().toLowerCase();
+    if (lower === 'upload site photo' || lower === 'site photos' ||
+      (lower.indexOf('upload') !== -1 && lower.indexOf('site photo') !== -1)) {
+      sitePhotoKey = headers[index];
+      break;
+    }
+  }
+
+  const sitePhotoVal = sitePhotoKey ? formatPdfCellValue(data[sitePhotoKey]) : '';
+  body.appendPageBreak();
+  body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(0);
+  appendSectionHeader(body, 'SITE PHOTOS', RED);
+  body.appendParagraph('').setSpacingBefore(12).setSpacingAfter(6);
+
+  if (sitePhotoVal && sitePhotoVal !== 'N/A' && sitePhotoVal.trim() !== '') {
+    const photoEntries = sitePhotoVal.split(',');
+    const photoBlobs = [];
+
+    photoEntries.forEach(function (entry) {
+      try {
+        const photoId = entry.trim().match(/[-\w]{25,}/);
+        if (photoId) {
+          photoBlobs.push(DriveApp.getFileById(photoId[0]).getBlob());
+        }
+      } catch (err) {
+        Logger.log('Photo load error: ' + err);
+      }
+    });
+
+    for (let index = 0; index < photoBlobs.length; index += 2) {
+      const photoTable = body.appendTable([['', '']]);
+      photoTable.setBorderWidth(0);
+      setTableColumnWidth(photoTable, 0, 240);
+      setTableColumnWidth(photoTable, 1, 240);
+
+      const pc0 = photoTable.getCell(0, 0);
+      pc0.clear();
+      pc0.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(0).setPaddingRight(6);
+      const pi0 = pc0.insertImage(0, photoBlobs[index]);
+      pi0.setWidth(228).setHeight(160);
+
+      const pc1 = photoTable.getCell(0, 1);
+      pc1.clear();
+      pc1.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(6).setPaddingRight(0);
+      if (photoBlobs[index + 1]) {
+        const pi1 = pc1.insertImage(0, photoBlobs[index + 1]);
+        pi1.setWidth(228).setHeight(160);
+      }
+
+      body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(4);
+    }
+  } else {
+    const noPhoto = body.appendParagraph('No photos attached.');
+    noPhoto.editAsText().setFontFamily('Arial').setFontSize(11).setForegroundColor(LGRAY);
+    body.appendParagraph('').setSpacingAfter(6);
+  }
+
+  try {
+    let footer = doc.getFooter();
+    if (!footer) footer = doc.addFooter();
+
+    let logoBlob = null;
+    const existingElements = footer.getNumChildren();
+    for (let index = 0; index < existingElements; index++) {
+      const elem = footer.getChild(index);
+      if (elem.getType() === DocumentApp.ElementType.PARAGRAPH) {
+        const para = elem.asParagraph();
+        const images = para.getImages();
+        if (images.length > 0) {
+          logoBlob = images[0].getBlob();
+          break;
+        }
+      }
+    }
+
+    footer.clear();
+    const footerTable = footer.appendTable([['']]);
+    footerTable.setBorderWidth(0);
+    setTableColumnWidth(footerTable, 0, 200);
+
+    const logoCell = footerTable.getCell(0, 0);
+    logoCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(0);
+    logoCell.setVerticalAlignment(DocumentApp.VerticalAlignment.MIDDLE);
+
+    if (logoBlob) {
+      const logoImage = logoCell.insertImage(0, logoBlob);
+      logoImage.setWidth(100).setHeight(40);
+    } else {
+      const logoText = logoCell.appendParagraph('DAIKIN');
+      logoText.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+      logoText.editAsText().setFontFamily('Arial').setFontSize(12).setBold(true).setForegroundColor(RED);
+    }
+  } catch (footerErr) {
+    Logger.log('Footer rewrite error: ' + footerErr);
+  }
+
   doc.saveAndClose();
-  const pdfBlob = DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF);
-  const pdfName = Utilities.formatDate(new Date(), 'GMT+5:30', 'dd_MMM_yyyy') + '_' + projectName + '_SiteReport.pdf';
-  const pdfFile = folder.createFile(pdfBlob).setName(pdfName);
-  DriveApp.getFileById(doc.getId()).setTrashed(true);
-  return pdfFile;
+  Logger.log('Doc written OK');
+
+  const token = ScriptApp.getOAuthToken();
+  const exportUrl = 'https://docs.google.com/feeds/download/documents/export/Export?id=' +
+    docId + '&exportFormat=pdf';
+  const pdfResp = UrlFetchApp.fetch(exportUrl, {
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true
+  });
+
+  if (pdfResp.getResponseCode() >= 300) {
+    throw new Error('PDF export failed: HTTP ' + pdfResp.getResponseCode() + ' - ' + pdfResp.getContentText());
+  }
+
+  DriveApp.getFileById(docId).setTrashed(true);
+  Logger.log('Temp Doc deleted');
+
+  const suffix = isTest ? '_SiteReport_TEST.pdf' : '_SiteReport.pdf';
+  const pdfName = Utilities.formatDate(new Date(), 'GMT+5:30', 'dd_MMM_yyyy') + '_' + projectName + suffix;
+  return targetFolder.createFile(pdfResp.getBlob()).setName(pdfName);
+}
+
+function appendSectionHeader(body, text, color) {
+  const para = body.appendParagraph(text);
+  para.setSpacingBefore(12).setSpacingAfter(6);
+  para.editAsText()
+    .setFontFamily('Arial').setFontSize(10).setBold(true)
+    .setForegroundColor(color || '#D0312D');
+  return para;
+}
+
+function styleDetailTable(table, BGRAY, GRAY, DARK, GREEN, AMBER, LGRAY, WHITE) {
+  for (let rowIndex = 0; rowIndex < table.getNumRows(); rowIndex++) {
+    const row = table.getRow(rowIndex);
+
+    const keyCell = row.getCell(0);
+    keyCell.setBackgroundColor(BGRAY);
+    keyCell.setPaddingTop(8).setPaddingBottom(8).setPaddingLeft(10).setPaddingRight(6);
+    keyCell.editAsText()
+      .setFontFamily('Arial').setFontSize(9).setBold(true).setForegroundColor(GRAY);
+
+    const valCell = row.getCell(1);
+    const rawVal = valCell.getText().toLowerCase().trim();
+    valCell.setPaddingTop(8).setPaddingBottom(8).setPaddingLeft(10).setPaddingRight(6);
+    valCell.setBackgroundColor(rowIndex % 2 === 0 ? WHITE : '#FAFAFA');
+
+    const text = valCell.editAsText();
+    text.setFontFamily('Arial').setFontSize(11).setBold(false);
+
+    if (rawVal === 'no' || rawVal === 'done') {
+      text.setForegroundColor(GREEN).setBold(true);
+    } else if (rawVal === 'yes') {
+      text.setForegroundColor(AMBER).setBold(true);
+    } else if (rawVal === 'n/a' || rawVal === '') {
+      text.setForegroundColor(LGRAY);
+    } else {
+      text.setForegroundColor(DARK);
+    }
+  }
 }

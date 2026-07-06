@@ -1021,10 +1021,14 @@
         onSubmitError({ message: (result && result.error) || 'Unknown error' });
         return;
       }
+      var pdfButton = result.pdfUrl
+        ? '<a class="btn btn-next" style="flex:none; padding:15px 24px; display:inline-flex; align-items:center; justify-content:center; text-decoration:none;" target="_blank" href="' + escapeHtml(result.pdfUrl) + '">Open PDF</a>'
+        : '';
       document.getElementById('app').innerHTML =
         '<div class="center-screen">' +
         '<h2>Report submitted</h2>' +
-        '<p>Your ' + escapeHtml(answers.siteType) + ' site visit report has been saved and the PDF is being generated.</p>' +
+        '<p>Your ' + escapeHtml(answers.siteType) + ' site visit report has been saved and the PDF has been generated.</p>' +
+        pdfButton +
         '<button class="btn btn-next" style="flex:none; padding:0 24px;" onclick="location.reload()">Submit another report</button>' +
         '</div>';
     }
