@@ -29,12 +29,22 @@
     .hero {
       width: 100%;
       background: #fff;
-      border: 1px solid #efefef;
+      border: 0;
       border-radius: 4px 4px 0 0;
       overflow: hidden;
+      position: relative;
+      aspect-ratio: 1125 / 186;
       box-shadow: 0 4px 18px rgba(0,0,0,.04);
     }
-    .hero img { display:block; width:100%; height:auto; }
+    .hero img {
+      display: block;
+      width: 102.222%;
+      max-width: none;
+      height: auto;
+      position: absolute;
+      left: -1.778%;
+      top: -7.527%;
+    }
 
     .stepper {
       background: #fff;
