@@ -142,6 +142,32 @@ function setTableColumnWidth(table, columnIndex, width) {
   }
 }
 
+function fitImageToBox(image, maxWidth, maxHeight) {
+  const width = image.getWidth();
+  const height = image.getHeight();
+  if (!width || !height) {
+    image.setWidth(maxWidth);
+    return image;
+  }
+
+  const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+  image.setWidth(Math.round(width * scale));
+  image.setHeight(Math.round(height * scale));
+  return image;
+}
+
+function appendDivider(body, color, width) {
+  const divider = body.appendTable([['']]);
+  divider.setBorderWidth(0);
+  setTableColumnWidth(divider, 0, width);
+  const cell = divider.getCell(0, 0);
+  cell.clear();
+  cell.setBackgroundColor(color || '#D0312D');
+  cell.setPaddingTop(1).setPaddingBottom(1).setPaddingLeft(0).setPaddingRight(0);
+  cell.appendParagraph('').setSpacingBefore(0).setSpacingAfter(0);
+  return divider;
+}
+
 function getOrCreateProjectFolder(projectName) {
   const parent = DriveApp.getFolderById(PARENT_FOLDER_ID);
   const name = projectName || 'General_Reports';
@@ -386,6 +412,10 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const body = doc.getBody();
 
   body.clear();
+  body.setMarginTop(36);
+  body.setMarginBottom(42);
+  body.setMarginLeft(36);
+  body.setMarginRight(36);
 
   const RED = '#D0312D';
   const DARK = '#1A1A1A';
@@ -395,6 +425,12 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const GREEN = '#1A7A4A';
   const WHITE = '#FFFFFF';
   const BGRAY = '#F5F5F5';
+  const BORDER = '#E6E6E6';
+  const SOFT_RED = '#FFF7F7';
+  const PAGE_WIDTH = 540;
+  const KEY_COL_WIDTH = 185;
+  const VAL_COL_WIDTH = 355;
+  const PHOTO_COL_WIDTH = 260;
 
   let ts = data.Timestamp ? data.Timestamp.toString() : '';
   let tsFormatted = ts;
@@ -410,6 +446,8 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const titleTable = body.appendTable([['', '']]);
   titleTable.setBorderWidth(0);
   titleTable.setBorderColor(WHITE);
+  setTableColumnWidth(titleTable, 0, 340);
+  setTableColumnWidth(titleTable, 1, 200);
 
   const leftCell = titleTable.getCell(0, 0);
   leftCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(4);
@@ -431,16 +469,25 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   datePara.appendText(tsFormatted)
     .setFontFamily('Courier New').setFontSize(11).setBold(true).setForegroundColor(AMBER);
 
-  const redLine = body.appendParagraph('');
-  redLine.setSpacingBefore(4).setSpacingAfter(10);
-  redLine.editAsText().setForegroundColor(RED);
+  const projectPara = body.appendParagraph(projectName || 'General_Reports');
+  projectPara.setSpacingBefore(0).setSpacingAfter(8);
+  projectPara.editAsText()
+    .setFontFamily('Arial').setFontSize(10).setBold(true).setForegroundColor(GRAY);
+
+  appendDivider(body, RED, PAGE_WIDTH);
+  body.appendParagraph('').setSpacingBefore(0).setSpacingAfter(8);
 
   appendSectionHeader(body, "TODAY'S ACTIVITY", RED);
   const activityValue = data["Today's Activity"] || 'N/A';
-  const actPara = body.appendParagraph(activityValue.toString());
-  actPara.setSpacingBefore(2).setSpacingAfter(12);
-  actPara.editAsText()
-    .setFontFamily('Arial').setFontSize(13).setBold(true).setForegroundColor(DARK);
+  const activityTable = body.appendTable([[activityValue.toString()]]);
+  activityTable.setBorderWidth(1);
+  activityTable.setBorderColor(BORDER);
+  setTableColumnWidth(activityTable, 0, PAGE_WIDTH);
+  const activityCell = activityTable.getCell(0, 0);
+  activityCell.setBackgroundColor(SOFT_RED);
+  activityCell.setPaddingTop(9).setPaddingBottom(9).setPaddingLeft(10).setPaddingRight(10);
+  activityCell.editAsText()
+    .setFontFamily('Arial').setFontSize(11).setBold(false).setForegroundColor(DARK);
 
   body.appendParagraph('').setSpacingAfter(8);
   appendSectionHeader(body, 'PROJECT DETAILS', RED);
@@ -474,7 +521,10 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
 
   if (tableData.length > 0) {
     const detailTable = body.appendTable(tableData);
-    detailTable.setBorderWidth(0);
+    detailTable.setBorderWidth(1);
+    detailTable.setBorderColor(BORDER);
+    setTableColumnWidth(detailTable, 0, KEY_COL_WIDTH);
+    setTableColumnWidth(detailTable, 1, VAL_COL_WIDTH);
     styleDetailTable(detailTable, BGRAY, GRAY, DARK, GREEN, AMBER, LGRAY, WHITE);
   }
 
@@ -495,7 +545,7 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
           appendSectionHeader(body, 'DRAWING CHANGE PHOTO', RED);
           const imgBlob = DriveApp.getFileById(drawingId[0]).getBlob();
           const img = body.appendImage(imgBlob);
-          img.setWidth(250).setHeight(180);
+          fitImageToBox(img, 320, 220);
           body.appendParagraph('').setSpacingAfter(10);
           drawingInserted = true;
         }
@@ -519,7 +569,7 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   body.appendPageBreak();
   body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(0);
   appendSectionHeader(body, 'SITE PHOTOS', RED);
-  body.appendParagraph('').setSpacingBefore(12).setSpacingAfter(6);
+  body.appendParagraph('').setSpacingBefore(6).setSpacingAfter(4);
 
   if (sitePhotoVal && sitePhotoVal !== 'N/A' && sitePhotoVal.trim() !== '') {
     const photoEntries = sitePhotoVal.split(',');
@@ -538,22 +588,25 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
 
     for (let index = 0; index < photoBlobs.length; index += 2) {
       const photoTable = body.appendTable([['', '']]);
-      photoTable.setBorderWidth(0);
-      setTableColumnWidth(photoTable, 0, 240);
-      setTableColumnWidth(photoTable, 1, 240);
+      photoTable.setBorderWidth(1);
+      photoTable.setBorderColor(BORDER);
+      setTableColumnWidth(photoTable, 0, PHOTO_COL_WIDTH);
+      setTableColumnWidth(photoTable, 1, PHOTO_COL_WIDTH);
 
       const pc0 = photoTable.getCell(0, 0);
       pc0.clear();
-      pc0.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(0).setPaddingRight(6);
+      pc0.setBackgroundColor('#FAFAFA');
+      pc0.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(6).setPaddingRight(6);
       const pi0 = pc0.insertImage(0, photoBlobs[index]);
-      pi0.setWidth(228).setHeight(160);
+      fitImageToBox(pi0, PHOTO_COL_WIDTH - 14, 170);
 
       const pc1 = photoTable.getCell(0, 1);
       pc1.clear();
-      pc1.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(6).setPaddingRight(0);
+      pc1.setBackgroundColor('#FAFAFA');
+      pc1.setPaddingTop(6).setPaddingBottom(6).setPaddingLeft(6).setPaddingRight(6);
       if (photoBlobs[index + 1]) {
         const pi1 = pc1.insertImage(0, photoBlobs[index + 1]);
-        pi1.setWidth(228).setHeight(160);
+        fitImageToBox(pi1, PHOTO_COL_WIDTH - 14, 170);
       }
 
       body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(4);
@@ -585,7 +638,7 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
     footer.clear();
     const footerTable = footer.appendTable([['']]);
     footerTable.setBorderWidth(0);
-    setTableColumnWidth(footerTable, 0, 200);
+    setTableColumnWidth(footerTable, 0, PAGE_WIDTH);
 
     const logoCell = footerTable.getCell(0, 0);
     logoCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(0);
@@ -628,9 +681,10 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
 
 function appendSectionHeader(body, text, color) {
   const para = body.appendParagraph(text);
-  para.setSpacingBefore(12).setSpacingAfter(6);
+  para.setSpacingBefore(14).setSpacingAfter(5);
+  para.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
   para.editAsText()
-    .setFontFamily('Arial').setFontSize(10).setBold(true)
+    .setFontFamily('Arial').setFontSize(9).setBold(true)
     .setForegroundColor(color || '#D0312D');
   return para;
 }
@@ -640,18 +694,20 @@ function styleDetailTable(table, BGRAY, GRAY, DARK, GREEN, AMBER, LGRAY, WHITE) 
     const row = table.getRow(rowIndex);
 
     const keyCell = row.getCell(0);
+    keyCell.setVerticalAlignment(DocumentApp.VerticalAlignment.TOP);
     keyCell.setBackgroundColor(BGRAY);
-    keyCell.setPaddingTop(8).setPaddingBottom(8).setPaddingLeft(10).setPaddingRight(6);
+    keyCell.setPaddingTop(7).setPaddingBottom(7).setPaddingLeft(9).setPaddingRight(6);
     keyCell.editAsText()
-      .setFontFamily('Arial').setFontSize(9).setBold(true).setForegroundColor(GRAY);
+      .setFontFamily('Arial').setFontSize(8).setBold(true).setForegroundColor(GRAY);
 
     const valCell = row.getCell(1);
     const rawVal = valCell.getText().toLowerCase().trim();
-    valCell.setPaddingTop(8).setPaddingBottom(8).setPaddingLeft(10).setPaddingRight(6);
+    valCell.setVerticalAlignment(DocumentApp.VerticalAlignment.TOP);
+    valCell.setPaddingTop(7).setPaddingBottom(7).setPaddingLeft(10).setPaddingRight(8);
     valCell.setBackgroundColor(rowIndex % 2 === 0 ? WHITE : '#FAFAFA');
 
     const text = valCell.editAsText();
-    text.setFontFamily('Arial').setFontSize(11).setBold(false);
+    text.setFontFamily('Arial').setFontSize(10).setBold(false);
 
     if (rawVal === 'no' || rawVal === 'done') {
       text.setForegroundColor(GREEN).setBold(true);
