@@ -157,14 +157,16 @@ function fitImageToBox(image, maxWidth, maxHeight) {
 }
 
 function appendDivider(body, color, width) {
-  const divider = body.appendTable([['']]);
+  const divider = body.appendTable([[' ']]);
   divider.setBorderWidth(0);
   setTableColumnWidth(divider, 0, width);
   const cell = divider.getCell(0, 0);
-  cell.clear();
   cell.setBackgroundColor(color || '#D0312D');
-  cell.setPaddingTop(1).setPaddingBottom(1).setPaddingLeft(0).setPaddingRight(0);
-  cell.appendParagraph('').setSpacingBefore(0).setSpacingAfter(0);
+  cell.setPaddingTop(0).setPaddingBottom(0).setPaddingLeft(0).setPaddingRight(0);
+  // cell height = one text line; 2pt font makes bar a thin rule, not a block
+  const para = cell.getChild(0).asParagraph();
+  para.setSpacingBefore(0).setSpacingAfter(0);
+  cell.editAsText().setFontSize(2);
   return divider;
 }
 
@@ -412,10 +414,18 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const body = doc.getBody();
 
   body.clear();
-  body.setMarginTop(36);
-  body.setMarginBottom(42);
-  body.setMarginLeft(36);
-  body.setMarginRight(36);
+  // body.clear() can leave template's inline images behind — strip them
+  const leftoverImages = body.getImages();
+  for (let li = 0; li < leftoverImages.length; li++) {
+    leftoverImages[li].removeFromParent();
+  }
+  // Match letterhead template geometry (A4). Header block: 35.45pt offset
+  // + 74.3pt logo + gold rule below ≈ 120pt, so 140pt keeps body clear of it
+  // on every page. Bottom 70pt keeps text off the footer logo strip.
+  body.setMarginTop(140);
+  body.setMarginBottom(70);
+  body.setMarginLeft(42);
+  body.setMarginRight(42);
 
   const RED = '#D0312D';
   const DARK = '#1A1A1A';
@@ -427,10 +437,11 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const BGRAY = '#F5F5F5';
   const BORDER = '#E6E6E6';
   const SOFT_RED = '#FFF7F7';
-  const PAGE_WIDTH = 540;
-  const KEY_COL_WIDTH = 185;
-  const VAL_COL_WIDTH = 355;
-  const PHOTO_COL_WIDTH = 260;
+  // A4 width 595.3pt - 42pt margins each side
+  const PAGE_WIDTH = 510;
+  const KEY_COL_WIDTH = 180;
+  const VAL_COL_WIDTH = 330;
+  const PHOTO_COL_WIDTH = 250;
 
   let ts = data.Timestamp ? data.Timestamp.toString() : '';
   let tsFormatted = ts;
@@ -446,8 +457,8 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   const titleTable = body.appendTable([['', '']]);
   titleTable.setBorderWidth(0);
   titleTable.setBorderColor(WHITE);
-  setTableColumnWidth(titleTable, 0, 340);
-  setTableColumnWidth(titleTable, 1, 200);
+  setTableColumnWidth(titleTable, 0, 320);
+  setTableColumnWidth(titleTable, 1, 190);
 
   const leftCell = titleTable.getCell(0, 0);
   leftCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(4);
@@ -566,16 +577,10 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   }
 
   const sitePhotoVal = sitePhotoKey ? formatPdfCellValue(data[sitePhotoKey]) : '';
-  body.appendPageBreak();
-  body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(0);
-  appendSectionHeader(body, 'SITE PHOTOS', RED);
-  body.appendParagraph('').setSpacingBefore(6).setSpacingAfter(4);
+  const photoBlobs = [];
 
   if (sitePhotoVal && sitePhotoVal !== 'N/A' && sitePhotoVal.trim() !== '') {
-    const photoEntries = sitePhotoVal.split(',');
-    const photoBlobs = [];
-
-    photoEntries.forEach(function (entry) {
+    sitePhotoVal.split(',').forEach(function (entry) {
       try {
         const photoId = entry.trim().match(/[-\w]{25,}/);
         if (photoId) {
@@ -585,6 +590,12 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
         Logger.log('Photo load error: ' + err);
       }
     });
+  }
+
+  if (photoBlobs.length > 0) {
+    // No forced page break — let content flow so short reports stay compact
+    appendSectionHeader(body, 'SITE PHOTOS', RED);
+    body.appendParagraph('').setSpacingBefore(2).setSpacingAfter(4);
 
     for (let index = 0; index < photoBlobs.length; index += 2) {
       const photoTable = body.appendTable([['', '']]);
@@ -612,49 +623,12 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
       body.appendParagraph('').setSpacingBefore(8).setSpacingAfter(4);
     }
   } else {
+    appendSectionHeader(body, 'SITE PHOTOS', RED);
     const noPhoto = body.appendParagraph('No photos attached.');
     noPhoto.editAsText().setFontFamily('Arial').setFontSize(11).setForegroundColor(LGRAY);
-    body.appendParagraph('').setSpacingAfter(6);
   }
 
-  try {
-    let footer = doc.getFooter();
-    if (!footer) footer = doc.addFooter();
-
-    let logoBlob = null;
-    const existingElements = footer.getNumChildren();
-    for (let index = 0; index < existingElements; index++) {
-      const elem = footer.getChild(index);
-      if (elem.getType() === DocumentApp.ElementType.PARAGRAPH) {
-        const para = elem.asParagraph();
-        const images = para.getImages();
-        if (images.length > 0) {
-          logoBlob = images[0].getBlob();
-          break;
-        }
-      }
-    }
-
-    footer.clear();
-    const footerTable = footer.appendTable([['']]);
-    footerTable.setBorderWidth(0);
-    setTableColumnWidth(footerTable, 0, PAGE_WIDTH);
-
-    const logoCell = footerTable.getCell(0, 0);
-    logoCell.setPaddingTop(4).setPaddingBottom(4).setPaddingLeft(0).setPaddingRight(0);
-    logoCell.setVerticalAlignment(DocumentApp.VerticalAlignment.MIDDLE);
-
-    if (logoBlob) {
-      const logoImage = logoCell.insertImage(0, logoBlob);
-      logoImage.setWidth(100).setHeight(40);
-    } else {
-      const logoText = logoCell.appendParagraph('DAIKIN');
-      logoText.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
-      logoText.editAsText().setFontFamily('Arial').setFontSize(12).setBold(true).setForegroundColor(RED);
-    }
-  } catch (footerErr) {
-    Logger.log('Footer rewrite error: ' + footerErr);
-  }
+  // Template footer (Daikin logo + red bar) is left untouched.
 
   doc.saveAndClose();
   Logger.log('Doc written OK');
