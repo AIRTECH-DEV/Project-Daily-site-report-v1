@@ -302,6 +302,21 @@ function findStepStatusCol_(info, stepName) {
   return -1;
 }
 
+// 1-based sub-column ("Start Date" / "End Date" / "Status") under a step
+// group, e.g. the End Date column of "Copper Piping". -1 if the step has no
+// such sub-column (stand-alone steps like "LS Material Delivery").
+function findStepSubCol_(info, stepName, subLabel) {
+  const step = compactKey_(stepName);
+  const sub = normalizeKey_(subLabel);
+  if (!step || !sub) return -1;
+  for (let i = 0; i < info.lastCol; i++) {
+    if (compactKey_(info.groupVals[i]) === step && normalizeKey_(info.subVals[i]) === sub) {
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
 // 1-based column for a stand-alone header (Project Name, Flat No, Remarks, …)
 function findNamedCol_(info, name) {
   const n = compactKey_(name);
@@ -328,6 +343,73 @@ function findRowByColValue_(sheet, info, colIndex, wanted) {
   return -1;
 }
 
+// True for a header that names the shared Order ID key. Matches "Order ID",
+// "Order No", "Order Number", "Order Code", "Order Ref", or a bare "Order" —
+// but never "Order Date". Order ID is the ONE column present (and stable) in
+// BOTH the Orders sheet and the PMS sheet, so it bridges the two files where
+// the free-text project name drifts.
+function isOrderIdHeader_(text) {
+  const t = normalizeKey_(text);
+  if (!t || t.indexOf('order') === -1) return false;
+  if (t.indexOf('date') !== -1) return false;
+  return t === 'order' || t.indexOf('orderid') !== -1 ||
+    /(^|[^a-z])(id|no|no\.|number|code|ref)([^a-z]|$)/.test(t);
+}
+
+// 1-based Order ID column in a (grouped-header) PMS sheet, or -1.
+function findOrderIdCol_(info) {
+  for (let i = 0; i < info.lastCol; i++) {
+    if (isOrderIdHeader_(info.subVals[i]) || isOrderIdHeader_(info.groupVals[i])) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * Looks up the Order ID for a picked project in the Orders sheet (the same
+ * source that fed the dropdown, so the name matches exactly — no drift).
+ * Searches the same project/billing name columns getProjectNames() merges.
+ * Returns '' if the sheet, the Order ID column, or the row isn't found.
+ */
+function getOrderIdForProject_(siteType, projectName) {
+  const want = normalizeKey_(projectName);
+  if (!want) return '';
+  try {
+    const isVRV = siteType === 'VRV';
+    const ss = SpreadsheetApp.openById(isVRV ? VRV_ORDERS_SHEET_ID : NONVRV_ORDERS_SHEET_ID);
+    const sheet = ss.getSheetById(isVRV ? VRV_ORDERS_GID : NONVRV_ORDERS_GID);
+    if (!sheet) return '';
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return '';
+
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    let orderCol = -1;
+    const nameCols = [];
+    headers.forEach(function (h, i) {
+      if (orderCol < 0 && isOrderIdHeader_(h)) orderCol = i;
+      const hl = (h || '').toString().toLowerCase();
+      if (hl.indexOf('select project name') !== -1 ||
+          (hl.indexOf('project name') !== -1 && hl.indexOf('executive') === -1) ||
+          hl.indexOf('billing customer name') !== -1) nameCols.push(i);
+    });
+    if (orderCol < 0 || !nameCols.length) return '';
+
+    const data = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    for (let r = 0; r < data.length; r++) {
+      for (let c = 0; c < nameCols.length; c++) {
+        if (normalizeKey_(data[r][nameCols[c]]) === want) {
+          const oid = data[r][orderCol];
+          return (oid === null || oid === undefined) ? '' : oid.toString().trim();
+        }
+      }
+    }
+    return '';
+  } catch (err) {
+    Logger.log('getOrderIdForProject_ error: ' + err);
+    return '';
+  }
+}
+
 /**
  * Writes the submitted status/remark/etc. onto one PMS row, all by header
  * name. Status cell = Done/Pending, or the hold reason when on Hold; the
@@ -351,6 +433,17 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
       ? (payload.holdReason || 'Hold')
       : payload.status;
     sheet.getRange(row, statusCol).setValue(statusCellVal);
+
+    // Step marked Done -> stamp its End Date with today's date, but only if
+    // empty so a previously recorded completion date is never overwritten.
+    if (payload.status === 'Done') {
+      const endCol = findStepSubCol_(info, payload.currentStatus, 'End Date');
+      if (endCol > 0) {
+        const endCell = sheet.getRange(row, endCol);
+        const cur = endCell.getValue();
+        if (cur === '' || cur === null) endCell.setValue(new Date());
+      }
+    }
   } else if (payload.currentStatus) {
     Logger.log('updatePmsRow_: no status column found for step "' + payload.currentStatus + '"');
   }
@@ -410,10 +503,25 @@ function updateProgressSheets_(payload) {
     return skip('PMS tab "' + tabName + '" not found.');
   }
   const info = getPmsHeaderInfo_(sheet);
-  const projCol = findNamedCol_(info, 'Project Name');
-  const pmsRow = findRowByColValue_(sheet, info, projCol, payload.project);
+
+  // Match by Order ID first — the picked name came from the Orders sheet, so
+  // its Order ID is exact, and Order ID is the stable shared key in the PMS
+  // sheet too (the free-text name drifts between the two files).
+  let pmsRow = -1;
+  const orderId = getOrderIdForProject_(payload.siteType, payload.project);
+  if (orderId) {
+    const orderCol = findOrderIdCol_(info);
+    if (orderCol > 0) pmsRow = findRowByColValue_(sheet, info, orderCol, orderId);
+  }
+  // Fallback: match by project name (PMS sheets with no Order ID column).
   if (pmsRow < 0) {
-    return skip('Project "' + payload.project + '" not found in ' + tabName + '. Progress sheet not updated.');
+    const projCol = findNamedCol_(info, 'Project Name');
+    pmsRow = findRowByColValue_(sheet, info, projCol, payload.project);
+  }
+  if (pmsRow < 0) {
+    return skip('Project "' + payload.project + '"' +
+      (orderId ? ' (Order ID ' + orderId + ')' : '') +
+      ' not found in ' + tabName + '. Progress sheet not updated.');
   }
   updatePmsRow_(sheet, pmsRow, info, payload, false);
   return { updated: true, warning: '' };
