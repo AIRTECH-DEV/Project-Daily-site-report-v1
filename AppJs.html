@@ -1,0 +1,816 @@
+
+    // Big banner/logo images are NOT inlined here (that bloats the served
+    // HTML past Apps Script's limit). They're fetched on demand from the
+    // server via getUiImages() in init(). Referenced before load = ''.
+    var LOGO_DATA_URI = '';
+    const ENGINEERS = ['Dada', 'Nagraj', 'Pratik', 'Ranjeet', 'Paresh', 'Shubham', 'Ganesh', 'Vrundavan', 'Parikshit'];
+    const DEVELOPERS = ['Suyog Navkar', 'Kasturi'];
+    // Building values MUST match the tab names in each developer's PMS sheet
+    // (whitespace/case are normalized server-side).
+    const DEVELOPER_BUILDINGS = {
+      'Suyog Navkar': ['Agam', 'Shruta', 'Kalpa'],
+      'Kasturi': [
+        'Balmoral River side D-wing',
+        'Balmoral River side C-wing',
+        'Balmoral TowerD-wing',
+        'Balmoral TowerC-wing'
+      ]
+    };
+
+    // Project-progress steps offered in the "Current Status" dropdown, per
+    // site type. Each string is matched (name-based) to a step group column
+    // in the PMS sheet on submit.
+    const STATUS_STEPS = {
+      'VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
+    };
+    const HOLD_REASONS = ['Struct BY Client', 'Struct BY VAPL', 'Other'];
+
+    let answers = {};
+    let currentPage = 0;
+    let projectList = [];
+    let projectListLoading = false;
+    let submitting = false;
+
+    function iconCalendar() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 11h18"></path></svg>`; }
+    function iconUser() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="4"></circle></svg>`; }
+    function iconNotes() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16l4-3h10a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`; }
+    function iconPhoto() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`; }
+    function iconProject() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"></path><path d="M5 21V7l8-4 6 3v15"></path><path d="M9 9h.01M9 13h.01M9 17h.01M13 9h.01M13 13h.01M13 17h.01"></path></svg>`; }
+    function iconAc() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="6" rx="2"></rect><path d="M6 15c1 1 1 2 0 3M11 15c1 1 1 2 0 3M16 15c1 1 1 2 0 3"></path></svg>`; }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function loadProjectList(siteType) {
+      projectListLoading = true;
+      renderCurrentPage();
+
+      if (!window.google || !google.script || !google.script.run) {
+        projectList = [];
+        projectListLoading = false;
+        renderCurrentPage();
+        return;
+      }
+
+      google.script.run
+        .withSuccessHandler(function (list) {
+          projectList = list || [];
+          projectListLoading = false;
+          renderCurrentPage();
+        })
+        .withFailureHandler(function (err) {
+          projectListLoading = false;
+          console.error(err);
+          renderCurrentPage();
+        })
+        .getProjectNames(siteType);
+    }
+
+    function isDeveloperPathValid() {
+      if (answers.clientType !== 'Developer') return true;
+      return !!answers.developer && !!answers.building && String(answers.floor||'').trim() !== '' && String(answers.flatNo||'').trim() !== '';
+    }
+
+    function isStatusPathValid() {
+      if (!answers.currentStatus || !answers.status) return false;
+      if (answers.status === 'Hold') {
+        if (!answers.holdReason) return false;
+        if (String(answers.holdReasonDetail||'').trim() === '') return false;
+      }
+      if (!answers.workDoneBy) return false;
+      if (answers.workDoneBy === 'Contractor' && String(answers.contractorName||'').trim() === '') return false;
+      if (String(answers.tentativeEndDate||'').trim() === '') return false;
+      return true;
+    }
+
+    function isStep1Valid() {
+      return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && String(answers.people||'').trim() !== '' && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
+    }
+    function isStep2Valid() {
+      const amendOk = answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true;
+      return String(answers.nextPlan || '').trim() !== '' && !!answers.drawingChange && amendOk;
+    }
+    function isStep3Valid() {
+      const drawingOk = answers.drawingChange === 'Yes' ? !!answers.drawingPhoto : true;
+      const measurementOk = answers.measurement === 'Yes' ? !!answers.measurementFile : !!answers.measurement;
+      return drawingOk && !!answers.measurement && measurementOk;
+    }
+    function isCurrentPageValid() {
+      if (currentPage === 0) return isStep1Valid();
+      if (currentPage === 1) return isStep2Valid();
+      if (currentPage === 2) return isStep3Valid();
+      return true;
+    }
+
+    function updateStepper() {
+      const track = document.getElementById('stepTrack');
+      track.style.setProperty('--progress', currentPage / 3);
+      for (let i = 0; i < 4; i++) {
+        const el = document.getElementById('step-bubble-' + i);
+        el.className = 'step' + (i === currentPage ? ' active' : i < currentPage ? ' done' : '');
+      }
+    }
+
+    function setSubmittedMode(enabled) {
+      const shell = document.querySelector('.shell');
+      if (shell) shell.classList.toggle('submitted', !!enabled);
+    }
+
+    function renderCurrentPage() {
+      setSubmittedMode(false);
+      updateStepper();
+      const mount = document.getElementById('pageMount');
+      if (currentPage === 0) mount.innerHTML = renderStep1();
+      else if (currentPage === 1) mount.innerHTML = renderStep2();
+      else if (currentPage === 2) mount.innerHTML = renderStep3();
+      else mount.innerHTML = renderReview();
+      bindCommonEvents();
+      updatePrimaryButton();
+      if (currentPage === 0) bindProjectSearch();
+    }
+
+    function renderStep1() {
+      const siteType = answers.siteType || '';
+      const clientType = answers.clientType || '';
+      const developer = answers.developer || '';
+      const building = answers.building || '';
+      const floor = answers.floor || '';
+      const flatNo = answers.flatNo || '';
+      const project = answers.project || '';
+      const people = answers.people || '';
+      const engineer = answers.engineer || '';
+      const activity = answers.activity || '';
+      const amend = answers.amendment || '';
+      const photoCount = (answers.photo || []).length;
+      const currentStatus = answers.currentStatus || '';
+      const statusVal = answers.status || '';
+      const holdReason = answers.holdReason || '';
+      const holdReasonDetail = answers.holdReasonDetail || '';
+      const tentativeEndDate = answers.tentativeEndDate || '';
+      const workDoneBy = answers.workDoneBy || '';
+      const contractorName = answers.contractorName || '';
+      const statusSteps = STATUS_STEPS[siteType] || [];
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Site Type</div><div class="section-sub">Select the type of site visited.</div></div>
+                </div>
+                <div class="option-grid two">
+                  <div class="card-option ${siteType === 'VRV' ? 'selected' : ''}" onclick="selectSiteType('VRV')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">🏢</div>
+                    <div class="option-name">VRV Site</div>
+                    <div class="option-note">Variable Refrigerant Volume</div>
+                  </div>
+                  <div class="card-option ${siteType === 'Non-VRV' ? 'selected' : ''}" onclick="selectSiteType('Non-VRV')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">❄️</div>
+                    <div class="option-name">Non-VRV Site</div>
+                    <div class="option-note">Conventional / Other Systems</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Client Type</div><div class="section-sub">Select whether this is a general client or a developer project.</div></div>
+                </div>
+                <div class="option-grid two">
+                  <div class="card-option ${clientType === 'General' ? 'selected' : ''}" onclick="selectClientType('General')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">🙍</div>
+                    <div class="option-name">General</div>
+                  </div>
+                  <div class="card-option ${clientType === 'Developer' ? 'selected' : ''}" onclick="selectClientType('Developer')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">🏗️</div>
+                    <div class="option-name">Developer</div>
+                  </div>
+                </div>
+
+                ${clientType === 'Developer' ? `
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${developer ? '' : 'placeholder'}" id="developerSelect" onchange="selectDeveloper(this.value)">
+                    <option value="">Select developer</option>
+                    ${DEVELOPERS.map(name => `<option value="${escapeHtml(name)}" ${developer === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+
+                ${clientType === 'Developer' && developer ? `
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${building ? '' : 'placeholder'}" id="buildingSelect" onchange="selectBuilding(this.value)">
+                    <option value="">Select building</option>
+                    ${(DEVELOPER_BUILDINGS[developer] || []).map(name => `<option value="${escapeHtml(name)}" ${building === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+
+                ${clientType === 'Developer' && building ? `
+                <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                  <input type="text" class="field" id="floorInput" placeholder="Floor (e.g. 1st Floor)" value="${escapeHtml(String(floor))}" oninput="setFloor(this.value)" autocomplete="off">
+                  <input type="text" class="field" id="flatNoInput" placeholder="Flat No (e.g. 101 or D-102)" value="${escapeHtml(String(flatNo))}" oninput="setFlatNo(this.value)" autocomplete="off">
+                </div>` : ''}
+              </div>
+
+              ${clientType === 'Developer' ? '' : `
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Project / Client</div><div class="section-sub">Search and select the project or client.</div></div>
+                </div>
+                <div class="search-wrap">
+                  <input type="text" class="field" id="field-project" placeholder="Search by project / client name, code, or location..." value="${escapeHtml(project)}" autocomplete="off">
+                  <div class="search-results" id="searchResults"></div>
+                </div>
+              </div>`}
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconAc()}
+                  <div><div class="section-title">People on Site</div><div class="section-sub">Enter how many people are on site today.</div></div>
+                </div>
+                <div class="number-box">
+                  <button type="button" class="num-btn" aria-label="Decrease people on site" onclick="adjustPeople(-1)">-</button>
+                  <input class="num-input" id="peopleInput" type="number" min="0" value="${escapeHtml(String(people))}" oninput="setPeople(this.value)">
+                  <button type="button" class="num-btn" aria-label="Increase people on site" onclick="adjustPeople(1)">+</button>
+                </div>
+              </div>
+
+              <div class="hint-note">🛡️ All fields marked with * are mandatory.</div>
+            </div>
+
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconUser()}
+                  <div><div class="section-title">Assigned Engineer</div><div class="section-sub">Select the engineer who visited the site.</div></div>
+                </div>
+                <select class="dropdown-field ${engineer ? '' : 'placeholder'}" id="engineerSelect" onchange="selectEngineer(this.value)">
+                  <option value="">Select project engineer</option>
+                  ${ENGINEERS.map(name => `<option value="${escapeHtml(name)}" ${engineer === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                </select>
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Current Status</div><div class="section-sub">Select the current project step and its status.</div></div>
+                </div>
+                <select class="dropdown-field ${currentStatus ? '' : 'placeholder'}" id="currentStatusSelect" onchange="setCurrentStatus(this.value)" ${siteType ? '' : 'disabled'}>
+                  <option value="">${siteType ? 'Select current status step' : 'Select site type first'}</option>
+                  ${statusSteps.map(s => `<option value="${escapeHtml(s)}" ${currentStatus === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+                </select>
+
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${statusVal ? '' : 'placeholder'}" id="statusSelect" onchange="setStatusValue(this.value)">
+                    <option value="">Select status</option>
+                    <option value="Done" ${statusVal === 'Done' ? 'selected' : ''}>Done</option>
+                    <option value="Pending" ${statusVal === 'Pending' ? 'selected' : ''}>Pending</option>
+                    <option value="Hold" ${statusVal === 'Hold' ? 'selected' : ''}>Hold</option>
+                  </select>
+                </div>
+
+                ${statusVal === 'Hold' ? `
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${holdReason ? '' : 'placeholder'}" id="holdReasonSelect" onchange="setHoldReason(this.value)">
+                    <option value="">Why project on hold?</option>
+                    ${HOLD_REASONS.map(r => `<option value="${escapeHtml(r)}" ${holdReason === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+
+                ${statusVal === 'Hold' && holdReason ? `
+                <div style="margin-top:12px;">
+                  <textarea class="textarea" id="holdReasonDetailInput" placeholder="Explain why the project is on hold..." oninput="setHoldReasonDetail(this.value)">${escapeHtml(holdReasonDetail)}</textarea>
+                </div>` : ''}
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Tentative Project End Date</div><div class="section-sub">Select the tentative completion date.</div></div>
+                </div>
+                <input type="date" class="field" id="tentativeEndDateInput" value="${escapeHtml(tentativeEndDate)}" onchange="setTentativeEndDate(this.value)">
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconUser()}
+                  <div><div class="section-title">Work Done By</div><div class="section-sub">Who is carrying out the work?</div></div>
+                </div>
+                <select class="dropdown-field ${workDoneBy ? '' : 'placeholder'}" id="workDoneBySelect" onchange="setWorkDoneBy(this.value)">
+                  <option value="">Select work done by</option>
+                  <option value="VAPL" ${workDoneBy === 'VAPL' ? 'selected' : ''}>VAPL</option>
+                  <option value="Contractor" ${workDoneBy === 'Contractor' ? 'selected' : ''}>Contractor</option>
+                </select>
+                ${workDoneBy === 'Contractor' ? `
+                <div style="margin-top:12px;">
+                  <input type="text" class="field" id="contractorNameInput" placeholder="Contractor name" value="${escapeHtml(contractorName)}" oninput="setContractorName(this.value)" autocomplete="off">
+                </div>` : ''}
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Activity Notes</div><div class="section-sub">Provide a brief description of the site visit and activities performed.</div></div>
+                </div>
+                <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
+              </div>
+
+              <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:18px; align-items:start;">
+                <div class="section" style="margin-bottom:0;">
+                  <div class="section-head">
+                    ${iconPhoto()}
+                    <div><div class="section-title">Site Photos</div><div class="section-sub">Upload clear photos of the site, installation, and equipment.</div></div>
+                  </div>
+                  <div class="dropzone ${photoCount ? 'has-files' : ''}" onclick="document.getElementById('photoInput').click()">
+                    <div class="drop-icon">☁</div>
+                    <div class="drop-main">Drag &amp; drop files here or <b>click to browse</b></div>
+                    <div class="drop-sub">JPG, PNG, PDF up to 10MB each</div>
+                  </div>
+                  <input type="file" id="photoInput" accept="image/*,.pdf" multiple style="display:none;" onchange="handleFiles('photo', this.files, true)">
+                  <div class="file-list" id="fileList-photo"></div>
+                </div>
+
+                <div class="section" style="margin-bottom:0;">
+                  <div class="section-head">
+                    ${iconNotes()}
+                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">Is any amendment or change required?</div></div>
+                  </div>
+                  <div class="yesno-row">
+                    <button class="yesno-btn ${amend === 'Yes' ? 'selected' : ''}" onclick="setYesNo('amendment','Yes')">Yes</button>
+                    <button class="yesno-btn ${amend === 'No' ? 'selected' : ''}" onclick="setYesNo('amendment','No')">No</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+
+    function renderStep2() {
+      const nextPlan = answers.nextPlan || '';
+      const drawingChange = answers.drawingChange || '';
+      const amendmentWhy = answers.amendmentWhy || '';
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Plan for Tomorrow</div><div class="section-sub">What is the plan for this site tomorrow?</div></div>
+                </div>
+                <textarea class="textarea" id="nextPlanInput" placeholder="Enter the next day plan / upcoming work...">${escapeHtml(nextPlan)}</textarea>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Drawing Change</div><div class="section-sub">Any changes in drawing as per project condition?</div></div>
+                </div>
+                <div class="yesno-row">
+                  <button class="yesno-btn ${drawingChange === 'Yes' ? 'selected' : ''}" onclick="setYesNo('drawingChange','Yes')">Yes</button>
+                  <button class="yesno-btn ${drawingChange === 'No' ? 'selected' : ''}" onclick="setYesNo('drawingChange','No')">No</button>
+                </div>
+              </div>
+            </div>
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Amendment Notes</div><div class="section-sub">If amendment / PO / approval is required, explain the reason.</div></div>
+                </div>
+                <textarea class="textarea" id="amendmentWhyInput" placeholder="If yes — mention why..." ${answers.amendment === 'Yes' ? '' : 'disabled style="background:#fafafa;color:#999;"'}>${escapeHtml(amendmentWhy)}</textarea>
+              </div>
+              <div class="section" style="padding:12px 14px;border:1px solid #f0f0f0;border-radius:8px;background:#fffaf8;">
+                <div style="display:flex; gap:12px; align-items:flex-start;">
+                  <img src="${LOGO_DATA_URI}" alt="Vakharia Airtech" style="width:64px;height:auto;opacity:.95;">
+                  <div>
+                    <div style="font-size:15px;font-weight:800;color:#333;margin-bottom:4px;">Project Details</div>
+                    <div style="font-size:13px;color:#777;line-height:1.5;">This screen keeps the same original fields from your Apps Script code, while matching the selected visual style as closely as possible.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+
+    function renderStep3() {
+      const drawingPhoto = answers.drawingPhoto ? [answers.drawingPhoto] : [];
+      const measurement = answers.measurement || '';
+      const measurementFile = answers.measurementFile ? [answers.measurementFile] : [];
+      const drawingPhotoBlock = answers.drawingChange === 'Yes'
+        ? `
+                <div class="dropzone ${drawingPhoto.length ? 'has-files' : ''}" onclick="document.getElementById('drawingPhotoInput').click()">
+                  <div class="drop-icon">+</div>
+                  <div class="drop-main">Upload drawing photo</div>
+                  <div class="drop-sub">Image or PDF accepted</div>
+                </div>
+                <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('drawingPhoto', this.files, false)">
+                <div class="file-list" id="fileList-drawingPhoto"></div>`
+        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>';
+      const measurementFileBlock = measurement === 'Yes'
+        ? `
+                <div class="dropzone ${measurementFile.length ? 'has-files' : ''}" onclick="document.getElementById('measurementFileInput').click()">
+                  <div class="drop-icon">+</div>
+                  <div class="drop-main">Upload measurement report</div>
+                  <div class="drop-sub">PDF / Image accepted</div>
+                </div>
+                <input type="file" id="measurementFileInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('measurementFile', this.files, false)">
+                <div class="file-list" id="fileList-measurementFile"></div>`
+        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconPhoto()}
+                  <div><div class="section-title">Drawing Change Photo</div><div class="section-sub">Upload the drawing change photo if changes were reported.</div></div>
+                </div>
+                ${drawingPhotoBlock}
+              </div>
+            </div>
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">Tell us if the measurement report was created today.</div></div>
+                </div>
+                <div class="yesno-row">
+                  <button class="yesno-btn ${measurement === 'Yes' ? 'selected' : ''}" onclick="setYesNo('measurement','Yes')">Yes</button>
+                  <button class="yesno-btn ${measurement === 'No' ? 'selected' : ''}" onclick="setYesNo('measurement','No')">No</button>
+                </div>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  ${iconPhoto()}
+                  <div><div class="section-title">Measurement Report File</div><div class="section-sub">Upload the measurement report if available.</div></div>
+                </div>
+                ${measurementFileBlock}
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+    function renderReview() {
+      const photoNames = (answers.photo || []).map(f => f.name).join(', ');
+      return `
+        <div class="panel">
+          <div class="review-grid">
+            <div class="review-card">
+              <h4>Basic Details</h4>
+              ${reviewRow('Site Type', answers.siteType || '-')}
+              ${reviewRow('Client Type', answers.clientType || '-')}
+              ${answers.clientType === 'Developer' ? reviewRow('Developer', answers.developer || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Building', answers.building || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Floor', answers.floor || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Flat No', answers.flatNo || '-') : ''}
+              ${reviewRow('Project', answers.project || '-')}
+              ${reviewRow('People on Site', answers.people || '-')}
+              ${reviewRow('Engineer', answers.engineer || '-')}
+              ${reviewRow('Current Status', answers.currentStatus || '-')}
+              ${reviewRow('Status', answers.status || '-')}
+              ${reviewRow('Amendment', answers.amendment || '-')}
+            </div>
+            <div class="review-card">
+              <h4>Notes & Files</h4>
+              ${reviewRow('Activity', answers.activity || '-')}
+              ${reviewRow('Next Plan', answers.nextPlan || '-')}
+              ${reviewRow('Amendment Why', answers.amendmentWhy || '-')}
+              ${reviewRow('Site Photos', photoNames || '-')}
+              ${reviewRow('Drawing Change', answers.drawingChange || '-')}
+            </div>
+            <div class="review-card">
+              <h4>Additional</h4>
+              ${reviewRow('Work Done By', answers.workDoneBy === 'Contractor' ? ('Contractor - ' + (answers.contractorName || '')) : (answers.workDoneBy || '-'))}
+              ${reviewRow('Tentative End Date', answers.tentativeEndDate || '-')}
+              ${answers.status === 'Hold' ? reviewRow('Hold Reason', answers.holdReason || '-') : ''}
+              ${answers.status === 'Hold' ? reviewRow('Hold Detail', answers.holdReasonDetail || '-') : ''}
+              ${reviewRow('Drawing Photo', answers.drawingPhoto ? answers.drawingPhoto.name : '-')}
+              ${reviewRow('Measurement Created', answers.measurement || '-')}
+              ${reviewRow('Measurement File', answers.measurementFile ? answers.measurementFile.name : '-')}
+            </div>
+            <div class="review-card">
+              <h4>Ready to Submit</h4>
+              <div style="font-size:13px;color:#666;line-height:1.6;">Please review all details carefully. When you click submit, the same original <code>submitSiteReport(payload)</code> Apps Script function will be called with the same payload structure used in your current code.</div>
+            </div>
+          </div>
+          ${renderActionBar(true)}
+        </div>
+      `;
+    }
+
+    function reviewRow(label, value) {
+      return `<div class="review-row"><span>${escapeHtml(label)}</span><span>${escapeHtml(String(value))}</span></div>`;
+    }
+
+    function renderActionBar(isSubmit = false) {
+      return `
+        <div class="actionbar">
+          <div class="actions-left">
+            <button class="btn ghost" onclick="goBack()">Back</button>
+            <button class="btn ghost" onclick="saveDraft()">Save Draft</button>
+          </div>
+          <div class="actions-right">
+            <button class="btn ghost" onclick="clearCurrentPage()">Clear</button>
+            <button class="btn primary" id="primaryBtn" onclick="${isSubmit ? 'submitForm()' : 'goNext()'}">${isSubmit ? 'Submit Report' : 'Save & Next'} →</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function bindCommonEvents() {
+      const activity = document.getElementById('activityInput');
+      if (activity) activity.addEventListener('input', e => { answers.activity = e.target.value; updatePrimaryButton(); });
+      const nextPlan = document.getElementById('nextPlanInput');
+      if (nextPlan) nextPlan.addEventListener('input', e => { answers.nextPlan = e.target.value; updatePrimaryButton(); });
+      const amendmentWhy = document.getElementById('amendmentWhyInput');
+      if (amendmentWhy) amendmentWhy.addEventListener('input', e => { answers.amendmentWhy = e.target.value; updatePrimaryButton(); });
+      renderFileLists();
+    }
+
+    function bindProjectSearch() {
+      const input = document.getElementById('field-project');
+      if (!input) return;
+      input.addEventListener('input', function(e) { answers.project = e.target.value; onProjectSearch(e); updatePrimaryButton(); });
+      input.addEventListener('focus', function(e) { onProjectSearch(e); });
+      document.addEventListener('click', onDocProjectClick, true);
+    }
+
+    function onDocProjectClick(e) {
+      const wrap = document.querySelector('.search-wrap');
+      const res = document.getElementById('searchResults');
+      if (!wrap || !res) return;
+      if (!wrap.contains(e.target)) res.style.display = 'none';
+    }
+
+    function onProjectSearch(e) {
+      const q = (e.target.value || '').trim().toLowerCase();
+      const resultsEl = document.getElementById('searchResults');
+      if (!resultsEl) return;
+      if (projectListLoading) {
+        resultsEl.innerHTML = '<div class="search-loading">Loading ' + (answers.siteType || 'site') + ' project list...</div>';
+        resultsEl.style.display = 'block';
+        return;
+      }
+      if (!q) { resultsEl.style.display = 'none'; return; }
+      const matches = projectList.filter(p => p.toLowerCase().includes(q)).slice(0, 8);
+      if (!matches.length) {
+        resultsEl.innerHTML = '<div class="search-empty">No matching project - check spelling</div>';
+      } else {
+        resultsEl.innerHTML = matches.map(m => '<button class="search-item" type="button">' + escapeHtml(m) + '</button>').join('');
+        resultsEl.querySelectorAll('.search-item').forEach(function (item, index) {
+          item.addEventListener('mousedown', function (event) {
+            event.preventDefault();
+            selectProject(matches[index]);
+          });
+        });
+      }
+      resultsEl.style.display = 'block';
+    }
+
+    function selectProject(name) {
+      answers.project = name;
+      const input = document.getElementById('field-project');
+      if (input) input.value = name;
+      const resultsEl = document.getElementById('searchResults');
+      if (resultsEl) resultsEl.style.display = 'none';
+      updatePrimaryButton();
+    }
+
+    function selectSiteType(value) {
+      answers.siteType = value;
+      answers.project = '';
+      answers.currentStatus = '';
+      loadProjectList(value);
+    }
+    function selectClientType(value) {
+      answers.clientType = value;
+      answers.developer = '';
+      answers.building = '';
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = '';
+      renderCurrentPage();
+    }
+    function selectDeveloper(value) {
+      answers.developer = value;
+      answers.building = '';
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = '';
+      renderCurrentPage();
+    }
+    function selectBuilding(value) {
+      answers.building = value;
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = value;
+      renderCurrentPage();
+    }
+    function setFloor(val) { answers.floor = val; updatePrimaryButton(); }
+    function setFlatNo(val) { answers.flatNo = val; updatePrimaryButton(); }
+    function setCurrentStatus(val) { answers.currentStatus = val; updatePrimaryButton(); }
+    function setStatusValue(val) {
+      answers.status = val;
+      if (val !== 'Hold') { answers.holdReason = ''; answers.holdReasonDetail = ''; }
+      renderCurrentPage();
+    }
+    function setHoldReason(val) { answers.holdReason = val; renderCurrentPage(); }
+    function setHoldReasonDetail(val) { answers.holdReasonDetail = val; updatePrimaryButton(); }
+    function setTentativeEndDate(val) { answers.tentativeEndDate = val; updatePrimaryButton(); }
+    function setWorkDoneBy(val) {
+      answers.workDoneBy = val;
+      if (val !== 'Contractor') answers.contractorName = '';
+      renderCurrentPage();
+    }
+    function setContractorName(val) { answers.contractorName = val; updatePrimaryButton(); }
+    function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
+    function setPeople(val) { answers.people = val; updatePrimaryButton(); }
+    function adjustPeople(delta) {
+      let cur = parseInt(answers.people || 0, 10);
+      if (isNaN(cur)) cur = 0;
+      cur += delta;
+      if (cur < 0) cur = 0;
+      answers.people = cur;
+      const input = document.getElementById('peopleInput');
+      if (input) input.value = cur;
+      updatePrimaryButton();
+    }
+    function setYesNo(key, val) { answers[key] = val; renderCurrentPage(); }
+
+    async function handleFiles(stepId, fileListRaw, multiple) {
+      const newFiles = await Promise.all(Array.from(fileListRaw).map(async f => ({
+        name: f.name,
+        mimeType: f.type || 'application/octet-stream',
+        base64: await fileToBase64(f)
+      })));
+      if (multiple) answers[stepId] = (answers[stepId] || []).concat(newFiles);
+      else answers[stepId] = newFiles[0] || null;
+      renderCurrentPage();
+    }
+
+    function renderFileLists() {
+      renderFileList('photo', true);
+      renderFileList('drawingPhoto', false);
+      renderFileList('measurementFile', false);
+    }
+    function renderFileList(stepId, multiple) {
+      const el = document.getElementById('fileList-' + stepId);
+      if (!el) return;
+      const files = multiple ? (answers[stepId] || []) : (answers[stepId] ? [answers[stepId]] : []);
+      el.innerHTML = files.map((f, i) => `<div class="file-chip"><span>${escapeHtml(f.name)}</span><button onclick="removeFile('${stepId}',${i},${multiple})">Remove</button></div>`).join('');
+    }
+    function removeFile(stepId, index, multiple) {
+      if (multiple) answers[stepId].splice(index, 1);
+      else answers[stepId] = null;
+      renderCurrentPage();
+    }
+
+    function goNext() {
+      if (!isCurrentPageValid()) return;
+      if (currentPage < 3) {
+        currentPage++;
+        renderCurrentPage();
+      }
+    }
+    function goBack() {
+      if (currentPage > 0) {
+        currentPage--;
+        renderCurrentPage();
+      }
+    }
+    function updatePrimaryButton() {
+      const btn = document.getElementById('primaryBtn');
+      if (btn && currentPage < 3) btn.disabled = !isCurrentPageValid();
+    }
+
+    function clearCurrentPage() {
+      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.workDoneBy=''; answers.contractorName=''; }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.drawingChange=''; answers.amendmentWhy=''; }
+      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
+      renderCurrentPage();
+    }
+
+    function saveDraft() {
+      try { localStorage.setItem('vakhariaSiteVisitDraft', JSON.stringify(answers)); alert('Draft saved locally in this browser.'); }
+      catch(e) { console.error(e); alert('Unable to save draft in this browser.'); }
+    }
+
+    function submitForm() {
+      if (submitting) return;
+      submitting = true;
+      setSubmittedMode(true);
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><div class="spinner"></div><h2>Submitting report</h2><p>Uploading photos and saving your entry using the same Apps Script submit function.</p></div>';
+
+      if (!window.google || !google.script || !google.script.run) {
+        onSubmitError({ message: 'This form must be opened from the Apps Script web app URL.' });
+        return;
+      }
+
+      const payload = {
+        siteType: answers.siteType,
+        clientType: answers.clientType,
+        developer: answers.developer,
+        building: answers.building,
+        floor: answers.floor,
+        flatNo: answers.flatNo,
+        currentStatus: answers.currentStatus,
+        status: answers.status,
+        holdReason: answers.holdReason,
+        holdReasonDetail: answers.holdReasonDetail,
+        tentativeEndDate: answers.tentativeEndDate,
+        workDoneBy: answers.workDoneBy,
+        contractorName: answers.contractorName,
+        project: answers.project,
+        people: answers.people,
+        engineer: answers.engineer,
+        activity: answers.activity,
+        nextPlan: answers.nextPlan,
+        photos: answers.photo || [],
+        amendment: answers.amendment,
+        amendmentWhy: answers.amendmentWhy,
+        drawingChange: answers.drawingChange,
+        drawingPhoto: answers.drawingPhoto || null,
+        measurement: answers.measurement,
+        measurementFile: answers.measurementFile || null
+      };
+
+      google.script.run
+        .withSuccessHandler(onSubmitSuccess)
+        .withFailureHandler(onSubmitError)
+        .submitSiteReport(payload);
+    }
+
+    function onSubmitSuccess(result) {
+      submitting = false;
+      if (!result || !result.success) {
+        onSubmitError({ message: (result && result.error) || 'Unknown error' });
+        return;
+      }
+      setSubmittedMode(true);
+      try { localStorage.removeItem('vakhariaSiteVisitDraft'); } catch (e) {}
+      var pdfButton = result.pdfUrl
+        ? '<a class="btn primary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;margin-bottom:10px;" target="_blank" href="' + escapeHtml(result.pdfUrl) + '">Open PDF</a>'
+        : '';
+      var pmsWarn = result.pmsWarning
+        ? '<p style="margin:10px auto;max-width:420px;padding:10px 14px;border-radius:8px;background:#FFF4E5;border:1px solid #E0A800;color:#8A5A00;font-size:13px;">⚠ Progress sheet not updated: ' + escapeHtml(result.pmsWarning) + '</p>'
+        : '';
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><img src="' + LOGO_DATA_URI + '" style="width:180px;height:auto;margin-bottom:12px;"><h2>Report submitted</h2><p>Your ' + escapeHtml(answers.siteType || '') + ' site visit report has been saved and the PDF has been generated.</p>' + pmsWarn + pdfButton + '<button class="btn primary" onclick="location.reload()">Submit another report</button></div>';
+    }
+    function onSubmitError(err) {
+      submitting = false;
+      setSubmittedMode(true);
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><h2>Something went wrong</h2><p>' + escapeHtml(err && err.message ? err.message : 'Please try again.') + '</p><button class="btn primary" onclick="location.reload()">Start over</button></div>';
+    }
+
+    function loadUiImages() {
+      if (!window.google || !google.script || !google.script.run) return;
+      google.script.run
+        .withSuccessHandler(function (imgs) {
+          if (!imgs) return;
+          if (imgs.logo) LOGO_DATA_URI = imgs.logo;
+          const h = document.getElementById('heroImg');
+          if (h && imgs.hero) h.src = imgs.hero;
+        })
+        .withFailureHandler(function (e) { console.error(e); })
+        .getUiImages();
+    }
+
+    (function init() {
+      try {
+        const draft = localStorage.getItem('vakhariaSiteVisitDraft');
+        if (draft) answers = JSON.parse(draft) || {};
+      } catch(e) {}
+      renderCurrentPage();
+      if (answers.siteType) loadProjectList(answers.siteType);
+      loadUiImages();
+    })();
+  

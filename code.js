@@ -19,24 +19,31 @@ const TAB_NAMES = { VRV: 'VRV', NONVRV: 'Non-VRV' };
 const VRV_ORDERS_SHEET_ID = '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0';
 const VRV_ORDERS_GID = 290389899;
 
-const NONVRV_ORDERS_SHEET_ID = '1hPvEw0rxaOmg2JDtdp9q8XqjbrV98PZL2jiZVz6XWFI';
-const NONVRV_ORDERS_GID = 1766836681;
+const NONVRV_ORDERS_SHEET_ID = '1hvqgSI3f05d1wSoQVxaBPDzr4maHhTz5MLqhmN4a5Is';
+const NONVRV_ORDERS_GID = 290389899;
 
-// Developer -> building floor lookup. Each building is a tab in the
-// developer's PMS spreadsheet, with Floor (col A, merged) / Flat No (col B)
-// starting at row 4 — see getFloorsForBuilding().
+// PMS progress spreadsheet for General (non-developer) clients. One tab per
+// site type. Rows are matched by Project Name; each project step (Copper
+// Piping, Cable, …) is a merged group header with Start Date / End Date /
+// Status sub-columns, so columns are resolved by header text, never index.
+const GENERAL_PMS_SHEET_ID = '13b916quVfpOKvwqn-kcaSb3M3i6RoeSIe7P57pHdc2I';
+const GENERAL_PMS_TABS = { VRV: 'PMS - VRV', NONVRV: 'PMS - NonVRV' };
+
+// Developer -> building progress spreadsheet. Each building is a tab; rows
+// are matched flat-wise by Flat No. Building names sent from the client are
+// matched to tab names by normalized (whitespace/case-insensitive) compare.
 const DEVELOPER_BUILDING_SHEETS = {
   'Suyog Navkar': {
-    spreadsheetId: '1OJHBUMhIpcG3gGGubd8jeRRC16AX3P6t7aPOQPgdliM',
+    spreadsheetId: '1OJHBUMhIpcG3gGGubd8jeRRC16AX3P6t7aPOQPgdIiM',
     buildings: ['Agam', 'Shruta', 'Kalpa']
   },
   'Kasturi': {
-    spreadsheetId: '', // TODO: add Kasturi's PMS spreadsheet ID once available
+    spreadsheetId: '1_Gmi34cOm-NBEcaw99qi3gmk3CT7Da-kFxpdaLqLb-E',
     buildings: [
       'Balmoral River side D-wing',
       'Balmoral River side C-wing',
-      'Balmoral River Tower D-wing',
-      'Balmoral River Tower C-wing'
+      'Balmoral TowerD-wing',
+      'Balmoral TowerC-wing'
     ]
   }
 };
@@ -69,13 +76,53 @@ function authorizeSiteReportApp() {
 }
 
 /**
- * Serves the web app UI.
+ * Serves the web app UI. Index.html is kept small (no inline base64
+ * images) so the served HTML never crosses Apps Script's size limit —
+ * the hero/logo images are fetched separately via getUiImages().
  */
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Site Visit Report')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Returns the hero + logo images as base64 data URIs, read on demand from
+ * the chunked HeroJs / LogoJs project files. The client requests these
+ * after the UI has rendered, so the large image payloads stay out of the
+ * initial page HTML.
+ */
+function getUiImages() {
+  return {
+    hero: extractDataUri_('HeroJs'),
+    logo: extractDataUri_('LogoJs')
+  };
+}
+
+/**
+ * Returns the whole app script (AppJs) as a string. Apps Script truncates
+ * served HTML around ~32KB, so the 40KB+ of client code lives in its own
+ * file and is fetched over google.script.run (no size cap) and injected by
+ * the small loader in Index.html. Keeps the served page tiny and complete.
+ */
+function getAppJs() {
+  // getRawContent() returns the JS verbatim. getContent() would parse it as
+  // HTML and fail with "Malformed HTML content" (the code is full of <, >, &).
+  return HtmlService.createTemplateFromFile('AppJs').getRawContent();
+}
+
+/**
+ * Pulls the data:image/... URI out of a HeroJs/LogoJs file. Those files
+ * define the URI as chunked string concatenation (var X = "" + "..." +
+ * "...";), so we just join every double-quoted segment in the file.
+ */
+function extractDataUri_(fileName) {
+  // getRawContent() returns the file verbatim; getContent() would try to
+  // parse it as HTML and choke ("Malformed HTML content").
+  const content = HtmlService.createTemplateFromFile(fileName).getRawContent();
+  const parts = content.match(/"([^"]*)"/g) || [];
+  return parts.map(function (s) { return s.slice(1, -1); }).join('');
 }
 
 /**
@@ -103,21 +150,36 @@ function getProjectNames(siteType) {
     if (lastRow < 2 || lastCol < 1) return [];
 
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    // Non-VRV response sheet uses "Select Project Name"; the VRV
-    // Order-to-Delivery sheet just uses "Project Name" — try both.
-    // The exclusion guards against headers like "Site / Project executive by".
-    let projectCol = findColIndex(headers, 'select project name');
-    if (projectCol === -1) projectCol = findColIndex(headers, 'project name', 'executive');
-    if (projectCol === -1) {
+    // The source sheets carry the pickable name in more than one header, and
+    // the Non-VRV Order-to-Delivery sheet splits it across TWO columns —
+    // a "Project Name" column AND a "Billing Customer Name" column (some
+    // clients, e.g. KEYWEST REALTY, exist only in the latter). So collect
+    // every column whose header matches any of these and MERGE their values,
+    // instead of picking just the first match. The "executive" exclusion
+    // guards against headers like "Site / Project executive by".
+    const projectCols = [];
+    headers.forEach(function (h, i) {
+      const hl = (h || '').toString().toLowerCase();
+      const isProject =
+        hl.indexOf('select project name') !== -1 ||
+        (hl.indexOf('project name') !== -1 && hl.indexOf('executive') === -1) ||
+        hl.indexOf('billing customer name') !== -1;
+      if (isProject) projectCols.push(i);
+    });
+    if (projectCols.length === 0) {
       Logger.log('getProjectNames: no project-name header found in ' + sheetId +
         '. Actual headers: ' + headers.join(' | '));
       return [];
     }
 
-    const data = sheet.getRange(2, projectCol + 1, lastRow - 1, 1).getValues();
-    const cleaned = data
-      .map(function (r) { return r[0] ? r[0].toString().trim().replace(/\s+/g, ' ') : ''; })
-      .filter(function (v) { return v !== ''; });
+    const cleaned = [];
+    projectCols.forEach(function (colIdx) {
+      const data = sheet.getRange(2, colIdx + 1, lastRow - 1, 1).getValues();
+      data.forEach(function (r) {
+        const v = r[0] ? r[0].toString().trim().replace(/\s+/g, ' ') : '';
+        if (v) cleaned.push(v);
+      });
+    });
 
     return Array.from(new Set(cleaned)).sort();
   } catch (err) {
@@ -126,39 +188,235 @@ function getProjectNames(siteType) {
   }
 }
 
-/**
- * Returns the ordered, deduped list of floor names for a developer's
- * building tab. The Floor column is merged across each floor's flat rows
- * in the sheet, so blank cells are forward-filled from the last seen value.
- */
-function getFloorsForBuilding(developer, building) {
-  try {
-    const dev = DEVELOPER_BUILDING_SHEETS[developer];
-    if (!dev || !dev.spreadsheetId) return [];
+/* ------------------------------------------------------------------ *
+ * PROGRESS-SHEET UPDATERS
+ * On submit we also stamp the matching row in a PMS progress sheet:
+ *  - General  -> GENERAL_PMS_SHEET_ID, matched by Project Name
+ *  - Developer-> the developer's sheet + building tab, matched by Flat No
+ * Every column is located by HEADER TEXT (two-row grouped headers are
+ * supported), so adding/removing/reordering sheet columns never breaks
+ * this — nothing is tied to a fixed column index.
+ * ------------------------------------------------------------------ */
 
-    const ss = SpreadsheetApp.openById(dev.spreadsheetId);
-    const sheet = ss.getSheetByName(building);
-    if (!sheet) {
-      Logger.log('getFloorsForBuilding: no tab named "' + building + '" in ' + dev.spreadsheetId);
-      return [];
-    }
+// lower-cased, single-spaced, trimmed
+function normalizeKey_(value) {
+  return (value === null || value === undefined ? '' : value.toString())
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
 
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 4) return [];
+// alphanumerics only — tolerates spacing/punctuation drift like
+// "Fresh Air - PVC PIPE / Duct" vs "Fresh Air -PVC PIPE / Duct"
+function compactKey_(value) {
+  return normalizeKey_(value).replace(/[^a-z0-9]/g, '');
+}
 
-    const values = sheet.getRange(4, 1, lastRow - 3, 1).getValues();
-    const floors = [];
-    let last = '';
-    values.forEach(function (r) {
-      const v = r[0] ? r[0].toString().trim() : '';
-      if (v) last = v;
-      if (last && floors.indexOf(last) === -1) floors.push(last);
-    });
-    return floors;
-  } catch (err) {
-    Logger.log('getFloorsForBuilding error for ' + developer + '/' + building + ': ' + err);
-    return [];
+// Finds a tab by normalized name; falls back to best token overlap.
+function findSheetByName_(ss, wanted) {
+  const sheets = ss.getSheets();
+  const target = normalizeKey_(wanted);
+  let i;
+  for (i = 0; i < sheets.length; i++) {
+    if (normalizeKey_(sheets[i].getName()) === target) return sheets[i];
   }
+  const wantedTokens = target.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(function (t) { return t; });
+  let best = null, bestScore = 0;
+  for (i = 0; i < sheets.length; i++) {
+    const nameTokens = normalizeKey_(sheets[i].getName())
+      .replace(/[^a-z0-9 ]/g, ' ').split(/\s+/);
+    let score = 0;
+    wantedTokens.forEach(function (t) { if (nameTokens.indexOf(t) !== -1) score++; });
+    if (score > bestScore) { bestScore = score; best = sheets[i]; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+/**
+ * Parses the (possibly two-row) header of a PMS sheet.
+ * Detects the sub-header row (the one full of Start Date/End Date/Status),
+ * treats the row above it as group headers, and forward-fills each group
+ * name across its Start/End/Status columns (merged cells report blank in
+ * all but the first column). Returns group/sub header arrays + the first
+ * data row.
+ */
+function getPmsHeaderInfo_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const lastRow = sheet.getLastRow();
+  const scan = Math.min(6, lastRow);
+  if (scan < 1 || lastCol < 1) {
+    return { subRowIndex: 1, dataStartRow: 2, lastCol: lastCol, groupVals: [], subVals: [] };
+  }
+  const rows = sheet.getRange(1, 1, scan, lastCol).getValues();
+
+  let subRow = 0, bestCount = -1, r, c;
+  for (r = 0; r < scan; r++) {
+    let count = 0;
+    for (c = 0; c < lastCol; c++) {
+      const t = normalizeKey_(rows[r][c]);
+      if (t === 'status' || t === 'start date' || t === 'end date') count++;
+    }
+    if (count > bestCount) { bestCount = count; subRow = r; }
+  }
+  const groupRow = subRow > 0 ? subRow - 1 : subRow;
+  const subVals = rows[subRow].slice();
+  const groupVals = rows[groupRow].slice();
+
+  let lastGroup = '';
+  for (c = 0; c < lastCol; c++) {
+    if (groupVals[c] !== '' && groupVals[c] !== null && groupVals[c] !== undefined) {
+      lastGroup = groupVals[c];
+    } else {
+      const s = normalizeKey_(subVals[c]);
+      if ((s === 'status' || s === 'start date' || s === 'end date') && lastGroup) {
+        groupVals[c] = lastGroup;
+      }
+    }
+  }
+
+  return {
+    subRowIndex: subRow + 1,
+    dataStartRow: subRow + 2,
+    lastCol: lastCol,
+    groupVals: groupVals,
+    subVals: subVals
+  };
+}
+
+// 1-based Status column for a named step, e.g. "Copper Piping".
+// Falls back to a single stand-alone column named like the step
+// (e.g. "LS Material Delivery" has no Start/End/Status sub-columns).
+function findStepStatusCol_(info, stepName) {
+  const step = compactKey_(stepName);
+  if (!step) return -1;
+  let i;
+  for (i = 0; i < info.lastCol; i++) {
+    if (compactKey_(info.groupVals[i]) === step && normalizeKey_(info.subVals[i]) === 'status') {
+      return i + 1;
+    }
+  }
+  for (i = 0; i < info.lastCol; i++) {
+    const g = compactKey_(info.groupVals[i]);
+    const s = compactKey_(info.subVals[i]);
+    if ((g === step && !s) || s === step) return i + 1;
+  }
+  return -1;
+}
+
+// 1-based column for a stand-alone header (Project Name, Flat No, Remarks, …)
+function findNamedCol_(info, name) {
+  const n = compactKey_(name);
+  if (!n) return -1;
+  for (let i = 0; i < info.lastCol; i++) {
+    const g = compactKey_(info.groupVals[i]);
+    const s = compactKey_(info.subVals[i]);
+    if (s === n || (g === n && !s) || (g + s) === n) return i + 1;
+  }
+  return -1;
+}
+
+// 1-based row where the given column's value matches (normalized).
+function findRowByColValue_(sheet, info, colIndex, wanted) {
+  if (colIndex < 1) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < info.dataStartRow) return -1;
+  const vals = sheet.getRange(info.dataStartRow, colIndex, lastRow - info.dataStartRow + 1, 1).getValues();
+  const w = normalizeKey_(wanted);
+  if (!w) return -1;
+  for (let i = 0; i < vals.length; i++) {
+    if (normalizeKey_(vals[i][0]) === w) return info.dataStartRow + i;
+  }
+  return -1;
+}
+
+/**
+ * Writes the submitted status/remark/etc. onto one PMS row, all by header
+ * name. Status cell = Done/Pending, or the hold reason when on Hold; the
+ * detailed hold reason goes into Remarks.
+ */
+function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
+  const setByName = function (name, val) {
+    if (val === '' || val === null || val === undefined) return;
+    const col = findNamedCol_(info, name);
+    if (col > 0) sheet.getRange(row, col).setValue(val);
+  };
+
+  if (isDeveloper) {
+    setByName('Timestamp', new Date());
+    setByName('Project Exective By', payload.engineer || '');
+  }
+
+  const statusCol = findStepStatusCol_(info, payload.currentStatus);
+  if (statusCol > 0 && payload.status) {
+    const statusCellVal = payload.status === 'Hold'
+      ? (payload.holdReason || 'Hold')
+      : payload.status;
+    sheet.getRange(row, statusCol).setValue(statusCellVal);
+  } else if (payload.currentStatus) {
+    Logger.log('updatePmsRow_: no status column found for step "' + payload.currentStatus + '"');
+  }
+
+  if (payload.status === 'Hold' && payload.holdReasonDetail) {
+    setByName('Remarks', payload.holdReasonDetail);
+  }
+
+  const wdb = payload.workDoneBy === 'Contractor'
+    ? (payload.contractorName || 'Contractor')
+    : (payload.workDoneBy || '');
+  setByName('Work Done BY', wdb);
+
+  if (payload.tentativeEndDate) {
+    const d = new Date(payload.tentativeEndDate);
+    setByName('Tentitive Project End date', isNaN(d.getTime()) ? payload.tentativeEndDate : d);
+  }
+}
+
+/**
+ * Routes a submission to the right progress sheet/row and stamps it.
+ * Never throws to the caller — failures are returned as a warning so the
+ * submission + PDF still complete, but the submitter is told the progress
+ * sheet was NOT updated (e.g. flat/project not found).
+ * Returns { updated: boolean, warning: string }.
+ */
+function updateProgressSheets_(payload) {
+  const skip = function (msg) { Logger.log('updateProgressSheets_: ' + msg); return { updated: false, warning: msg }; };
+
+  if (payload.clientType === 'Developer') {
+    const dev = DEVELOPER_BUILDING_SHEETS[payload.developer];
+    if (!dev || !dev.spreadsheetId) {
+      return skip('No progress sheet configured for developer "' + payload.developer + '".');
+    }
+    const devSs = SpreadsheetApp.openById(dev.spreadsheetId);
+    const devSheet = findSheetByName_(devSs, payload.building);
+    if (!devSheet) {
+      return skip('Building tab "' + payload.building + '" not found in ' + payload.developer + "'s progress sheet.");
+    }
+    const devInfo = getPmsHeaderInfo_(devSheet);
+    const flatCol = findNamedCol_(devInfo, 'Flat No');
+    if (flatCol < 1) {
+      return skip('No "Flat No" column found in building tab "' + payload.building + '".');
+    }
+    const devRow = findRowByColValue_(devSheet, devInfo, flatCol, payload.flatNo);
+    if (devRow < 0) {
+      return skip('Flat "' + payload.flatNo + '" not found in building "' + payload.building + '". Progress sheet not updated — check the flat number.');
+    }
+    updatePmsRow_(devSheet, devRow, devInfo, payload, true);
+    return { updated: true, warning: '' };
+  }
+
+  const ss = SpreadsheetApp.openById(GENERAL_PMS_SHEET_ID);
+  const tabName = payload.siteType === 'VRV' ? GENERAL_PMS_TABS.VRV : GENERAL_PMS_TABS.NONVRV;
+  const sheet = findSheetByName_(ss, tabName);
+  if (!sheet) {
+    return skip('PMS tab "' + tabName + '" not found.');
+  }
+  const info = getPmsHeaderInfo_(sheet);
+  const projCol = findNamedCol_(info, 'Project Name');
+  const pmsRow = findRowByColValue_(sheet, info, projCol, payload.project);
+  if (pmsRow < 0) {
+    return skip('Project "' + payload.project + '" not found in ' + tabName + '. Progress sheet not updated.');
+  }
+  updatePmsRow_(sheet, pmsRow, info, payload, false);
+  return { updated: true, warning: '' };
 }
 
 /**
@@ -362,6 +620,8 @@ function generateSiteReportPDFsForRows(regenerateExisting) {
  * payload = {
  *   siteType: 'VRV'|'Non-VRV',
  *   clientType: 'General'|'Developer', developer, building, floor, flatNo,
+ *   currentStatus, status: 'Done'|'Pending'|'Hold', holdReason, holdReasonDetail,
+ *   tentativeEndDate, workDoneBy: 'VAPL'|'Contractor', contractorName,
  *   project, people, engineer, activity, nextPlan,
  *   photos: [{base64,mimeType,name}, ...],
  *   amendment, amendmentWhy,
@@ -370,6 +630,10 @@ function generateSiteReportPDFsForRows(regenerateExisting) {
  * }
  */
 function submitSiteReport(payload) {
+  // Tracks the current operation so a thrown error can say WHERE it failed
+  // (Drive/Sheets access errors otherwise read as a bare "You do not have
+  // permission to access the requested document.").
+  let step = 'opening response spreadsheet';
   try {
     const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
     const tabName = payload.siteType === 'VRV' ? TAB_NAMES.VRV : TAB_NAMES.NONVRV;
@@ -381,9 +645,16 @@ function submitSiteReport(payload) {
     const lastCol = sheet.getLastColumn();
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
 
-    const projectName = (payload.project || 'General_Reports').trim();
+    const isDeveloper = payload.clientType === 'Developer';
+    // For developer submissions the response sheet's "Select Project Name"
+    // holds the developer's name (Suyog / Kasturi), not the building.
+    const projectName = (isDeveloper
+      ? (payload.developer || 'General_Reports')
+      : (payload.project || 'General_Reports')).toString().trim();
+    step = 'opening/creating Drive folder "' + projectName + '"';
     const folder = getOrCreateProjectFolder(projectName);
 
+    step = 'saving uploaded photos to folder "' + projectName + '"';
     const siteUrls = [];
     (payload.photos || []).forEach(function (f, idx) {
       const url = saveBase64File(f, folder, 'SitePhoto_' + (idx + 1));
@@ -395,6 +666,8 @@ function submitSiteReport(payload) {
     const measurementUrl = payload.measurement === 'Yes'
       ? saveBase64File(payload.measurementFile, folder, 'MeasurementReport')
       : null;
+
+    step = 'writing the response row';
 
     const email = Session.getActiveUser().getEmail() || 'unknown';
 
@@ -409,6 +682,11 @@ function submitSiteReport(payload) {
     set(findColIndex(headers, 'building'), payload.building || '');
     set(findColIndex(headers, 'floor'), payload.floor || '');
     set(findColIndex(headers, 'flat no'), payload.flatNo || '');
+    set(findColIndex(headers, 'current status'), payload.currentStatus || '');
+    set(findColIndex(headers, 'work done by'), payload.workDoneBy === 'Contractor' ? (payload.contractorName || 'Contractor') : (payload.workDoneBy || ''));
+    set(findColIndex(headers, 'tentative project end date'), payload.tentativeEndDate ? new Date(payload.tentativeEndDate) : '');
+    set(findColIndex(headers, 'hold reason', 'detail'), payload.status === 'Hold' ? (payload.holdReason || '') : '');
+    set(findColIndex(headers, 'hold reason detail'), payload.status === 'Hold' ? (payload.holdReasonDetail || '') : '');
     set(findColIndex(headers, 'select project name'), projectName);
     set(findColIndex(headers, 'number of people'), payload.people || '');
     set(findColIndex(headers, 'project engineer name'), payload.engineer || '');
@@ -425,6 +703,16 @@ function submitSiteReport(payload) {
 
     const newRow = sheet.getLastRow() + 1;
     sheet.getRange(newRow, 1, 1, headers.length).setValues([row]);
+
+    // Stamp the matching PMS progress row (name-based; never blocks submit).
+    let pmsWarning = '';
+    try {
+      const pmsResult = updateProgressSheets_(payload);
+      if (pmsResult && !pmsResult.updated) pmsWarning = pmsResult.warning || '';
+    } catch (progErr) {
+      Logger.log('updateProgressSheets_ failed: ' + progErr);
+      pmsWarning = 'Progress sheet update failed: ' + progErr;
+    }
 
     let pdfUrl = '';
     const mailStatusCol = findColIndex(headers, 'mail status');
@@ -448,10 +736,11 @@ function submitSiteReport(payload) {
       return { success: false, error: 'Data saved, but PDF generation failed: ' + pdfMessage };
     }
 
-    return { success: true, row: newRow, pdfUrl: pdfUrl };
+    return { success: true, row: newRow, pdfUrl: pdfUrl, pmsWarning: pmsWarning };
   } catch (err) {
-    Logger.log('submitSiteReport error: ' + err);
-    return { success: false, error: err.message };
+    const msg = (err && err.message) ? err.message : String(err);
+    Logger.log('submitSiteReport error while ' + step + ': ' + err);
+    return { success: false, error: 'Failed while ' + step + ': ' + msg };
   }
 }
 
