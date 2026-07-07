@@ -22,6 +22,25 @@ const VRV_ORDERS_GID = 290389899;
 const NONVRV_ORDERS_SHEET_ID = '1hPvEw0rxaOmg2JDtdp9q8XqjbrV98PZL2jiZVz6XWFI';
 const NONVRV_ORDERS_GID = 1766836681;
 
+// Developer -> building floor lookup. Each building is a tab in the
+// developer's PMS spreadsheet, with Floor (col A, merged) / Flat No (col B)
+// starting at row 4 — see getFloorsForBuilding().
+const DEVELOPER_BUILDING_SHEETS = {
+  'Suyog Navkar': {
+    spreadsheetId: '1OJHBUMhIpcG3gGGubd8jeRRC16AX3P6t7aPOQPgdliM',
+    buildings: ['Agam', 'Shruta', 'Kalpa']
+  },
+  'Kasturi': {
+    spreadsheetId: '', // TODO: add Kasturi's PMS spreadsheet ID once available
+    buildings: [
+      'Balmoral River side D-wing',
+      'Balmoral River side C-wing',
+      'Balmoral River Tower D-wing',
+      'Balmoral River Tower C-wing'
+    ]
+  }
+};
+
 const PARENT_FOLDER_ID = '1jdw5IgOuvn1M9xF5aeI00XN8A76sPI4W';
 const LOGO_URL = 'https://drive.google.com/file/d/1TU2KKJN4AQKkG7nMtMlCoiYX1wMD2QtB/view?usp=drive_link';
 const TEMPLATE_DOC_ID = '1_dsXZdnwCajnmrfk4w3BgJI9-rz_vdDsCEJhHDisELo';
@@ -103,6 +122,41 @@ function getProjectNames(siteType) {
     return Array.from(new Set(cleaned)).sort();
   } catch (err) {
     Logger.log('getProjectNames error for ' + siteType + ' (' + sheetId + '): ' + err);
+    return [];
+  }
+}
+
+/**
+ * Returns the ordered, deduped list of floor names for a developer's
+ * building tab. The Floor column is merged across each floor's flat rows
+ * in the sheet, so blank cells are forward-filled from the last seen value.
+ */
+function getFloorsForBuilding(developer, building) {
+  try {
+    const dev = DEVELOPER_BUILDING_SHEETS[developer];
+    if (!dev || !dev.spreadsheetId) return [];
+
+    const ss = SpreadsheetApp.openById(dev.spreadsheetId);
+    const sheet = ss.getSheetByName(building);
+    if (!sheet) {
+      Logger.log('getFloorsForBuilding: no tab named "' + building + '" in ' + dev.spreadsheetId);
+      return [];
+    }
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 4) return [];
+
+    const values = sheet.getRange(4, 1, lastRow - 3, 1).getValues();
+    const floors = [];
+    let last = '';
+    values.forEach(function (r) {
+      const v = r[0] ? r[0].toString().trim() : '';
+      if (v) last = v;
+      if (last && floors.indexOf(last) === -1) floors.push(last);
+    });
+    return floors;
+  } catch (err) {
+    Logger.log('getFloorsForBuilding error for ' + developer + '/' + building + ': ' + err);
     return [];
   }
 }
@@ -307,6 +361,7 @@ function generateSiteReportPDFsForRows(regenerateExisting) {
  * Main entry point called from the client via google.script.run.
  * payload = {
  *   siteType: 'VRV'|'Non-VRV',
+ *   clientType: 'General'|'Developer', developer, building, floor, flatNo,
  *   project, people, engineer, activity, nextPlan,
  *   photos: [{base64,mimeType,name}, ...],
  *   amendment, amendmentWhy,
@@ -349,6 +404,11 @@ function submitSiteReport(payload) {
     set(findColIndex(headers, 'timestamp'), new Date());
     set(findColIndex(headers, 'email address'), email);
     set(findColIndex(headers, 'site type'), payload.siteType || 'Non-VRV');
+    set(findColIndex(headers, 'client type'), payload.clientType || 'General');
+    set(findColIndex(headers, 'developer'), payload.developer || '');
+    set(findColIndex(headers, 'building'), payload.building || '');
+    set(findColIndex(headers, 'floor'), payload.floor || '');
+    set(findColIndex(headers, 'flat no'), payload.flatNo || '');
     set(findColIndex(headers, 'select project name'), projectName);
     set(findColIndex(headers, 'number of people'), payload.people || '');
     set(findColIndex(headers, 'project engineer name'), payload.engineer || '');
