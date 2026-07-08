@@ -448,8 +448,18 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
     Logger.log('updatePmsRow_: no status column found for step "' + payload.currentStatus + '"');
   }
 
-  if (payload.status === 'Hold' && payload.holdReasonDetail) {
-    setByName('Remarks', payload.holdReasonDetail);
+  // On Hold: Remarks gets one combined line joined by " - ":
+  //   "<step> - <reason> - stuck by <who>"
+  // e.g. "Copper Piping - due to heavy rain - stuck by VAPL".
+  // <who> is pulled from the hold reason ("Struct BY VAPL" -> "VAPL");
+  // if it has no "by" part (e.g. "Other") the "stuck by" piece is dropped.
+  if (payload.status === 'Hold') {
+    const parts = [];
+    if (payload.currentStatus) parts.push(payload.currentStatus);
+    if (payload.holdReasonDetail) parts.push(payload.holdReasonDetail);
+    const whoMatch = String(payload.holdReason || '').match(/by\s+(.+)$/i);
+    if (whoMatch) parts.push('stuck by ' + whoMatch[1].trim());
+    if (parts.length) setByName('Remarks', parts.join(' - '));
   }
 
   const wdb = payload.workDoneBy === 'Contractor'
