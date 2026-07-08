@@ -343,6 +343,43 @@ function findRowByColValue_(sheet, info, colIndex, wanted) {
   return -1;
 }
 
+/**
+ * Flat-tolerant row finder. The form takes Flat No as free text, so a user
+ * may type "302" while the sheet stores "D-302" (or vice-versa). Match order:
+ *   1) exact / punctuation-insensitive ("D-302" == "d302")
+ *   2) same digits when the letter (wing) parts don't conflict — so "302"
+ *      matches "D-302", but "C-302" never matches "D-302".
+ * The digit fallback is only trusted when it hits exactly ONE row, so a sheet
+ * with duplicate flats never silently updates the wrong one.
+ */
+function findFlatRow_(sheet, info, colIndex, wanted) {
+  if (colIndex < 1) return -1;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < info.dataStartRow) return -1;
+  const vals = sheet.getRange(info.dataStartRow, colIndex, lastRow - info.dataStartRow + 1, 1).getValues();
+  const wNorm = normalizeKey_(wanted);
+  if (!wNorm) return -1;
+  const wComp = compactKey_(wanted);
+  const wLetters = wNorm.replace(/[^a-z]/g, '');
+  const wDigits = wNorm.replace(/\D/g, '');
+
+  let digitRow = -1, digitHits = 0;
+  for (let i = 0; i < vals.length; i++) {
+    const cell = vals[i][0];
+    if (cell === '' || cell === null || cell === undefined) continue;
+    const cNorm = normalizeKey_(cell);
+    if (cNorm === wNorm || compactKey_(cell) === wComp) return info.dataStartRow + i;
+    const cLetters = cNorm.replace(/[^a-z]/g, '');
+    const cDigits = cNorm.replace(/\D/g, '');
+    const lettersOk = !wLetters || !cLetters || wLetters === cLetters;
+    if (lettersOk && wDigits && cDigits === wDigits) {
+      digitHits++;
+      if (digitRow < 0) digitRow = info.dataStartRow + i;
+    }
+  }
+  return digitHits === 1 ? digitRow : -1;
+}
+
 // True for a header that names the shared Order ID key. Matches "Order ID",
 // "Order No", "Order Number", "Order Code", "Order Ref", or a bare "Order" —
 // but never "Order Date". Order ID is the ONE column present (and stable) in
@@ -432,7 +469,11 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
     const statusCellVal = payload.status === 'Hold'
       ? (payload.holdReason || 'Hold')
       : payload.status;
-    sheet.getRange(row, statusCol).setValue(statusCellVal);
+    // Developer building tabs put a strict dropdown on each step's Status cell
+    // (often only "Done" is accepted), which makes a raw setValue of "Pending"
+    // or a hold reason get rejected and left blank. Route through the helper so
+    // the value is appended to that cell's list + allow-invalid, and it sticks.
+    writeAllowingCustomList_(sheet.getRange(row, statusCol), statusCellVal);
 
     // Step marked Done -> stamp its End Date with today's date, but only if
     // empty so a previously recorded completion date is never overwritten.
@@ -474,6 +515,27 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
     const d = new Date(payload.tentativeEndDate);
     setByName('Tentitive Project End date', isNaN(d.getTime()) ? payload.tentativeEndDate : d);
   }
+}
+
+/**
+ * DIAGNOSTIC — run from the Apps Script editor (pick this function, press Run),
+ * then read the log under Executions. Dumps how the Kasturi "Balmoral TowerD-
+ * wing" tab header is parsed and whether the Copper Piping Status column and
+ * the Remarks column actually resolve — the two cells that came up empty.
+ */
+function diagBalmoralDHeader() {
+  const ss = SpreadsheetApp.openById(DEVELOPER_BUILDING_SHEETS['Kasturi'].spreadsheetId);
+  const sheet = findSheetByName_(ss, 'Balmoral TowerD-wing');
+  if (!sheet) { Logger.log('TAB "Balmoral TowerD-wing" NOT FOUND'); return; }
+  const info = getPmsHeaderInfo_(sheet);
+  Logger.log('subRowIndex=%s dataStartRow=%s lastCol=%s', info.subRowIndex, info.dataStartRow, info.lastCol);
+  for (let i = 0; i < info.lastCol; i++) {
+    const g = info.groupVals[i], s = info.subVals[i];
+    if (g || s) Logger.log('col %s | group="%s" | sub="%s"', i + 1, g, s);
+  }
+  Logger.log('--> Copper Piping Status col = %s', findStepStatusCol_(info, 'Copper Piping'));
+  Logger.log('--> Remarks col = %s', findNamedCol_(info, 'Remarks'));
+  Logger.log('--> Work Done BY col = %s', findNamedCol_(info, 'Work Done BY'));
 }
 
 /**
@@ -529,7 +591,7 @@ function updateProgressSheets_(payload) {
     if (flatCol < 1) {
       return skip('No "Flat No" column found in building tab "' + payload.building + '".');
     }
-    const devRow = findRowByColValue_(devSheet, devInfo, flatCol, payload.flatNo);
+    const devRow = findFlatRow_(devSheet, devInfo, flatCol, payload.flatNo);
     if (devRow < 0) {
       return skip('Flat "' + payload.flatNo + '" not found in building "' + payload.building + '". Progress sheet not updated — check the flat number.');
     }
@@ -779,6 +841,13 @@ function generateSiteReportPDFsForRows(regenerateExisting) {
  * }
  */
 function submitSiteReport(payload) {
+  // DIAGNOSTIC: log the status/hold fields exactly as received so a missing
+  // step Status / Remark can be traced to "form never sent it" vs "column not
+  // matched on the sheet". Read under Extensions > Apps Script > Executions.
+  Logger.log('submitSiteReport payload: clientType=%s developer=%s building=%s flatNo=%s currentStatus=%s status=%s holdReason=%s holdReasonDetail=%s',
+    payload.clientType, payload.developer, payload.building, payload.flatNo,
+    payload.currentStatus, payload.status, payload.holdReason, payload.holdReasonDetail);
+
   // Tracks the current operation so a thrown error can say WHERE it failed
   // (Drive/Sheets access errors otherwise read as a bare "You do not have
   // permission to access the requested document.").
