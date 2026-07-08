@@ -52,6 +52,19 @@ const EMAIL_CFG = {
 };
 
 /**
+ * Developer client emails. Developer reports carry the developer's NAME as the
+ * project (not an Orders project), so their client email can't come from the
+ * Orders lookup — it comes from here instead. Keyed by the "Developer" column
+ * value. Leave blank to route that developer to FALLBACK_TO (crm@) for now;
+ * fill the real address later (here or straight on Apps Script). Comma-separate
+ * for multiple recipients.
+ */
+const DEVELOPER_EMAILS = {
+  'Kasturi': 'devops@vakhariaairtech.com',   // TODO: replace with real Kasturi client email
+  'Suyog Navkar': ''                          // TODO: Suyog Navkar client email
+};
+
+/**
  * MAIN — called by the trigger. Emails every "PDF GENERATED" row's PDF.
  * Safe to run by hand too. Honors EMAIL_CFG.MODE.
  */
@@ -74,6 +87,8 @@ function sendPendingReportEmails() {
     const statusCol = findColIndex(headers, 'mail status');
     const pdfIdCol  = findColIndex(headers, 'pdf id');
     const projCol   = findColIndex(headers, 'select project name');
+    const ctCol     = findColIndex(headers, 'client type');
+    const devCol    = findColIndex(headers, 'developer');
     if (statusCol < 0 || pdfIdCol < 0 || projCol < 0) {
       Logger.log('tab "' + TAB_NAMES[key] + '": missing Mail Status / PDF ID / Project column — skipped.');
       return;
@@ -87,7 +102,9 @@ function sendPendingReportEmails() {
       if (status !== EMAIL_CFG.READY_STATUS.toUpperCase() || !pdfId) continue;
 
       const projectName = (data[i][projCol] || '').toString().trim();
-      let to = cleanRecipients_(emailMap[projectName.toLowerCase()]) || EMAIL_CFG.FALLBACK_TO;
+      const clientType  = ctCol  > -1 ? (data[i][ctCol]  || '').toString().trim() : '';
+      const developer   = devCol > -1 ? (data[i][devCol] || '').toString().trim() : '';
+      let to = resolveRecipient_(clientType, developer, projectName, emailMap);
       if (EMAIL_CFG.MODE === 'TEST') to = EMAIL_CFG.TEST_TO;
 
       try {
@@ -186,6 +203,8 @@ function previewPendingReportEmails() {
     const statusCol = findColIndex(headers, 'mail status');
     const pdfIdCol  = findColIndex(headers, 'pdf id');
     const projCol   = findColIndex(headers, 'select project name');
+    const ctCol     = findColIndex(headers, 'client type');
+    const devCol    = findColIndex(headers, 'developer');
     if (statusCol < 0 || pdfIdCol < 0 || projCol < 0) return;
 
     const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
@@ -194,9 +213,12 @@ function previewPendingReportEmails() {
       const pdfId  = (data[i][pdfIdCol] || '').toString().trim();
       if (status !== EMAIL_CFG.READY_STATUS.toUpperCase() || !pdfId) continue;
       const projectName = (data[i][projCol] || '').toString().trim();
-      const to = cleanRecipients_(emailMap[projectName.toLowerCase()]) || EMAIL_CFG.FALLBACK_TO;
+      const clientType  = ctCol  > -1 ? (data[i][ctCol]  || '').toString().trim() : '';
+      const developer   = devCol > -1 ? (data[i][devCol] || '').toString().trim() : '';
+      const to = resolveRecipient_(clientType, developer, projectName, emailMap);
+      const devName = isDeveloperName_(developer) ? developer : (isDeveloperName_(projectName) ? projectName : '');
       count++;
-      Logger.log('[' + TAB_NAMES[key] + ' row ' + (i + 2) + '] "' + projectName + '" -> ' + to + '  (pdf ' + pdfId + ')');
+      Logger.log('[' + TAB_NAMES[key] + ' row ' + (i + 2) + '] ' + (devName ? '[DEV ' + devName + '] ' : '') + '"' + projectName + '" -> ' + to + '  (pdf ' + pdfId + ')');
     }
   });
   Logger.log('previewPendingReportEmails: ' + count + ' report(s) ready to send.');
@@ -273,6 +295,48 @@ function buildClientEmailMap_() {
     }
   });
   return map;
+}
+
+/**
+ * Picks the recipient for a row.
+ * Developer rows store the developer NAME as the project, so we match either the
+ * "Developer" column OR the project name against DEVELOPER_EMAILS. Matching on
+ * the name means routing still works even when the "Client Type" column is
+ * blank/missing on the response row. Everyone else uses the Orders lookup.
+ * Anything unknown falls back to FALLBACK_TO so a mail is never lost.
+ */
+function resolveRecipient_(clientType, developer, projectName, emailMap) {
+  // 1) Known developer (by developer column or by project name) -> its email.
+  const devMail = developerEmail_(developer) || developerEmail_(projectName);
+  if (devMail) return devMail;
+
+  // 2) Marked developer but no email filled yet -> fallback (skip Orders lookup).
+  const isDev = (clientType || '').toString().trim().toLowerCase() === 'developer'
+             || isDeveloperName_(developer) || isDeveloperName_(projectName);
+  if (isDev) return EMAIL_CFG.FALLBACK_TO;
+
+  // 3) General report -> Orders "Client Email Id" by project name.
+  return cleanRecipients_(emailMap[(projectName || '').toString().trim().toLowerCase()]) || EMAIL_CFG.FALLBACK_TO;
+}
+
+/** True if the name matches a key in DEVELOPER_EMAILS (case-insensitive). */
+function isDeveloperName_(name) {
+  const key = (name || '').toString().trim().toLowerCase();
+  if (!key) return false;
+  for (const dev in DEVELOPER_EMAILS) {
+    if (dev.toLowerCase() === key) return true;
+  }
+  return false;
+}
+
+/** Looks up a developer's client email (case-insensitive), '' if none/blank. */
+function developerEmail_(developer) {
+  const key = (developer || '').toString().trim().toLowerCase();
+  if (!key) return '';
+  for (const name in DEVELOPER_EMAILS) {
+    if (name.toLowerCase() === key) return cleanRecipients_(DEVELOPER_EMAILS[name]);
+  }
+  return '';
 }
 
 /** Keeps only real addresses from a raw cell like "a@x.com, No emails found". */
