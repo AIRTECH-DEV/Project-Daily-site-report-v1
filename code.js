@@ -455,12 +455,43 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
   const wdb = payload.workDoneBy === 'Contractor'
     ? (payload.contractorName || 'Contractor')
     : (payload.workDoneBy || '');
-  setByName('Work Done BY', wdb);
+  if (wdb !== '' && wdb !== null && wdb !== undefined) {
+    const wCol = findNamedCol_(info, 'Work Done BY');
+    if (wCol > 0) writeAllowingCustomList_(sheet.getRange(row, wCol), wdb);
+  }
 
   if (payload.tentativeEndDate) {
     const d = new Date(payload.tentativeEndDate);
     setByName('Tentitive Project End date', isNaN(d.getTime()) ? payload.tentativeEndDate : d);
   }
+}
+
+/**
+ * Writes a value into a cell that may carry a "value in list" dropdown
+ * (e.g. the Work Done BY contractor list). If the value is a custom name not
+ * already in the list, the name is appended to that cell's dropdown and
+ * invalid input is allowed — so the custom contractor name sticks cleanly
+ * with no red "invalid" flag while the dropdown of known names is kept.
+ * Never throws: falls back to a plain setValue on any error.
+ */
+function writeAllowingCustomList_(cell, value) {
+  try {
+    const rule = cell.getDataValidation();
+    if (rule && rule.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) {
+      const args = rule.getCriteriaValues();      // [ [allowed values], showDropdown ]
+      const list = (args[0] || []).map(function (x) { return String(x); });
+      if (list.indexOf(String(value)) === -1) {
+        const newRule = SpreadsheetApp.newDataValidation()
+          .requireValueInList(list.concat([String(value)]), true)
+          .setAllowInvalid(true)
+          .build();
+        cell.setDataValidation(newRule);
+      }
+    }
+  } catch (err) {
+    Logger.log('writeAllowingCustomList_: ' + err);
+  }
+  cell.setValue(value);
 }
 
 /**
