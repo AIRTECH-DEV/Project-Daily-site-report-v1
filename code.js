@@ -501,6 +501,11 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
     const whoMatch = String(payload.holdReason || '').match(/by\s+(.+)$/i);
     if (whoMatch) parts.push('stuck by ' + whoMatch[1].trim());
     if (parts.length) setByName('Remarks', parts.join(' - '));
+  } else if (payload.status) {
+    // No longer on hold (Done/Pending) -> wipe the old hold remark so a stale
+    // "stuck by ..." reason never lingers after the project moves on.
+    const remCol = findNamedCol_(info, 'Remarks');
+    if (remCol > 0) sheet.getRange(row, remCol).setValue('');
   }
 
   const wdb = payload.workDoneBy === 'Contractor'
