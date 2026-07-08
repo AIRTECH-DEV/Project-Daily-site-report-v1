@@ -1111,7 +1111,8 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
     styleDetailTable(detailTable, BGRAY, GRAY, DARK, GREEN, AMBER, LGRAY, WHITE);
   }
 
-  body.appendParagraph('').setSpacingAfter(8);
+  // Page 1 = activity + project details only. All photo sections start page 2.
+  body.appendPageBreak();
 
   let drawingInserted = false;
   headers.forEach(function (header, index) {
@@ -1124,7 +1125,6 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
       try {
         const drawingId = value.match(/[-\w]{25,}/);
         if (drawingId) {
-          body.appendParagraph('').setSpacingBefore(20).setSpacingAfter(4);
           appendSectionHeader(body, 'DRAWING CHANGE PHOTO', RED);
           const imgBlob = DriveApp.getFileById(drawingId[0]).getBlob();
           const img = body.appendImage(imgBlob);
@@ -1165,7 +1165,6 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
   }
 
   if (photoBlobs.length > 0) {
-    // No forced page break — let content flow so short reports stay compact
     appendSectionHeader(body, 'SITE PHOTOS', RED);
     body.appendParagraph('').setSpacingBefore(2).setSpacingAfter(4);
 
