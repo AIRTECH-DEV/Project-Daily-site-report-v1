@@ -38,10 +38,15 @@ const EMAIL_CFG = {
   READY_STATUS: 'PDF GENERATED',                  // Mail Status value that means "ready to send"
   SENT_STATUS: 'SENT',
 
-  // Client-email lookup: read the "Client Email Id" column straight from the
-  // Orders source sheet(s), matched by Project Name. This is the authoritative
-  // source (the old OCR scrape tab was unreliable). Columns are found by header
-  // text, so exact positions don't matter. TEST mode ignores this entirely.
+  // GENERAL client-email lookup (two tiers, matched by Project Name):
+  //   1) the OCR scrape tab "VRV Scraped Data1"   <- checked FIRST
+  //   2) the Orders "Client Email Id" column       <- used only if 1) misses
+  // Then FALLBACK_TO if neither has it. TEST mode ignores all of this.
+  SCRAPE_SS_ID: '1hPvEw0rxaOmg2JDtdp9q8XqjbrV98PZL2jiZVz6XWFI',
+  SCRAPE_TAB: 'VRV Scraped Data1',
+  SCRAPE_NAME_COL: 1,   // 0-based: Project Name (col B)
+  SCRAPE_EMAIL_COL: 3,  // 0-based: Scraped Emails (col D)
+
   ORDER_SS_IDS: [
     '1HwYDM6ARcDomEqmhqBTxRe3OsAzeezTq_8Wnhsm3_eY',
     '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0'
@@ -75,7 +80,8 @@ function sendPendingReportEmails() {
   }
 
   const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
-  const emailMap = buildClientEmailMap_();
+  const scrapeMap = buildScrapeEmailMap_();
+  const ordersMap = buildClientEmailMap_();
   let sent = 0, failed = 0;
 
   Object.keys(TAB_NAMES).forEach(function (key) {
@@ -104,7 +110,7 @@ function sendPendingReportEmails() {
       const projectName = (data[i][projCol] || '').toString().trim();
       const clientType  = ctCol  > -1 ? (data[i][ctCol]  || '').toString().trim() : '';
       const developer   = devCol > -1 ? (data[i][devCol] || '').toString().trim() : '';
-      let to = resolveRecipient_(clientType, developer, projectName, emailMap);
+      let to = resolveRecipient_(clientType, developer, projectName, scrapeMap, ordersMap);
       if (EMAIL_CFG.MODE === 'TEST') to = EMAIL_CFG.TEST_TO;
 
       try {
@@ -192,7 +198,8 @@ function testReportEmail() {
  */
 function previewPendingReportEmails() {
   const ss = SpreadsheetApp.openById(RESPONSE_SHEET_ID);
-  const emailMap = buildClientEmailMap_();
+  const scrapeMap = buildScrapeEmailMap_();
+  const ordersMap = buildClientEmailMap_();
   let count = 0;
 
   Object.keys(TAB_NAMES).forEach(function (key) {
@@ -215,7 +222,7 @@ function previewPendingReportEmails() {
       const projectName = (data[i][projCol] || '').toString().trim();
       const clientType  = ctCol  > -1 ? (data[i][ctCol]  || '').toString().trim() : '';
       const developer   = devCol > -1 ? (data[i][devCol] || '').toString().trim() : '';
-      const to = resolveRecipient_(clientType, developer, projectName, emailMap);
+      const to = resolveRecipient_(clientType, developer, projectName, scrapeMap, ordersMap);
       const devName = isDeveloperName_(developer) ? developer : (isDeveloperName_(projectName) ? projectName : '');
       count++;
       Logger.log('[' + TAB_NAMES[key] + ' row ' + (i + 2) + '] ' + (devName ? '[DEV ' + devName + '] ' : '') + '"' + projectName + '" -> ' + to + '  (pdf ' + pdfId + ')');
@@ -262,9 +269,34 @@ function removeReportEmailTrigger() {
  * ------------------------------------------------------------------------- */
 
 /**
+ * Builds { projectName(lowercased) : "email[,email]" } from the OCR scrape tab
+ * "VRV Scraped Data1". This is the FIRST-choice source for General reports.
+ */
+function buildScrapeEmailMap_() {
+  const map = {};
+  try {
+    const sh = SpreadsheetApp.openById(EMAIL_CFG.SCRAPE_SS_ID).getSheetByName(EMAIL_CFG.SCRAPE_TAB);
+    if (!sh || sh.getLastRow() < 2) {
+      Logger.log('buildScrapeEmailMap_: no rows in "' + EMAIL_CFG.SCRAPE_TAB + '".');
+      return map;
+    }
+    const rows = sh.getDataRange().getValues();
+    for (let i = 1; i < rows.length; i++) {
+      const name = (rows[i][EMAIL_CFG.SCRAPE_NAME_COL] || '').toString().trim().toLowerCase();
+      const mail = cleanRecipients_(rows[i][EMAIL_CFG.SCRAPE_EMAIL_COL]);
+      if (name && mail) map[name] = mail;
+    }
+  } catch (e) {
+    Logger.log('buildScrapeEmailMap_ error: ' + e);
+  }
+  return map;
+}
+
+/**
  * Builds { projectName(lowercased) : "email[,email]" } by reading the
  * "Client Email Id" column of each Orders source sheet, keyed by Project Name.
  * Columns are located by header text (falls back to Project Name = col D).
+ * This is the FALLBACK source when the scrape tab has no email for the project.
  */
 function buildClientEmailMap_() {
   const map = {};
@@ -305,18 +337,19 @@ function buildClientEmailMap_() {
  * blank/missing on the response row. Everyone else uses the Orders lookup.
  * Anything unknown falls back to FALLBACK_TO so a mail is never lost.
  */
-function resolveRecipient_(clientType, developer, projectName, emailMap) {
+function resolveRecipient_(clientType, developer, projectName, scrapeMap, ordersMap) {
   // 1) Known developer (by developer column or by project name) -> its email.
   const devMail = developerEmail_(developer) || developerEmail_(projectName);
   if (devMail) return devMail;
 
-  // 2) Marked developer but no email filled yet -> fallback (skip Orders lookup).
+  // 2) Marked developer but no email filled yet -> fallback (skip general lookup).
   const isDev = (clientType || '').toString().trim().toLowerCase() === 'developer'
              || isDeveloperName_(developer) || isDeveloperName_(projectName);
   if (isDev) return EMAIL_CFG.FALLBACK_TO;
 
-  // 3) General report -> Orders "Client Email Id" by project name.
-  return cleanRecipients_(emailMap[(projectName || '').toString().trim().toLowerCase()]) || EMAIL_CFG.FALLBACK_TO;
+  // 3) General report -> VRV Scraped Data1 first, then Orders, then fallback.
+  const key = (projectName || '').toString().trim().toLowerCase();
+  return (scrapeMap && scrapeMap[key]) || (ordersMap && ordersMap[key]) || EMAIL_CFG.FALLBACK_TO;
 }
 
 /** True if the name matches a key in DEVELOPER_EMAILS (case-insensitive). */
