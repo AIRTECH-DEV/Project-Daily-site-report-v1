@@ -492,7 +492,7 @@ function updatePmsRow_(sheet, row, info, payload, isDeveloper) {
   // On Hold: Remarks gets one combined line joined by " - ":
   //   "<step> - <reason> - stuck by <who>"
   // e.g. "Copper Piping - due to heavy rain - stuck by VAPL".
-  // <who> is pulled from the hold reason ("Struct BY VAPL" -> "VAPL");
+  // <who> is pulled from the hold reason ("Stuck BY VAPL" -> "VAPL");
   // if it has no "by" part (e.g. "Other") the "stuck by" piece is dropped.
   if (payload.status === 'Hold') {
     const parts = [];
