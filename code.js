@@ -26,7 +26,7 @@ const NONVRV_ORDERS_GID = 290389899;
 // site type. Rows are matched by Project Name; each project step (Copper
 // Piping, Cable, …) is a merged group header with Start Date / End Date /
 // Status sub-columns, so columns are resolved by header text, never index.
-const GENERAL_PMS_SHEET_ID = '13b916quVfpOKvwqn-kcaSb3M3i6RoeSIe7P57pHdc2I';
+const GENERAL_PMS_SHEET_ID = '1kgFA14jcdzT34mPv1tS-BD6xSKFR1Okb3RZ3cROtLGY';
 const GENERAL_PMS_TABS = { VRV: 'PMS - VRV', NONVRV: 'PMS - NonVRV' };
 
 // Developer -> building progress spreadsheet. Each building is a tab; rows
@@ -950,6 +950,14 @@ function submitSiteReport(payload) {
         sheet.getRange(newRow, mailStatusCol + 1).setValue('PDF GENERATED');
       }
       pdfUrl = pdfFile ? pdfFile.getUrl() : '';
+      // Fire the WhatsApp report to the client numbers ~2 min later.
+      // (defined in sendReportwhatsapp.js; no-op when WA_CFG.MODE = 'OFF')
+      try { scheduleReportWhatsApp_(newRow, tabName); }
+      catch (waErr) { Logger.log('scheduleReportWhatsApp_ failed: ' + waErr); }
+      // Fire the report email to the client ~2 min later (same per-submit design).
+      // (defined in sendReportEmail.js; no-op when EMAIL_CFG.MODE = 'OFF')
+      try { scheduleReportEmail_(newRow, tabName); }
+      catch (mailErr) { Logger.log('scheduleReportEmail_ failed: ' + mailErr); }
     } catch (pdfErr) {
       const pdfMessage = pdfErr && pdfErr.message ? pdfErr.message : pdfErr.toString();
       Logger.log('PDF generation failed: ' + pdfMessage);
@@ -1080,6 +1088,7 @@ function buildDocAndExportPDF(headers, rowData, data, projectName, targetFolder,
     const skipPatterns = [
       'email address',
       'mail status',
+      'whatsapp status',
       'pdf id',
       'timestamp',
       "today's activity",

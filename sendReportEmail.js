@@ -53,7 +53,8 @@ const EMAIL_CFG = {
   ],
   ORDER_TAB: 'Orders',
 
-  TRIGGER_MINUTES: 10   // how often the auto-send trigger fires (1,5,10,15,30)
+  TRIGGER_MINUTES: 10,  // (legacy polling) how often the auto-send trigger fires (1,5,10,15,30)
+  DELAY_MINUTES: 2      // per-submit send: fire the email this many minutes after submit
 };
 
 /**
@@ -406,4 +407,124 @@ function findLatestReport_() {
     }
   });
   return best;
+}
+
+/* ===========================================================================
+ * PER-SUBMIT EMAIL  (same event-driven design as sendReportwhatsapp.js)
+ * ---------------------------------------------------------------------------
+ * Instead of the polling sendPendingReportEmails() trigger, the email now goes
+ * out once, right after a report is submitted:
+ *   submitSiteReport() -> scheduleReportEmail_(row, tab) -> one-shot trigger
+ *   fires ~EMAIL_CFG.DELAY_MINUTES later -> runScheduledReportEmail_() ->
+ *   sendReportEmailForRow_() mails that ONE row and stamps Mail Status = SENT.
+ * No standing trigger, no re-sending. Honors EMAIL_CFG.MODE (OFF/TEST/LIVE).
+ *
+ * TO SWITCH OVER: run removeReportEmailTrigger() once (kills the old polling),
+ * set EMAIL_CFG.MODE = 'LIVE', then publish a NEW web-app deployment version so
+ * submitSiteReport() runs the code that calls scheduleReportEmail_().
+ * ========================================================================= */
+
+/** STEP A — called from submitSiteReport after the PDF is generated. */
+function scheduleReportEmail_(rowNum, tabName) {
+  if (EMAIL_CFG.MODE === 'OFF') { Logger.log('EMAIL: MODE=OFF — not scheduling.'); return; }
+  try {
+    const fireAt = new Date(Date.now() + (EMAIL_CFG.DELAY_MINUTES || 2) * 60 * 1000);
+    const trigger = ScriptApp.newTrigger('runScheduledReportEmail_')
+      .timeBased().at(fireAt).create();
+
+    PropertiesService.getScriptProperties().setProperty(
+      'EMAIL_ROW_' + trigger.getUniqueId(),
+      JSON.stringify({ row: rowNum, tab: tabName })
+    );
+    // Move it off 'PDF GENERATED' so any leftover polling trigger won't also send.
+    if (EMAIL_CFG.MODE === 'LIVE') setMailStatus_(tabName, rowNum, 'EMAIL SCHEDULED');
+    Logger.log('EMAIL: scheduled row ' + rowNum + ' (' + tabName + ') at ' + fireAt);
+  } catch (e) {
+    Logger.log('EMAIL: scheduleReportEmail_ failed: ' + e);
+  }
+}
+
+/** STEP B — the one-shot trigger fires here ~DELAY_MINUTES later. */
+function runScheduledReportEmail_(e) {
+  const uid    = e ? e.triggerUid : '';
+  const props  = PropertiesService.getScriptProperties();
+  const key    = 'EMAIL_ROW_' + uid;
+  const stored = props.getProperty(key);
+
+  if (uid) {
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      if (t.getUniqueId() === uid) ScriptApp.deleteTrigger(t);
+    });
+  }
+  if (!stored) { Logger.log('EMAIL: no stored row for ' + key); return; }
+  props.deleteProperty(key);
+
+  const parsed = JSON.parse(stored);
+  sendReportEmailForRow_(parsed.tab, parsed.row);
+}
+
+/** CORE — mails the PDF for ONE response row to the right client. */
+function sendReportEmailForRow_(tabName, rowNum) {
+  try {
+    if (EMAIL_CFG.MODE === 'OFF') { Logger.log('EMAIL: MODE=OFF.'); return; }
+
+    const sheet = SpreadsheetApp.openById(RESPONSE_SHEET_ID).getSheetByName(tabName);
+    if (!sheet) { Logger.log('EMAIL: tab "' + tabName + '" not found.'); return; }
+
+    const lastCol   = sheet.getLastColumn();
+    const headers   = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const rowData   = sheet.getRange(rowNum, 1, 1, lastCol).getValues()[0];
+    const statusCol = findColIndex(headers, 'mail status');
+    const pdfIdCol  = findColIndex(headers, 'pdf id');
+    const projCol   = findColIndex(headers, 'select project name');
+    const ctCol     = findColIndex(headers, 'client type');
+    const devCol    = findColIndex(headers, 'developer');
+
+    // PDF ID (poll briefly in case the row was just written).
+    let pdfId = '';
+    if (pdfIdCol > -1) {
+      for (let i = 0; i < 6; i++) {                 // up to 6 x 5s = 30s
+        pdfId = String(sheet.getRange(rowNum, pdfIdCol + 1).getValue() || '').trim();
+        if (pdfId) break;
+        Utilities.sleep(5000);
+      }
+    }
+    if (!pdfId) {
+      Logger.log('EMAIL: no PDF ID at row ' + rowNum + ' — skipping.');
+      if (EMAIL_CFG.MODE === 'LIVE' && statusCol > -1) sheet.getRange(rowNum, statusCol + 1).setValue('MAIL ERROR: no PDF');
+      return;
+    }
+
+    const projectName = projCol > -1 ? String(rowData[projCol] || '').trim() : '';
+    const clientType  = ctCol  > -1 ? String(rowData[ctCol]  || '').trim() : '';
+    const developer   = devCol > -1 ? String(rowData[devCol] || '').trim() : '';
+
+    let to = resolveRecipient_(clientType, developer, projectName, buildScrapeEmailMap_(), buildClientEmailMap_());
+    if (EMAIL_CFG.MODE === 'TEST') to = EMAIL_CFG.TEST_TO;
+
+    try {
+      const blob = DriveApp.getFileById(pdfId).getBlob();
+      sendReportMail_(to, projectName, blob);
+      Logger.log('EMAIL: SENT [' + EMAIL_CFG.MODE + '] row ' + rowNum + ' "' + projectName + '" -> ' + to);
+      if (EMAIL_CFG.MODE === 'LIVE' && statusCol > -1) sheet.getRange(rowNum, statusCol + 1).setValue(EMAIL_CFG.SENT_STATUS);
+    } catch (err) {
+      Logger.log('EMAIL: FAILED row ' + rowNum + ' "' + projectName + '": ' + err);
+      if (EMAIL_CFG.MODE === 'LIVE' && statusCol > -1) sheet.getRange(rowNum, statusCol + 1).setValue('MAIL ERROR: ' + (err.message || err));
+    }
+  } catch (err) {
+    Logger.log('EMAIL: critical error row ' + rowNum + ': ' + err);
+  }
+}
+
+/** Stamps the "Mail Status" column for one row (no-op if the column is absent). */
+function setMailStatus_(tabName, rowNum, statusText) {
+  try {
+    const sheet = SpreadsheetApp.openById(RESPONSE_SHEET_ID).getSheetByName(tabName);
+    if (!sheet) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const col = findColIndex(headers, 'mail status');
+    if (col > -1) sheet.getRange(rowNum, col + 1).setValue(statusText);
+  } catch (e) {
+    Logger.log('EMAIL: setMailStatus_ failed: ' + e);
+  }
 }
