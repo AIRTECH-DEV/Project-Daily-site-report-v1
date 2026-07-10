@@ -207,6 +207,22 @@
       .actions-left, .actions-right { width:100%; }
       .actions-left .btn, .actions-right .btn { flex:1; }
     }
+    @media (max-width: 480px) {
+      .app-wrap { padding: 8px; }
+      .hero { border-radius: 0; }
+      .stepper { padding: 10px 6px; }
+      .step-track::before, .step-track::after { left: 8%; }
+      .step-track::before { right: 8%; }
+      .step-label { font-size: 8px; letter-spacing: 0; line-height: 1.15; }
+      .panel { padding: 14px 12px; margin-top: 14px; }
+      .section-title { font-size: 12px; }
+      .center-screen h2 { font-size: 22px; }
+      .center-screen p { font-size: 13px; }
+      .review-grid { gap: 10px; }
+      .btn.primary { min-width: 0; }
+      .file-chip { flex-wrap: wrap; }
+      .file-chip span { min-width: 0; word-break: break-all; }
+    }
   </style>
 </head>
 <body>
