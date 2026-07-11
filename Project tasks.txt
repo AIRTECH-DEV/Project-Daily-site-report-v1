@@ -1,8 +1,0 @@
-Suyog navkar mail pending :-  mail addr not confirm same for kastruri 
-already login wrote in send reportemail.js you have to put mail id there only 
-
-For live :
-mode:- live
-add cc :- piyush sir 
-remove personal mail 
-
