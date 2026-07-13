@@ -24,12 +24,23 @@
       'VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
       'Non-VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
     };
+    // Cold Room / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
+    STATUS_STEPS['Cold Room'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
+    // Site type cards (label + emoji logo + note). VRV/Non-VRV keep their old look.
+    const SITE_TYPES = [
+      { value: 'VRV',          icon: '🏢', name: 'VRV Site',      note: 'Variable Refrigerant Volume' },
+      { value: 'Non-VRV',      icon: '❄️',  name: 'Non-VRV Site',  note: 'Conventional / Other Systems' },
+      { value: 'Cold Room',    icon: '🧊',  name: 'Cold Room',     note: 'Walk-in / Process Cold Room' },
+      { value: 'Cold Storage', icon: '🏬',  name: 'Cold Storage',  note: 'Warehouse Cold Storage' },
+      { value: 'PAC/CRAC',     icon: '🖥️', name: 'PACs / CRACs', note: 'Precision / Computer Room AC' }
+    ];
     const HOLD_REASONS = ['Stuck BY Client', 'Stuck BY VAPL', 'Other'];
 
     let answers = {};
     let currentPage = 0;
     let projectList = [];
     let projectListLoading = false;
+    let progressLoading = false;
     let submitting = false;
 
     function iconCalendar() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 11h18"></path></svg>`; }
@@ -46,6 +57,11 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    // Loose key for matching step labels to sheet header text (case/space/punct-insensitive).
+    function compact(str) {
+      return String(str == null ? '' : str).toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 
     function fileToBase64(file) {
@@ -82,13 +98,62 @@
         .getProjectNames(siteType);
     }
 
+    // Clears any previously loaded "already done" steps + generated Order ID.
+    // Keeps the user's fresh ticks (doneSteps) so switching only site type mid-entry
+    // doesn't wipe their selections.
+    function resetProgressState() {
+      answers.lockedSteps = [];
+      answers.generatedOrderId = '';
+    }
+
+    // Reads the PMS/developer sheet for steps already marked Done and locks them.
+    // `params` = { clientType, siteType, project } OR { clientType, siteType, developer, building, flatNo, floor }.
+    function loadProgressState(params) {
+      resetProgressState();
+      if (!window.google || !google.script || !google.script.run) return;
+      progressLoading = true;
+      renderCurrentPage();
+      google.script.run
+        .withSuccessHandler(function (res) {
+          progressLoading = false;
+          res = res || {};
+          answers.lockedSteps = Array.isArray(res.doneSteps) ? res.doneSteps : [];
+          answers.generatedOrderId = res.orderId || '';
+          // Drop any fresh tick that is now locked (already done in the sheet).
+          const locked = new Set(answers.lockedSteps.map(compact));
+          answers.doneSteps = (answers.doneSteps || []).filter(s => !locked.has(compact(s)));
+          answers.currentStatus = (answers.doneSteps || []).join(', ');
+          renderCurrentPage();
+        })
+        .withFailureHandler(function (err) {
+          progressLoading = false;
+          console.error(err);
+          renderCurrentPage();
+        })
+        .getProgressState(params);
+    }
+
+    // Developer path: only fetch once building + flat are both known.
+    function maybeLoadDeveloperProgress() {
+      if (answers.clientType !== 'Developer') return;
+      if (!answers.building || String(answers.flatNo || '').trim() === '') return;
+      loadProgressState({
+        clientType: 'Developer',
+        siteType: answers.siteType || '',
+        developer: answers.developer || '',
+        building: answers.building || '',
+        flatNo: answers.flatNo || '',
+        floor: answers.floor || ''
+      });
+    }
+
     function isDeveloperPathValid() {
       if (answers.clientType !== 'Developer') return true;
       return !!answers.developer && !!answers.building && String(answers.floor||'').trim() !== '' && String(answers.flatNo||'').trim() !== '';
     }
 
     function isStatusPathValid() {
-      if (!answers.currentStatus || !answers.status) return false;
+      if (!Array.isArray(answers.doneSteps) || answers.doneSteps.length === 0 || !answers.status) return false;
       if (answers.status === 'Hold') {
         if (!answers.holdReason) return false;
         if (String(answers.holdReasonDetail||'').trim() === '') return false;
@@ -120,10 +185,13 @@
 
     function updateStepper() {
       const track = document.getElementById('stepTrack');
-      track.style.setProperty('--progress', currentPage / 3);
+      if (!track) return;
+      // Fill = number of completed segments. CSS width already divides the track
+      // by 3 (per-segment), so --progress must be currentPage (0..3), not /3.
+      track.style.setProperty('--progress', currentPage);
       for (let i = 0; i < 4; i++) {
         const el = document.getElementById('step-bubble-' + i);
-        el.className = 'step' + (i === currentPage ? ' active' : i < currentPage ? ' done' : '');
+        if (el) el.className = 'step' + (i === currentPage ? ' active' : i < currentPage ? ' done' : '');
       }
     }
 
@@ -166,6 +234,8 @@
       const workDoneBy = answers.workDoneBy || '';
       const contractorName = answers.contractorName || '';
       const statusSteps = STATUS_STEPS[siteType] || [];
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      const doneSet = new Set((answers.doneSteps || []).map(compact));
       return `
         <div class="panel">
           <div class="twocol">
@@ -175,19 +245,14 @@
                   ${iconCalendar()}
                   <div><div class="section-title">Site Type</div><div class="section-sub">Select the type of site visited.</div></div>
                 </div>
-                <div class="option-grid two">
-                  <div class="card-option ${siteType === 'VRV' ? 'selected' : ''}" onclick="selectSiteType('VRV')">
+                <div class="option-grid wrap">
+                  ${SITE_TYPES.map(t => `
+                  <div class="card-option ${siteType === t.value ? 'selected' : ''}" onclick="selectSiteType('${escapeHtml(t.value)}')">
                     <div class="mini-radio"></div>
-                    <div class="option-icon">🏢</div>
-                    <div class="option-name">VRV Site</div>
-                    <div class="option-note">Variable Refrigerant Volume</div>
-                  </div>
-                  <div class="card-option ${siteType === 'Non-VRV' ? 'selected' : ''}" onclick="selectSiteType('Non-VRV')">
-                    <div class="mini-radio"></div>
-                    <div class="option-icon">❄️</div>
-                    <div class="option-name">Non-VRV Site</div>
-                    <div class="option-note">Conventional / Other Systems</div>
-                  </div>
+                    <div class="option-icon">${t.icon}</div>
+                    <div class="option-name">${escapeHtml(t.name)}</div>
+                    <div class="option-note">${escapeHtml(t.note)}</div>
+                  </div>`).join('')}
                 </div>
               </div>
 
@@ -228,8 +293,9 @@
                 ${clientType === 'Developer' && building ? `
                 <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
                   <input type="text" class="field" id="floorInput" placeholder="Floor (e.g. 1st Floor)" value="${escapeHtml(String(floor))}" oninput="setFloor(this.value)" autocomplete="off">
-                  <input type="text" class="field" id="flatNoInput" placeholder="Flat No (e.g. 101 or D-102)" value="${escapeHtml(String(flatNo))}" oninput="setFlatNo(this.value)" autocomplete="off">
-                </div>` : ''}
+                  <input type="text" class="field" id="flatNoInput" placeholder="Flat No (e.g. 101 or D-102)" value="${escapeHtml(String(flatNo))}" oninput="setFlatNo(this.value)" onblur="maybeLoadDeveloperProgress()" autocomplete="off">
+                </div>
+                ${answers.generatedOrderId ? `<div class="hint-note">Order ID: <b style="color:#333;margin-left:4px;">${escapeHtml(answers.generatedOrderId)}</b></div>` : ''}` : ''}
               </div>
 
               ${clientType === 'Developer' ? '' : `
@@ -274,12 +340,21 @@
               <div class="section">
                 <div class="section-head">
                   ${iconProject()}
-                  <div><div class="section-title">Current Status</div><div class="section-sub">Select the current project step and its status.</div></div>
+                  <div><div class="section-title">Current Status</div><div class="section-sub">Tick every step done so far, then pick the status. Steps already done are locked.</div></div>
                 </div>
-                <select class="dropdown-field ${currentStatus ? '' : 'placeholder'}" id="currentStatusSelect" onchange="setCurrentStatus(this.value)" ${siteType ? '' : 'disabled'}>
-                  <option value="">${siteType ? 'Select current status step' : 'Select site type first'}</option>
-                  ${statusSteps.map(s => `<option value="${escapeHtml(s)}" ${currentStatus === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
-                </select>
+                ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
+                ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
+                <div class="step-check-list">
+                  ${statusSteps.map(s => {
+                    const locked = lockedSet.has(compact(s));
+                    const checked = locked || doneSet.has(compact(s));
+                    return `<label class="step-check ${locked ? 'locked' : ''} ${checked ? 'on' : ''}">
+                      <input type="checkbox" ${checked ? 'checked' : ''} ${locked ? 'disabled' : ''} onchange="toggleStep('${escapeHtml(s)}')">
+                      <span class="step-check-name">${escapeHtml(s)}</span>
+                      ${locked ? '<span class="step-done-tag">done</span>' : ''}
+                    </label>`;
+                  }).join('')}
+                </div>`}
 
                 <div style="margin-top:12px;">
                   <select class="dropdown-field ${statusVal ? '' : 'placeholder'}" id="statusSelect" onchange="setStatusValue(this.value)">
@@ -594,13 +669,21 @@
       const resultsEl = document.getElementById('searchResults');
       if (resultsEl) resultsEl.style.display = 'none';
       updatePrimaryButton();
+      // Pull already-done steps for this general project (matched by Order ID / name).
+      if (answers.clientType !== 'Developer' && name) {
+        loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: name });
+      }
     }
 
     function selectSiteType(value) {
       answers.siteType = value;
       answers.project = '';
       answers.currentStatus = '';
+      answers.doneSteps = [];
+      resetProgressState();
       loadProjectList(value);
+      // For an already-picked developer flat, re-pull progress for the new site type.
+      if (answers.clientType === 'Developer') maybeLoadDeveloperProgress();
     }
     function selectClientType(value) {
       answers.clientType = value;
@@ -609,6 +692,8 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = '';
+      answers.doneSteps = [];
+      resetProgressState();
       renderCurrentPage();
     }
     function selectDeveloper(value) {
@@ -617,6 +702,8 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = '';
+      answers.doneSteps = [];
+      resetProgressState();
       renderCurrentPage();
     }
     function selectBuilding(value) {
@@ -624,11 +711,23 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = value;
+      answers.doneSteps = [];
+      resetProgressState();
       renderCurrentPage();
     }
     function setFloor(val) { answers.floor = val; updatePrimaryButton(); }
     function setFlatNo(val) { answers.flatNo = val; updatePrimaryButton(); }
-    function setCurrentStatus(val) { answers.currentStatus = val; updatePrimaryButton(); }
+
+    // Checkbox step tracker: locked (previously done) steps ignore toggles.
+    function toggleStep(step) {
+      const key = compact(step);
+      if ((answers.lockedSteps || []).some(s => compact(s) === key)) return;
+      const list = answers.doneSteps || (answers.doneSteps = []);
+      const at = list.findIndex(s => compact(s) === key);
+      if (at > -1) list.splice(at, 1); else list.push(step);
+      answers.currentStatus = list.join(', ');
+      updatePrimaryButton();
+    }
     function setStatusValue(val) {
       answers.status = val;
       if (val !== 'Hold') { answers.holdReason = ''; answers.holdReasonDetail = ''; }
@@ -704,7 +803,7 @@
     }
 
     function clearCurrentPage() {
-      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.workDoneBy=''; answers.contractorName=''; }
+      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.workDoneBy=''; answers.contractorName=''; }
       else if (currentPage === 1) { answers.nextPlan=''; answers.drawingChange=''; answers.amendmentWhy=''; }
       else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
       renderCurrentPage();
@@ -733,7 +832,8 @@
         building: answers.building,
         floor: answers.floor,
         flatNo: answers.flatNo,
-        currentStatus: answers.currentStatus,
+        doneSteps: answers.doneSteps || [],
+        currentStatus: (answers.doneSteps || []).join(', '),
         status: answers.status,
         holdReason: answers.holdReason,
         holdReasonDetail: answers.holdReasonDetail,
@@ -800,8 +900,13 @@
         const draft = localStorage.getItem('vakhariaSiteVisitDraft');
         if (draft) answers = JSON.parse(draft) || {};
       } catch(e) {}
+      if (!Array.isArray(answers.doneSteps)) answers.doneSteps = [];
+      if (!Array.isArray(answers.lockedSteps)) answers.lockedSteps = [];
       renderCurrentPage();
       if (answers.siteType) loadProjectList(answers.siteType);
+      // Refresh "already done" steps for a restored draft that already has an identity.
+      if (answers.clientType === 'Developer') maybeLoadDeveloperProgress();
+      else if (answers.project) loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: answers.project });
       loadUiImages();
     })();
   

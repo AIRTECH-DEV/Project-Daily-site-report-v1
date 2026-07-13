@@ -1,1 +1,10 @@
 Project tasks.txt
+
+# Secrets — never commit the service-account private key
+config/google-service-account.json
+
+# Runtime storage (tokens, uploads, generated PDFs, logs)
+storage/tokens/
+storage/uploads/
+storage/reports/
+storage/logs/

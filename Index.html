@@ -4,6 +4,7 @@
   <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preload" as="image" href="assets/images/header-background.png">
   <style>
     :root {
       --red: #d71920;
@@ -87,6 +88,25 @@
 
     .option-grid.two { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
     .option-grid.four { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+    .option-grid.wrap { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; }
+
+    /* Current-status step checklist (replaces the old single-select dropdown) */
+    .step-check-list { display:grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+    .step-check {
+      display:flex; align-items:center; gap:9px; padding:8px 10px; border:1px solid #e5e5e5; border-radius:6px;
+      background:#fff; cursor:pointer; font-size:12.5px; color:#444; transition: all .15s ease; min-width:0;
+    }
+    .step-check:hover { border-color:#f2b0b3; }
+    .step-check.on { border-color:#e68489; background:#fff8f8; color:#222; }
+    .step-check input { width:16px; height:16px; accent-color: var(--red); flex:0 0 auto; cursor:pointer; }
+    .step-check-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .step-check.locked { cursor:default; background:#f5f7f5; border-color:#dfe6df; color:#5c6b5c; }
+    .step-check.locked input { cursor:default; }
+    .step-done-tag {
+      margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
+      color:#2f7d32; background:#e7f4e8; border:1px solid #cfe6d0; border-radius:4px; padding:1px 5px;
+    }
+    @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
     .card-option {
       position: relative; border: 1px solid #e1e1e1; border-radius: 8px; min-height: 80px; padding: 14px 10px 10px; text-align:center; cursor:pointer; background:#fff;
       display:flex; flex-direction: column; align-items:center; justify-content:center; gap:8px; transition: all .2s ease;
@@ -223,20 +243,74 @@
       .file-chip { flex-wrap: wrap; }
       .file-chip span { min-width: 0; word-break: break-all; }
     }
+
+    /* ===== Site Visit header: editable logo/text overlaid on background image ===== */
+    .site-visit-header {
+      width: 100%;
+      background: #fff;
+      border-radius: 4px 4px 0 0;
+      overflow: hidden;
+      box-shadow: 0 4px 18px rgba(0,0,0,.04);
+    }
+    .svh-banner {
+      position: relative;
+      container-type: inline-size;   /* cqw units scale text with banner width */
+      line-height: 0;
+    }
+    .svh-bg { display: block; width: 100%; height: auto; }
+    .svh-content {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+      padding: 0 0 1.5cqw 5.2cqw;
+      line-height: normal;
+    }
+    .svh-logo { width: 13.5cqw; height: auto; margin-bottom: 2cqw; mix-blend-mode: multiply; }
+    .svh-title {
+      margin: 0; font-weight: 800; font-size: 3.9cqw; line-height: 1.05;
+      letter-spacing: .01em; color: #16273e; white-space: nowrap;
+    }
+    .svh-title span { color: var(--red); }
+    .svh-subtitle { margin: 1.1cqw 0 0; font-size: 1.55cqw; font-weight: 500; color: #5b6472; }
+
+    /* Phones: wide 4:1 product strip is too short for the overlay -> clean stacked green header */
+    @media (max-width: 760px) {
+      .svh-banner {
+        container-type: normal;
+        background: linear-gradient(180deg, #eff7ee 0%, #ffffff 100%);
+        padding: 18px 18px 16px; line-height: normal;
+      }
+      .svh-bg { display: none; }
+      .svh-content { position: static; inset: auto; padding: 0; align-items: stretch; }
+      .svh-logo { width: 148px; margin-bottom: 12px; }
+      .svh-title { font-size: clamp(23px, 7.4vw, 34px); white-space: normal; line-height: 1.08; }
+      .svh-subtitle { font-size: clamp(12px, 3.4vw, 15px); margin-top: 8px; }
+    }
+    @media (max-width: 480px) {
+      .svh-title { font-size: clamp(21px, 7.6vw, 30px); }
+    }
   </style>
 </head>
 <body>
   <div class="app-wrap">
     <div class="shell">
-      <div class="hero"><img id="heroImg" alt="Site Visit Report"></div>
-      <div class="stepper">
-        <div class="step-track" id="stepTrack" style="--progress:0;">
-          <div class="step" id="step-bubble-0"><div class="bubble">1</div><div class="step-label">SITE DETAILS</div></div>
-          <div class="step" id="step-bubble-1"><div class="bubble">2</div><div class="step-label">PROJECT DETAILS</div></div>
-          <div class="step" id="step-bubble-2"><div class="bubble">3</div><div class="step-label">SITE ENGINEER</div></div>
-          <div class="step" id="step-bubble-3"><div class="bubble">4</div><div class="step-label">REVIEW &amp; SUBMIT</div></div>
+      <section class="site-visit-header" aria-labelledby="svh-title">
+        <div class="svh-banner">
+          <img class="svh-bg" src="assets/images/header-background.png" alt="" width="3840" height="960" fetchpriority="high" draggable="false">
+          <div class="svh-content">
+            <img class="svh-logo" src="assets/images/vakharia-airtech-logo.png" alt="Vakharia Airtech" width="625" height="300" draggable="false">
+            <h1 class="svh-title" id="svh-title">DAILY SITE <span>UPDATE</span></h1>
+            <p class="svh-subtitle">Capture accurate current site details. </p>
+          </div>
         </div>
-      </div>
+        <div class="stepper">
+          <div class="step-track" id="stepTrack" style="--progress:0;">
+            <div class="step" id="step-bubble-0"><div class="bubble">1</div><div class="step-label">SITE DETAILS</div></div>
+            <div class="step" id="step-bubble-1"><div class="bubble">2</div><div class="step-label">PROJECT DETAILS</div></div>
+            <div class="step" id="step-bubble-2"><div class="bubble">3</div><div class="step-label">SITE ENGINEER</div></div>
+            <div class="step" id="step-bubble-3"><div class="bubble">4</div><div class="step-label">REVIEW &amp; SUBMIT</div></div>
+          </div>
+        </div>
+      </section>
 
       <div id="pageMount"></div>
     </div>
