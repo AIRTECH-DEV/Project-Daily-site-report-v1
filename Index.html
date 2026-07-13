@@ -106,7 +106,32 @@
       margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
       color:#2f7d32; background:#e7f4e8; border:1px solid #cfe6d0; border-radius:4px; padding:1px 5px;
     }
+    /* An assigned step (given a status this visit) — coloured tag + remove button */
+    .step-check.assigned { justify-content:flex-start; }
+    .step-check.assigned.st-done    { border-color:#cfe6d0; background:#f2faf3; }
+    .step-check.assigned.st-pending { border-color:#f0dcae; background:#fff9ef; }
+    .step-check.assigned.st-hold    { border-color:#f2b8bb; background:#fff6f6; }
+    .step-stat-tag {
+      margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
+      border-radius:4px; padding:1px 6px; border:1px solid transparent;
+    }
+    .step-stat-tag.st-done    { color:#2f7d32; background:#e7f4e8; border-color:#cfe6d0; }
+    .step-stat-tag.st-pending { color:#8a5a00; background:#fff4e5; border-color:#f0dcae; }
+    .step-stat-tag.st-hold    { color:#b60f17; background:#fdECEC; border-color:#f2b8bb; }
+    .step-remove { border:0; background:none; color:#b0555a; cursor:pointer; font-size:16px; line-height:1; padding:0 2px; flex:0 0 auto; }
+    .step-remove:hover { color:var(--red); }
+    .status-apply { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+    .status-apply .apply-btn { align-self:flex-start; min-width:0; }
+    .status-apply .apply-btn:disabled { opacity:.45; cursor:not-allowed; }
     @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
+
+    /* People-on-site detail rows */
+    .people-rows { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+    .person-row { display:grid; grid-template-columns: 22px 1fr 116px 1fr; gap:8px; align-items:center; }
+    .person-row.has-contractor { grid-template-columns: 22px 1fr 116px 1fr 1fr; }
+    .person-idx { width:22px; height:22px; border-radius:50%; background:#fbeceb; color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+    .person-row .field, .person-row .dropdown-field { height:40px; }
+    @media (max-width: 760px) { .person-row, .person-row.has-contractor { grid-template-columns: 1fr; } .person-idx { display:none; } }
     .card-option {
       position: relative; border: 1px solid #e1e1e1; border-radius: 8px; min-height: 80px; padding: 14px 10px 10px; text-align:center; cursor:pointer; background:#fff;
       display:flex; flex-direction: column; align-items:center; justify-content:center; gap:8px; transition: all .2s ease;

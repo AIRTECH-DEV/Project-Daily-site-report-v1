@@ -97,9 +97,10 @@ class Pms
         }
 
         return [
-            'found'     => true,
-            'doneSteps' => $this->readDoneSteps($rows, $devRow, $info),
-            'orderId'   => $orderId,
+            'found'            => true,
+            'doneSteps'        => $this->readDoneSteps($rows, $devRow, $info),
+            'orderId'          => $orderId,
+            'tentativeEndDate' => $this->readTentative($rows, $devRow, $info),
         ];
     }
 
@@ -134,10 +135,49 @@ class Pms
             return ['found' => false, 'doneSteps' => [], 'orderId' => $orderId];
         }
         return [
-            'found'     => true,
-            'doneSteps' => $this->readDoneSteps($rows, $pmsRow, $info),
-            'orderId'   => $orderId,
+            'found'            => true,
+            'doneSteps'        => $this->readDoneSteps($rows, $pmsRow, $info),
+            'orderId'          => $orderId,
+            'tentativeEndDate' => $this->readTentative($rows, $pmsRow, $info),
         ];
+    }
+
+    /** Reads the "Tentitive Project End date" cell, converting a Sheets serial to Y-m-d. */
+    private function readTentative(array $rows, int $row, array $info): string
+    {
+        $col = $this->findColContains($info, 'tentative');
+        if ($col < 1) {
+            $col = $this->findColContains($info, 'tentitive'); // the sheet's actual spelling
+        }
+        if ($col < 1) {
+            return '';
+        }
+        $v = $this->cell($rows, $row, $col);
+        if (is_numeric($v)) {
+            // Google Sheets serial date -> Y-m-d (25569 = serial of 1970-01-01).
+            $ts = ((float)$v - 25569) * 86400;
+            if ($ts > 0) {
+                return gmdate('Y-m-d', (int)round($ts));
+            }
+        }
+        return trim((string)$v);
+    }
+
+    /** First column whose group/sub header contains a substring (normalized). 1-based, or -1. */
+    private function findColContains(array $info, string $needle): int
+    {
+        $needle = Sheets::normalizeKey($needle);
+        if ($needle === '') {
+            return -1;
+        }
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $g = Sheets::normalizeKey($info['groupVals'][$i] ?? '');
+            $s = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            if (($g !== '' && strpos($g, $needle) !== false) || ($s !== '' && strpos($s, $needle) !== false)) {
+                return $i + 1;
+            }
+        }
+        return -1;
     }
 
     /** Collects step names whose per-step "Status" cell reads "Done" on a given row. */
@@ -183,17 +223,54 @@ class Pms
         return $initials !== '' ? $initials . '-' . $flat : $flat;
     }
 
-    /** Steps to stamp this visit: the ticked doneSteps[], falling back to legacy currentStatus. */
-    private function stepsToStamp(array $p): array
+    /**
+     * Per-step {step,status,holdReason,holdReasonDetail} list to stamp this visit.
+     * Prefers payload stepStatuses[]; falls back to legacy doneSteps[]/currentStatus + single status.
+     */
+    private function normalizeStepStatuses(array $p): array
     {
+        $out = [];
+        $raw = $p['stepStatuses'] ?? [];
+        if (is_array($raw) && $raw) {
+            foreach ($raw as $e) {
+                if (!is_array($e)) {
+                    continue;
+                }
+                $step = trim((string)($e['step'] ?? ''));
+                if ($step === '') {
+                    continue;
+                }
+                $out[] = [
+                    'step'             => $step,
+                    'status'           => trim((string)($e['status'] ?? ($p['status'] ?? ''))),
+                    'holdReason'       => (string)($e['holdReason'] ?? ''),
+                    'holdReasonDetail' => (string)($e['holdReasonDetail'] ?? ''),
+                ];
+            }
+            if ($out) {
+                return $out;
+            }
+        }
+
+        // Legacy fallback: doneSteps[] (or comma list) with one shared status.
         $steps = $p['doneSteps'] ?? [];
-        if (!is_array($steps)) {
-            $steps = [];
+        if (!is_array($steps) || !$steps) {
+            $steps = !empty($p['currentStatus']) ? array_map('trim', explode(',', (string)$p['currentStatus'])) : [];
         }
-        if (!$steps && !empty($p['currentStatus'])) {
-            $steps = array_map('trim', explode(',', (string)$p['currentStatus']));
+        $status = (string)($p['status'] ?? '');
+        foreach ($steps as $s) {
+            $s = trim((string)$s);
+            if ($s === '') {
+                continue;
+            }
+            $out[] = [
+                'step'             => $s,
+                'status'           => $status,
+                'holdReason'       => (string)($p['holdReason'] ?? ''),
+                'holdReasonDetail' => (string)($p['holdReasonDetail'] ?? ''),
+            ];
         }
-        return array_values(array_filter($steps, fn($s) => trim((string)$s) !== ''));
+        return $out;
     }
 
     /* ---------------- Developer ---------------- */
@@ -297,18 +374,24 @@ class Pms
             $setByName('Project Exective By', $p['engineer'] ?? '');
         }
 
-        // Stamp the chosen status onto EVERY step the user ticked this visit.
-        $status = $p['status'] ?? '';
-        $statusCellVal = ($status === 'Hold') ? ($p['holdReason'] ?: 'Hold') : $status;
-        foreach ($this->stepsToStamp($p) as $step) {
-            $statusCol = $this->findStepStatusCol($info, (string)$step);
-            if ($statusCol < 1 || $status === '') {
+        // Stamp EACH ticked step with ITS OWN status (Done / Pending / Hold).
+        $entries = $this->normalizeStepStatuses($p);
+        $holdEntries = [];
+        foreach ($entries as $e) {
+            $step = $e['step'];
+            $stat = $e['status'];
+            if ($step === '' || $stat === '') {
                 continue;
             }
-            $this->sheets->setCell($ssId, $title, $row, $statusCol, $statusCellVal);
+            $statusCol = $this->findStepStatusCol($info, $step);
+            if ($statusCol < 1) {
+                continue;
+            }
+            $cellVal = ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat;
+            $this->sheets->setCell($ssId, $title, $row, $statusCol, $cellVal);
 
-            if ($status === 'Done') {
-                $endCol = $this->findStepSubCol($info, (string)$step, 'End Date');
+            if ($stat === 'Done') {
+                $endCol = $this->findStepSubCol($info, $step, 'End Date');
                 if ($endCol > 0) {
                     $cur = $this->cell($rows, $row, $endCol);
                     if ($cur === '' || $cur === null) {
@@ -316,34 +399,35 @@ class Pms
                     }
                 }
             }
+            if ($stat === 'Hold') {
+                $holdEntries[] = $e;
+            }
         }
 
-        // Hold -> combined Remarks line; otherwise clear a stale hold remark.
-        if ($status === 'Hold') {
+        // Hold -> one Remarks line per held step; otherwise clear a stale hold remark.
+        if ($holdEntries) {
             $parts = [];
-            if (!empty($p['currentStatus'])) {
-                $parts[] = $p['currentStatus'];
+            foreach ($holdEntries as $e) {
+                $line = $e['step'];
+                if (!empty($e['holdReasonDetail'])) {
+                    $line .= ': ' . $e['holdReasonDetail'];
+                }
+                if (preg_match('/by\s+(.+)$/i', (string)($e['holdReason'] ?? ''), $m)) {
+                    $line .= ' (stuck by ' . trim($m[1]) . ')';
+                }
+                $parts[] = $line;
             }
-            if (!empty($p['holdReasonDetail'])) {
-                $parts[] = $p['holdReasonDetail'];
-            }
-            if (preg_match('/by\s+(.+)$/i', (string)($p['holdReason'] ?? ''), $m)) {
-                $parts[] = 'stuck by ' . trim($m[1]);
-            }
-            if ($parts) {
-                $setByName('Remarks', implode(' - ', $parts));
-            }
-        } elseif ($status !== '') {
+            $setByName('Remarks', implode(' | ', $parts));
+        } elseif ($entries) {
             $remCol = $this->findNamedCol($info, 'Remarks');
             if ($remCol > 0) {
                 $this->sheets->setCell($ssId, $title, $row, $remCol, '');
             }
         }
 
-        $wdb = ($p['workDoneBy'] ?? '') === 'Contractor'
-            ? ($p['contractorName'] ?: 'Contractor')
-            : ($p['workDoneBy'] ?? '');
-        if ($wdb !== '' && $wdb !== null) {
+        // Work Done BY is now a per-person summary string (see SubmitService payload).
+        $wdb = (string)($p['workDoneBy'] ?? '');
+        if ($wdb !== '') {
             $wCol = $this->findNamedCol($info, 'Work Done BY');
             if ($wCol > 0) {
                 $this->sheets->setCell($ssId, $title, $row, $wCol, $wdb);
