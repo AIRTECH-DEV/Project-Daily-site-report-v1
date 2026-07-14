@@ -1,13 +1,15 @@
 <?php
 /**
- * Orchestrates one submission end-to-end, mirroring code.js submitSiteReport()
- * but recording every step in the tracker DB and degrading gracefully when the
- * Shared Drive isn't configured yet (photo/PDF upload logged as skipped, the
- * response row + PMS + PDF + DB tracking still complete).
+ * Submission pipeline, split so the HTTP submit returns instantly:
  *
- * Order: start DB row -> upload photos (Drive) -> write response row ->
- *        stamp PMS -> build PDF (from payload bytes) -> upload PDF (Drive) ->
- *        stamp PDF ID/Mail Status -> finalise.
+ *   enqueue()          — fast: create the DB submission + write the job file. (submit)
+ *   runCore()          — photos -> Drive, response row, PMS stamp, PDF, PDF -> Drive. (worker)
+ *   runNotifications() — email + WhatsApp, ~notify_delay_seconds after submit.  (worker)
+ *
+ * handle() runs all three inline (used by CLI tests); the web submit only calls
+ * enqueue() and lets the background Worker do runCore()/runNotifications().
+ * Mirrors code.js submitSiteReport() but every step is recorded in the tracker DB
+ * and Drive/notification latency no longer blocks the submitter.
  */
 class SubmitService
 {
@@ -15,6 +17,7 @@ class SubmitService
     /** @var Sheets */    private $sheets;
     /** @var Drive */     private $drive;
     /** @var array */     private $cfg;
+    /** @var JobQueue */  private $queue;
     /** @var ?bool */     private $driveReady = null;
 
     public function __construct(Bootstrap $app)
@@ -23,22 +26,53 @@ class SubmitService
         $this->sheets = $app->sheets;
         $this->drive = $app->drive;
         $this->cfg = $app->cfg;
+        $this->queue = new JobQueue($this->cfg['queue_dir']);
     }
 
-    public function handle(array $p, array $meta): array
+    /* ================= FAST PATH (submit) ================= */
+
+    /** Captures the submission and returns immediately. */
+    public function enqueue(array $p, array $meta): array
     {
         $tracker = new Tracker($this->app->db());
         [$subId, $publicId] = $tracker->startSubmission($p, $meta['email'] ?? null, $meta['ip'] ?? null);
+        $tracker->updateSubmission(['overall_status' => 'queued']);
+
+        $this->queue->save([
+            'public_id'     => $publicId,
+            'submission_id' => $subId,
+            'meta'          => $meta,
+            'payload'       => $p,
+            'state'         => 'queued',
+            'created_at'    => time(),
+            'notify_after'  => null,
+            'core'          => null,
+        ]);
+
+        return ['submission_id' => $subId, 'public_id' => $publicId];
+    }
+
+    /* ================= CORE (worker phase 1) ================= */
+
+    /**
+     * Photos, response row, PMS, PDF. Mutates $job (fills core, advances state).
+     * @return array ['warnings'=>[], 'fatal'=>?string]
+     */
+    public function runCore(array &$job): array
+    {
+        $p = $job['payload'];
+        $meta = $job['meta'] ?? [];
+        $tracker = new Tracker($this->app->db());
+        $tracker->bind((int)$job['submission_id']);
+        $tracker->updateSubmission(['overall_status' => 'processing']);
 
         $isDeveloper = ($p['clientType'] ?? '') === 'Developer';
         $projectName = trim((string)($isDeveloper
             ? ($p['developer'] ?: 'General_Reports')
             : ($p['project'] ?: 'General_Reports')));
-
-        $result = ['success' => false, 'publicId' => $publicId];
         $warnings = [];
 
-        // ---- 1. Photos -> Drive (skipped if Shared Drive not ready) --------
+        // 1) Photos -> Drive
         $urls = ['site' => [], 'drawing' => null, 'measurement' => null];
         $folderId = null;
         $log = $tracker->stepStart('photo_save', $projectName);
@@ -47,10 +81,7 @@ class SubmitService
                 $folderId = $this->drive->getOrCreateProjectFolder($projectName);
                 foreach (($p['photos'] ?? []) as $i => $f) {
                     $saved = $this->drive->saveBase64File($f, $folderId, 'SitePhoto_' . ($i + 1));
-                    if ($saved) {
-                        $urls['site'][] = $saved['url'];
-                        $tracker->addAttachment('site_photo', $saved);
-                    }
+                    if ($saved) { $urls['site'][] = $saved['url']; $tracker->addAttachment('site_photo', $saved); }
                 }
                 if (($p['drawingChange'] ?? '') === 'Yes' && !empty($p['drawingPhoto'])) {
                     $saved = $this->drive->saveBase64File($p['drawingPhoto'], $folderId, 'DrawingChange');
@@ -62,7 +93,7 @@ class SubmitService
                 }
                 $tracker->stepDone($log, count($urls['site']) . ' photo(s) uploaded', 'folder ' . $folderId);
             } else {
-                $tracker->stepSkipped($log, 'Shared Drive not configured — photos not uploaded. Set config parent_folder_id to a Shared Drive folder shared with the SA.');
+                $tracker->stepSkipped($log, 'Shared Drive not configured — photos not uploaded.');
                 $warnings[] = 'Photos not uploaded (Shared Drive not configured).';
             }
         } catch (Throwable $e) {
@@ -70,7 +101,7 @@ class SubmitService
             $warnings[] = 'Photo upload failed: ' . $e->getMessage();
         }
 
-        // ---- 2. Response row ----------------------------------------------
+        // 2) Response row
         $log = $tracker->stepStart('sheet_write');
         try {
             $writer = new ResponseSheet($this->sheets, $this->cfg);
@@ -81,44 +112,31 @@ class SubmitService
         } catch (Throwable $e) {
             $tracker->stepFailed($log, $e->getMessage());
             $tracker->updateSubmission(['overall_status' => 'failed']);
-            return ['success' => false, 'error' => 'Failed writing response row: ' . $e->getMessage(), 'publicId' => $publicId];
+            return ['warnings' => $warnings, 'fatal' => 'Failed writing response row: ' . $e->getMessage()];
         }
 
-        // ---- 3. PMS progress sheet ----------------------------------------
+        // 3) PMS
         $log = $tracker->stepStart('pms_update');
         try {
-            $pms = new Pms($this->sheets, $this->cfg);
-            $res = $pms->updateProgressSheets($p);
-            if (!empty($res['order_id'])) {
-                $tracker->updateSubmission(['order_id' => $res['order_id']]);
-            }
-            if ($res['updated']) {
-                $tracker->stepDone($log, 'PMS row stamped');
-            } else {
-                $tracker->stepSkipped($log, $res['warning'] ?: 'not updated');
-                $warnings[] = $res['warning'];
-            }
+            $res = (new Pms($this->sheets, $this->cfg))->updateProgressSheets($p);
+            if (!empty($res['order_id'])) { $tracker->updateSubmission(['order_id' => $res['order_id']]); }
+            if ($res['updated']) { $tracker->stepDone($log, 'PMS row stamped'); }
+            else { $tracker->stepSkipped($log, $res['warning'] ?: 'not updated'); $warnings[] = $res['warning']; }
         } catch (Throwable $e) {
             $tracker->stepFailed($log, $e->getMessage());
             $warnings[] = 'PMS update failed: ' . $e->getMessage();
         }
 
-        // ---- 4. PDF (from payload bytes) ----------------------------------
-        $pdfUrl = '';
-        $pdfPath = '';
-        $pdfDriveId = '';
+        // 4) PDF (+ Drive upload)
+        $pdfUrl = ''; $pdfPath = ''; $pdfDriveId = '';
         $log = $tracker->stepStart('pdf');
         try {
-            $pdfPath = $this->buildPdf($projectName, $publicId, $headers, $rowValues, $p);
+            $pdfPath = $this->buildPdf($projectName, $job['public_id'], $headers, $rowValues, $p);
             $pdfMeta = ['file_name' => basename($pdfPath), 'mime_type' => 'application/pdf', 'bytes' => filesize($pdfPath)];
-
-            // Upload to Drive if available, else serve locally.
             if ($this->isDriveReady() && $folderId) {
                 $up = $this->drive->uploadBytes($folderId, basename($pdfPath), 'application/pdf', file_get_contents($pdfPath));
-                $pdfUrl = $up['url'];
-                $pdfDriveId = $up['id'];
-                $pdfMeta['drive_file_id'] = $up['id'];
-                $pdfMeta['url'] = $up['url'];
+                $pdfUrl = $up['url']; $pdfDriveId = $up['id'];
+                $pdfMeta['drive_file_id'] = $up['id']; $pdfMeta['url'] = $up['url'];
                 $writer->stampCell($tab, $rowNum, $headers, 'pdf id', $up['id']);
                 $writer->stampCell($tab, $rowNum, $headers, 'mail status', 'PDF GENERATED');
             } else {
@@ -130,46 +148,89 @@ class SubmitService
             $tracker->stepDone($log, 'PDF built', $pdfUrl);
         } catch (Throwable $e) {
             $tracker->stepFailed($log, $e->getMessage());
-            $writer->stampCell($tab, $rowNum, $headers, 'mail status', 'PDF FAILED: ' . $e->getMessage());
-            $tracker->updateSubmission(['overall_status' => 'partial']);
-            return ['success' => false, 'error' => 'Data saved, but PDF failed: ' . $e->getMessage(),
-                    'row' => $rowNum, 'publicId' => $publicId, 'pmsWarning' => implode(' ', array_filter($warnings))];
+            try { $writer->stampCell($tab, $rowNum, $headers, 'mail status', 'PDF FAILED: ' . $e->getMessage()); } catch (Throwable $x) {}
+            $warnings[] = 'PDF failed: ' . $e->getMessage();
         }
 
-        // ---- 4b. Notifications (email + WhatsApp) -------------------------
-        // Sent right after the PDF is ready. MODE-aware (OFF/TEST/LIVE) and never
-        // fails the submission — each result is recorded in process_log.
-        try {
-            $notifier = new NotificationService($this->sheets, $this->drive, $this->cfg, $writer);
-            $warnings = array_merge($warnings, $notifier->process($tracker, [
-                'clientType'  => $p['clientType'] ?? '',
-                'developer'   => $p['developer'] ?? '',
-                'projectName' => $projectName,
-                'tab'         => $tab,
-                'row'         => $rowNum,
-                'headers'     => $headers,
-                'pdfPath'     => $pdfPath,
-                'pdfName'     => $pdfPath !== '' ? basename($pdfPath) : 'SiteReport.pdf',
-                'pdfDriveId'  => $pdfDriveId,
-            ]));
-        } catch (Throwable $e) {
-            $warnings[] = 'Notifications error: ' . $e->getMessage();
+        // advance job -> awaiting notifications
+        $job['core'] = [
+            'tab' => $tab, 'row' => $rowNum, 'project' => $projectName,
+            'client_type' => $p['clientType'] ?? '', 'developer' => $p['developer'] ?? '',
+            'pdf_path' => $pdfPath, 'pdf_drive_id' => $pdfDriveId, 'pdf_url' => $pdfUrl,
+        ];
+        $job['state'] = 'core_done';
+        $job['notify_after'] = time() + (int)($this->cfg['notify_delay_seconds'] ?? 180);
+        $tracker->updateSubmission([
+            'pdf_url'        => $pdfUrl,
+            'overall_status' => 'awaiting_notify',
+        ]);
+        return ['warnings' => array_values(array_filter($warnings)), 'fatal' => null];
+    }
+
+    /* ================= NOTIFICATIONS (worker phase 2) ================= */
+
+    /** Email + WhatsApp for a core-done job. */
+    public function runNotifications(array $job): array
+    {
+        $core = $job['core'] ?? [];
+        $tracker = new Tracker($this->app->db());
+        $tracker->bind((int)$job['submission_id']);
+
+        $tab = $core['tab'] ?? '';
+        $row = (int)($core['row'] ?? 0);
+        $headers = [];
+        if ($tab !== '') {
+            try { $headers = ($this->sheets->getTab($this->cfg['response_sheet_id'], $tab)[0]) ?? []; }
+            catch (Throwable $e) {}
         }
 
-        // ---- 5. Finalise ---------------------------------------------------
-        $overall = array_filter($warnings) ? 'partial' : 'done';
-        $tracker->updateSubmission(['overall_status' => $overall, 'pdf_url' => $pdfUrl]);
+        $writer = new ResponseSheet($this->sheets, $this->cfg);
+        $notifier = new NotificationService($this->sheets, $this->drive, $this->cfg, $writer);
+        $warnings = $notifier->process($tracker, [
+            'clientType'  => $core['client_type'] ?? '',
+            'developer'   => $core['developer'] ?? '',
+            'projectName' => $core['project'] ?? '',
+            'tab'         => $tab,
+            'row'         => $row,
+            'headers'     => $headers,
+            'pdfPath'     => $core['pdf_path'] ?? '',
+            'pdfName'     => !empty($core['pdf_path']) ? basename($core['pdf_path']) : 'Site Report.pdf',
+            'pdfDriveId'  => $core['pdf_drive_id'] ?? '',
+        ]);
 
+        $tracker->updateSubmission(['overall_status' => $warnings ? 'partial' : 'done']);
+        return array_values(array_filter($warnings));
+    }
+
+    /* ================= SYNC ALL-IN-ONE (CLI/tests) ================= */
+
+    public function handle(array $p, array $meta): array
+    {
+        $r = $this->enqueue($p, $meta);
+        $job = $this->queue->load($r['public_id']);
+        if (!$job) {
+            return ['success' => false, 'error' => 'enqueue failed', 'publicId' => $r['public_id']];
+        }
+        $core = $this->runCore($job);
+        $this->queue->save($job);
+        if ($core['fatal']) {
+            $this->queue->delete($r['public_id']);
+            return ['success' => false, 'error' => $core['fatal'], 'publicId' => $r['public_id']];
+        }
+        $notifyWarn = $this->runNotifications($job);   // sync: no delay
+        $this->queue->delete($r['public_id']);
+
+        $warnings = array_merge($core['warnings'], $notifyWarn);
         return [
             'success'    => true,
-            'row'        => $rowNum,
-            'pdfUrl'     => $pdfUrl,
-            'pmsWarning' => implode(' ', array_filter($warnings)),
-            'publicId'   => $publicId,
+            'row'        => $job['core']['row'] ?? 0,
+            'pdfUrl'     => $job['core']['pdf_url'] ?? '',
+            'pmsWarning' => implode(' ', $warnings),
+            'publicId'   => $r['public_id'],
         ];
     }
 
-    /* ---------------- helpers ---------------- */
+    /* ================= helpers ================= */
 
     private function buildPdf(string $projectName, string $publicId, array $headers, array $rowValues, array $p): string
     {
@@ -218,7 +279,6 @@ class SubmitService
             $detail = trim((string)($e['holdReasonDetail'] ?? ''));
             $parts[] = $detail !== '' ? $detail : trim((string)$e['holdReason']);
         }
-        // Fallback to the representative hold fields if stepStatuses was absent.
         if (!$parts && stripos((string)($p['holdReason'] ?? ''), 'client') !== false) {
             $d = trim((string)($p['holdReasonDetail'] ?? ''));
             $parts[] = $d !== '' ? $d : trim((string)$p['holdReason']);
@@ -247,7 +307,6 @@ class SubmitService
             $url = Drive::FILES . '/' . rawurlencode($parent) . '?'
                 . http_build_query(['fields' => 'id,driveId', 'supportsAllDrives' => 'true']);
             $meta = $this->app->client->get($url);
-            // Require it to be on a Shared Drive (driveId present) to avoid the 0-quota trap.
             return $this->driveReady = !empty($meta['driveId']);
         } catch (Throwable $e) {
             return $this->driveReady = false;

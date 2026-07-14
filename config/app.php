@@ -133,4 +133,14 @@ return [
     // ---- App ------------------------------------------------------------
     'timezone'    => 'Asia/Kolkata',
     'uploads_dir' => __DIR__ . '/../storage/uploads', // local temp before Drive push
+
+    // ---- Async processing (make submit instant) ------------------------
+    // Submit only captures the payload + returns; a background worker does
+    // photos/sheet/PMS/PDF immediately, then email + WhatsApp after a delay.
+    'queue_dir'            => __DIR__ . '/../storage/queue',
+    'notify_delay_seconds' => 180,   // wait this long after submit before email/WhatsApp
+    'worker_max_runtime'   => 900,   // spawned worker lives at most this long (s)
+    'worker_poll_seconds'  => 15,    // gap between worker passes while jobs pending
+    // Full path to the PHP CLI binary (PHP_BINARY is unreliable under mod_php).
+    'php_binary'           => 'C:\\xampp\\php\\php.exe',
 ];

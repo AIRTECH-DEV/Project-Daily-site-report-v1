@@ -39,7 +39,8 @@ class Bootstrap
         foreach ([
             'GoogleAuth', 'GoogleClient', 'Sheets', 'Drive', 'Db', 'Tracker',
             'ResponseSheet', 'Pms', 'Pdf', 'PmsFpdf',
-            'Smtp', 'Mailer', 'Whatsapp', 'NotificationService', 'SubmitService',
+            'Smtp', 'Mailer', 'Whatsapp', 'NotificationService',
+            'JobQueue', 'Spawn', 'SubmitService',
         ] as $c) {
             require_once __DIR__ . '/' . $c . '.php';
         }

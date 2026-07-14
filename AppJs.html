@@ -1234,7 +1234,7 @@
       var pmsWarn = result.pmsWarning
         ? '<p style="margin:10px auto;max-width:420px;padding:10px 14px;border-radius:8px;background:#FFF4E5;border:1px solid #E0A800;color:#8A5A00;font-size:13px;">⚠ Progress sheet not updated: ' + escapeHtml(result.pmsWarning) + '</p>'
         : '';
-      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><img src="' + LOGO_DATA_URI + '" style="width:180px;height:auto;margin-bottom:12px;"><h2>Report submitted</h2><p>Your ' + escapeHtml(answers.siteType || '') + ' site visit report has been saved and the PDF has been generated.</p>' + pmsWarn + pdfButton + '<a class="btn primary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;" href="https://script.google.com/a/macros/vakhariaairtech.com/s/AKfycbzYkN8TslXnwz8j8YAc-C1nNiBjznn5HjixT1IquZyuz2UTZ-AniHrkCQTB_8svDP3C/exec">Submit another report</a></div>';
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><img src="' + LOGO_DATA_URI + '" style="width:180px;height:auto;margin-bottom:12px;"><h2>Report submitted</h2><p>Your ' + escapeHtml(answers.siteType || '') + ' site visit report has been submitted. The PDF and updates are being prepared and sent shortly.</p>' + pmsWarn + pdfButton + '<a class="btn primary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;" href="https://script.google.com/a/macros/vakhariaairtech.com/s/AKfycbzYkN8TslXnwz8j8YAc-C1nNiBjznn5HjixT1IquZyuz2UTZ-AniHrkCQTB_8svDP3C/exec">Submit another report</a></div>';
     }
     function onSubmitError(err) {
       submitting = false;

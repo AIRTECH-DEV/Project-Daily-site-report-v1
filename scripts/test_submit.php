@@ -19,6 +19,10 @@ function jpeg(string $label): string
 }
 
 $app = Bootstrap::init();
+// This is a CORE end-to-end tester — don't fire real email/WhatsApp here
+// (use scripts/test_email.php / test_whatsapp.php for those).
+$app->cfg['email']['mode'] = 'OFF';
+$app->cfg['whatsapp']['mode'] = 'OFF';
 
 $payload = [
     'siteType' => 'VRV', 'clientType' => 'General',

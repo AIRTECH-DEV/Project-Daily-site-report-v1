@@ -5,14 +5,27 @@ PHP port of the old `code.js` Apps Script. A Google **service account**
 the same Google Sheets `code.js` used. A **MySQL** DB tracks every submission and
 each processing step (audit trail). No composer — native `openssl` JWT + `curl`.
 
-## Flow (per submit)
-form → `api/submit.php` → `SubmitService`:
-1. photos → **Google Shared Drive** (skipped until a Shared Drive is configured)
+## Flow (async — submit returns in ~100 ms)
+`api/submit.php` only **captures** the payload (writes a job file + a `queued`
+submission row) and returns immediately, then spawns the background worker.
+`scripts/worker.php` (`SubmitService::runCore`) does the slow work off the request:
+1. photos → **Google Shared Drive**
 2. write response row → RESPONSE sheet (VRV / Non-VRV), columns matched by header
 3. stamp PMS progress row → General (Order-ID→name) or Developer building (Flat No)
-4. build **PDF** (letterhead, from FPDF) from the submitted photos
-5. upload PDF to Drive (or serve locally), stamp PDF ID / Mail Status
-6. every step recorded in `process_log`
+4. build **PDF** (letterhead, FPDF) + upload to Drive, stamp PDF ID / Mail Status
+
+Then, ~`notify_delay_seconds` (default 180s) after submit, the worker runs
+`runNotifications()` → **email + WhatsApp**. Every step is recorded in `process_log`;
+submission status walks `queued → processing → awaiting_notify → done/partial`.
+
+### Background worker
+- Each submit spawns `worker.php` (loops until the queue is drained, incl. the
+  delayed notifications) — no scheduler strictly required.
+- **Recommended safety net:** register the scheduled task so a missed spawn still
+  drains the queue: run (elevated) `scripts/register_worker_task.ps1` — it runs
+  `worker.php --once` every minute. Remove with `schtasks /Delete /TN "PMS Worker" /F`.
+- Tunables in `config/app.php`: `notify_delay_seconds`, `worker_max_runtime`,
+  `worker_poll_seconds`, `php_binary`, `queue_dir`.
 
 ## Layout
 ```

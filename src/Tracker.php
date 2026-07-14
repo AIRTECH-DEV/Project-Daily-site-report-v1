@@ -22,6 +22,12 @@ class Tracker
         return $this->submissionId;
     }
 
+    /** Attaches this tracker to an already-created submission (worker phases). */
+    public function bind(int $submissionId): void
+    {
+        $this->submissionId = $submissionId;
+    }
+
     /** Creates the submission row from the incoming payload; returns [id, public_id]. */
     public function startSubmission(array $p, ?string $email, ?string $ip): array
     {
