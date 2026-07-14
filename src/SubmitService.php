@@ -105,6 +105,8 @@ class SubmitService
 
         // ---- 4. PDF (from payload bytes) ----------------------------------
         $pdfUrl = '';
+        $pdfPath = '';
+        $pdfDriveId = '';
         $log = $tracker->stepStart('pdf');
         try {
             $pdfPath = $this->buildPdf($projectName, $publicId, $headers, $rowValues, $p);
@@ -114,6 +116,7 @@ class SubmitService
             if ($this->isDriveReady() && $folderId) {
                 $up = $this->drive->uploadBytes($folderId, basename($pdfPath), 'application/pdf', file_get_contents($pdfPath));
                 $pdfUrl = $up['url'];
+                $pdfDriveId = $up['id'];
                 $pdfMeta['drive_file_id'] = $up['id'];
                 $pdfMeta['url'] = $up['url'];
                 $writer->stampCell($tab, $rowNum, $headers, 'pdf id', $up['id']);
@@ -133,8 +136,28 @@ class SubmitService
                     'row' => $rowNum, 'publicId' => $publicId, 'pmsWarning' => implode(' ', array_filter($warnings))];
         }
 
+        // ---- 4b. Notifications (email + WhatsApp) -------------------------
+        // Sent right after the PDF is ready. MODE-aware (OFF/TEST/LIVE) and never
+        // fails the submission — each result is recorded in process_log.
+        try {
+            $notifier = new NotificationService($this->sheets, $this->drive, $this->cfg, $writer);
+            $warnings = array_merge($warnings, $notifier->process($tracker, [
+                'clientType'  => $p['clientType'] ?? '',
+                'developer'   => $p['developer'] ?? '',
+                'projectName' => $projectName,
+                'tab'         => $tab,
+                'row'         => $rowNum,
+                'headers'     => $headers,
+                'pdfPath'     => $pdfPath,
+                'pdfName'     => $pdfPath !== '' ? basename($pdfPath) : 'SiteReport.pdf',
+                'pdfDriveId'  => $pdfDriveId,
+            ]));
+        } catch (Throwable $e) {
+            $warnings[] = 'Notifications error: ' . $e->getMessage();
+        }
+
         // ---- 5. Finalise ---------------------------------------------------
-        $overall = $warnings ? 'partial' : 'done';
+        $overall = array_filter($warnings) ? 'partial' : 'done';
         $tracker->updateSubmission(['overall_status' => $overall, 'pdf_url' => $pdfUrl]);
 
         return [

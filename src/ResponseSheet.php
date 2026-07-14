@@ -93,6 +93,24 @@ class ResponseSheet
         }
     }
 
+    /**
+     * Stamps a header-named cell, CREATING the column at the end if it doesn't
+     * exist yet (ports markWhatsAppStatus_ which auto-adds "WhatsApp Status").
+     * Re-reads headers so a freshly-added column is found on the next call.
+     */
+    public function stampOrCreateCell(string $tab, int $rowNum, string $headerName, $value): void
+    {
+        $ssId = $this->cfg['response_sheet_id'];
+        $rows = $this->sheets->getTab($ssId, $tab);
+        $headers = $rows[0] ?? [];
+        $idx = Sheets::findColIndex($headers, $headerName);
+        if ($idx < 0) {
+            $idx = count($headers);
+            $this->sheets->setCell($ssId, $tab, 1, $idx + 1, $headerName);
+        }
+        $this->sheets->setCell($ssId, $tab, $rowNum, $idx + 1, $value);
+    }
+
     private function now(): string
     {
         // USER_ENTERED + this format lets Sheets store a real datetime, IST.

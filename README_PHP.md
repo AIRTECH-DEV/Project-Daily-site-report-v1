@@ -41,16 +41,35 @@ storage/               tokens, uploads, reports, logs  (gitignored)
 
 ## Status
 - ✅ Auth, all 6 sheets readable/writable, response-row write, PMS stamping,
-  PDF (matches the old letterhead), DB tracking, HTTP endpoints, front-end.
-- ⚠️ **Photo/PDF upload needs a Shared Drive.** Service accounts have no My-Drive
-  quota, so `config/app.php > parent_folder_id` must be a folder on a Google
-  Workspace **Shared Drive** shared with the SA (Content manager). Until then,
-  photos are skipped and the PDF is served from `storage/reports/`. Everything
-  else runs and is logged.
+  PDF (matches the old letterhead), Shared-Drive photo/PDF upload, DB tracking,
+  HTTP endpoints, front-end.
+- ✅ **Phase 2 — Email + WhatsApp** built (ports of `sendReportEmail.js` /
+  `sendReportwhatsapp.js`). Fired right after the PDF is ready, inside the submit
+  request, recorded in `process_log`. Both default to `MODE=OFF`.
 
-## Not yet built (phase 2, per "core first")
-- Email (Gmail/SMTP) and WhatsApp (Meta) senders — the `code.js`
-  `sendReportEmail.js` / `sendReportwhatsapp.js` equivalents.
+## Going live with Email + WhatsApp
+Edit `config/app.php`:
+- **Email** (`email` block): set `smtp_pass` = app password for `crm@vakhariaairtech.com`,
+  then `mode` = `TEST` (all mail → `test_to`) or `LIVE` (real client + CC, stamps Mail Status).
+  Verify: `php scripts/test_email.php`.
+- **WhatsApp** (`whatsapp` block): set `token` (Meta access token) + `test_to`, then
+  `mode` = `TEST`/`LIVE`. Verify: `php scripts/test_whatsapp.php`.
+- Recipient lookup: email = scrape tab → Orders "Client Email Id" → developer map → fallback;
+  WhatsApp = Orders "phone" columns → developer map → fallback. The scrape sheet
+  (`1hPvEw…`) and the extra orders sheet (`1HwYDM…`) must be shared with the SA for
+  those tiers to work; otherwise it falls back gracefully.
+
+MODE meanings: `OFF` = send nothing (logged as skipped) · `TEST` = only to your test
+address/number, no sheet stamp · `LIVE` = real recipients, CC, sheet stamped.
+
+### WhatsApp: link vs actual PDF
+`whatsapp.delivery` = `link` (sends the report link, template `daily_site_updates`)
+or `document` (attaches the actual PDF so the client needn't open a link). Document
+mode uploads the PDF to WhatsApp media then sends it as the header of an APPROVED
+document-header template `daily_site_update_doc` (created via `scripts/create_wa_template.php`,
+WABA `1568163707846136`). Check approval: `php scripts/check_wa_template.php`. Once
+APPROVED, set `whatsapp.delivery = 'document'`. Proactive file sends REQUIRE this
+approved template (WhatsApp blocks free-form files outside the 24h window).
 
 ## Security note
 The SA private key was committed earlier in git history. It's now gitignored,
