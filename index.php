@@ -47,6 +47,9 @@ $shim = <<<JS
   Runner.prototype.getProgressState = function (params) {
     call('api/progress_state.php?' + new URLSearchParams(params || {}).toString(), undefined, this);
   };
+  Runner.prototype.getFlats = function (params) {
+    call('api/flats.php?' + new URLSearchParams(params || {}).toString(), undefined, this);
+  };
   Runner.prototype.submitSiteReport = function (payload) {
     call('api/submit.php', {
       method: 'POST',

@@ -47,6 +47,8 @@
     let currentPage = 0;
     let projectList = [];
     let projectListLoading = false;
+    let flatList = [];
+    let flatListLoading = false;
     let progressLoading = false;
     let submitting = false;
 
@@ -176,7 +178,8 @@
 
     function isDeveloperPathValid() {
       if (answers.clientType !== 'Developer') return true;
-      return !!answers.developer && !!answers.building && String(answers.floor||'').trim() !== '' && String(answers.flatNo||'').trim() !== '';
+      // Floor is auto-filled from the flat picker, so it's not separately required.
+      return !!answers.developer && !!answers.building && String(answers.flatNo||'').trim() !== '';
     }
 
     function isStatusPathValid() {
@@ -219,8 +222,7 @@
         if (answers.clientType === 'Developer') {
           if (!answers.developer) m.push('Developer');
           if (!answers.building) m.push('Building');
-          if (String(answers.floor || '').trim() === '') m.push('Floor');
-          if (String(answers.flatNo || '').trim() === '') m.push('Flat No');
+          if (String(answers.flatNo || '').trim() === '') m.push('Flat No (select from list)');
         } else if (String(answers.project || '').trim() === '') {
           m.push('Project / Client');
         }
@@ -290,7 +292,7 @@
       else mount.innerHTML = renderReview();
       bindCommonEvents();
       updatePrimaryButton();
-      if (currentPage === 0) bindProjectSearch();
+      if (currentPage === 0) { bindProjectSearch(); bindFlatSearch(); }
     }
 
     function renderStep1() {
@@ -378,11 +380,17 @@
                 </div>` : ''}
 
                 ${clientType === 'Developer' && building ? `
-                <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-                  <input type="text" class="field" id="floorInput" placeholder="Floor (e.g. 1st Floor)" value="${escapeHtml(String(floor))}" oninput="setFloor(this.value)" autocomplete="off">
-                  <input type="text" class="field" id="flatNoInput" placeholder="Flat No (e.g. 101 or D-102)" value="${escapeHtml(String(flatNo))}" oninput="setFlatNo(this.value)" onblur="maybeLoadDeveloperProgress()" autocomplete="off">
-                </div>
-                ${answers.generatedOrderId ? `<div class="hint-note">Order ID: <b style="color:#333;margin-left:4px;">${escapeHtml(answers.generatedOrderId)}</b></div>` : ''}` : ''}
+                <div style="margin-top:12px;">
+                  <div class="search-wrap">
+                    <input type="text" class="field" id="field-flat" placeholder="${flatListLoading ? 'Loading flats...' : 'Search & select flat (e.g. ' + escapeHtml((flatList[0] && flatList[0].flat) || 'A-102') + ')'}" value="${escapeHtml(String(flatNo))}" autocomplete="off">
+                    <div class="search-results" id="flatResults"></div>
+                  </div>
+                  ${(floor || answers.generatedOrderId) ? `<div class="hint-note">
+                    ${floor ? `Floor: <b style="color:#333;margin:0 4px;">${escapeHtml(String(floor))}</b>` : ''}
+                    ${floor && answers.generatedOrderId ? '·' : ''}
+                    ${answers.generatedOrderId ? `&nbsp;Order ID: <b style="color:#333;margin-left:4px;">${escapeHtml(answers.generatedOrderId)}</b>` : ''}
+                  </div>` : ''}
+                </div>` : ''}
               </div>
 
               ${clientType === 'Developer' ? '' : `
@@ -775,14 +783,15 @@
       if (!input) return;
       input.addEventListener('input', function(e) { answers.project = e.target.value; onProjectSearch(e); updatePrimaryButton(); });
       input.addEventListener('focus', function(e) { onProjectSearch(e); });
-      document.addEventListener('click', onDocProjectClick, true);
     }
 
+    // Closes any open search dropdown (project OR flat) on an outside click.
+    // Registered once in init().
     function onDocProjectClick(e) {
-      const wrap = document.querySelector('.search-wrap');
-      const res = document.getElementById('searchResults');
-      if (!wrap || !res) return;
-      if (!wrap.contains(e.target)) res.style.display = 'none';
+      document.querySelectorAll('.search-wrap').forEach(function (wrap) {
+        const res = wrap.querySelector('.search-results');
+        if (res && !wrap.contains(e.target)) res.style.display = 'none';
+      });
     }
 
     function onProjectSearch(e) {
@@ -808,6 +817,46 @@
         });
       }
       resultsEl.style.display = 'block';
+    }
+
+    // ---- Developer flat picker (searchable, from the building sheet) ----
+    function loadFlatList(developer, building) {
+      flatList = [];
+      flatListLoading = true;
+      renderCurrentPage();
+      if (!window.google || !google.script || !google.script.run) { flatListLoading = false; renderCurrentPage(); return; }
+      google.script.run
+        .withSuccessHandler(function (list) { flatList = Array.isArray(list) ? list : []; flatListLoading = false; renderCurrentPage(); })
+        .withFailureHandler(function (err) { flatListLoading = false; console.error(err); renderCurrentPage(); })
+        .getFlats({ developer: developer, building: building });
+    }
+    function bindFlatSearch() {
+      const input = document.getElementById('field-flat');
+      if (!input) return;
+      input.addEventListener('input', function (e) { answers.flatNo = e.target.value; onFlatSearch(e); updatePrimaryButton(); });
+      input.addEventListener('focus', function (e) { onFlatSearch(e); });
+    }
+    function onFlatSearch(e) {
+      const q = (e.target.value || '').trim().toLowerCase();
+      const el = document.getElementById('flatResults');
+      if (!el) return;
+      if (flatListLoading) { el.innerHTML = '<div class="search-loading">Loading flats...</div>'; el.style.display = 'block'; return; }
+      if (!flatList.length) { el.innerHTML = '<div class="search-empty">No flats found for this building</div>'; el.style.display = 'block'; return; }
+      let list = flatList;
+      if (q) list = flatList.filter(f => String(f.flat).toLowerCase().includes(q) || String(f.floor || '').toLowerCase().includes(q));
+      list = list.slice(0, 15);
+      if (!list.length) { el.innerHTML = '<div class="search-empty">No matching flat</div>'; el.style.display = 'block'; return; }
+      el.innerHTML = list.map(f => `<button class="search-item" type="button">${escapeHtml(f.flat)}${f.floor ? ` <span style="color:#999;">— ${escapeHtml(f.floor)}</span>` : ''}</button>`).join('');
+      el.querySelectorAll('.search-item').forEach(function (item, index) {
+        item.addEventListener('mousedown', function (ev) { ev.preventDefault(); selectFlat(list[index].flat, list[index].floor); });
+      });
+      el.style.display = 'block';
+    }
+    function selectFlat(flat, floor) {
+      answers.flatNo = flat;
+      answers.floor = floor || '';
+      renderCurrentPage();
+      maybeLoadDeveloperProgress();
     }
 
     function selectProject(name) {
@@ -861,7 +910,7 @@
       answers.project = value;
       answers.doneSteps = [];
       resetProgressState();
-      renderCurrentPage();
+      loadFlatList(answers.developer, value);   // re-renders
     }
     function setFloor(val) { answers.floor = val; updatePrimaryButton(); }
     function setFlatNo(val) { answers.flatNo = val; updatePrimaryButton(); }
@@ -1217,11 +1266,16 @@
       if (!Array.isArray(answers.peopleRows)) answers.peopleRows = [];
       if (!Array.isArray(answers.tomorrowSteps)) answers.tomorrowSteps = [];
       syncPeopleRows();
+      document.addEventListener('click', onDocProjectClick, true);   // close search dropdowns on outside click
       renderCurrentPage();
       if (answers.siteType) loadProjectList(answers.siteType);
       // Refresh "already done" steps for a restored draft that already has an identity.
-      if (answers.clientType === 'Developer') maybeLoadDeveloperProgress();
-      else if (answers.project) loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: answers.project });
+      if (answers.clientType === 'Developer') {
+        if (answers.developer && answers.building) loadFlatList(answers.developer, answers.building);
+        maybeLoadDeveloperProgress();
+      } else if (answers.project) {
+        loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: answers.project });
+      }
       loadUiImages();
     })();
   

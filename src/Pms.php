@@ -132,6 +132,53 @@ class Pms
         return $out;
     }
 
+    /** Flats for a developer building: [['flat'=>'D-102','floor'=>'1st floor'], ...] (floor forward-filled over merged cells). */
+    public function getFlats(string $developer, string $building): array
+    {
+        try {
+            $dev = $this->cfg['developer_building_sheets'][$developer] ?? null;
+            if (!$dev || empty($dev['spreadsheetId'])) {
+                return [];
+            }
+            $ssId = $dev['spreadsheetId'];
+            $title = $this->sheets->titleForName($ssId, $building);
+            if ($title === null) {
+                return [];
+            }
+            $rows = $this->sheets->getTab($ssId, $title);
+            $info = $this->headerInfo($rows);
+            $flatCol = $this->findNamedCol($info, 'Flat No');
+            if ($flatCol < 1) {
+                return [];
+            }
+            $floorCol = $this->findNamedCol($info, 'Floor');
+            $out = [];
+            $seen = [];
+            $lastFloor = '';
+            for ($r = $info['dataStartRow']; $r <= count($rows); $r++) {
+                if ($floorCol > 0) {
+                    $fv = trim((string)$this->cell($rows, $r, $floorCol));
+                    if ($fv !== '') {
+                        $lastFloor = $fv;
+                    }
+                }
+                $flat = trim((string)$this->cell($rows, $r, $flatCol));
+                if ($flat === '') {
+                    continue;
+                }
+                $key = Sheets::compactKey($flat);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $out[] = ['flat' => $flat, 'floor' => $lastFloor];
+            }
+            return $out;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
     private function progressDeveloper(array $p): array
     {
         $orderId = $this->makeDeveloperOrderId((string)($p['building'] ?? ''), (string)($p['flatNo'] ?? ''));
