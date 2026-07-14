@@ -198,6 +198,13 @@ class SubmitService
             'pdfDriveId'  => $core['pdf_drive_id'] ?? '',
         ]);
 
+        // PDF lives in the Shared Drive; the local copy was only a bridge for the
+        // email attachment. Drop it now so storage/reports never accumulates.
+        $localPdf = $core['pdf_path'] ?? '';
+        if ($localPdf !== '' && !empty($core['pdf_drive_id']) && is_file($localPdf)) {
+            @unlink($localPdf);
+        }
+
         $tracker->updateSubmission(['overall_status' => $warnings ? 'partial' : 'done']);
         return array_values(array_filter($warnings));
     }
