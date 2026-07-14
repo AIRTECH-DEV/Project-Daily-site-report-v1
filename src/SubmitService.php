@@ -176,9 +176,31 @@ class SubmitService
             'rowValues'    => $rowValues,
             'photos'       => $photos,
             'drawing'      => $drawing,
+            'client_hold'  => $this->clientHoldText($p),
             'out_path'     => $out,
         ]);
         return $out;
+    }
+
+    /**
+     * Reason text for steps HELD UP BY THE CLIENT (payload, not the response
+     * sheet, which has no Hold Reason columns). VAPL/other holds return ''.
+     */
+    private function clientHoldText(array $p): string
+    {
+        $parts = [];
+        foreach (($p['stepStatuses'] ?? []) as $e) {
+            if (!is_array($e) || trim((string)($e['status'] ?? '')) !== 'Hold') { continue; }
+            if (stripos((string)($e['holdReason'] ?? ''), 'client') === false) { continue; }
+            $detail = trim((string)($e['holdReasonDetail'] ?? ''));
+            $parts[] = $detail !== '' ? $detail : trim((string)$e['holdReason']);
+        }
+        // Fallback to the representative hold fields if stepStatuses was absent.
+        if (!$parts && stripos((string)($p['holdReason'] ?? ''), 'client') !== false) {
+            $d = trim((string)($p['holdReasonDetail'] ?? ''));
+            $parts[] = $d !== '' ? $d : trim((string)$p['holdReason']);
+        }
+        return implode("\n", array_values(array_unique(array_filter($parts))));
     }
 
     private function decode(?array $f): ?string

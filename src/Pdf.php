@@ -64,7 +64,7 @@ class Pdf
 
         $pdf->Ln(8);
         $this->sectionHeader($pdf, 'PROJECT DETAILS');
-        $this->detailTable($pdf, $ctx['headers'], $ctx['rowValues']);
+        $this->detailTable($pdf, $ctx['headers'], $ctx['rowValues'], $ctx['client_hold'] ?? null);
 
         // Page 1 = activity + details only.
         $pdf->AddPage();
@@ -147,14 +147,33 @@ class Pdf
         $pdf->SetY($y + $h);
     }
 
-    private function detailTable(PmsFpdf $pdf, array $headers, array $rowValues): void
+    private function detailTable(PmsFpdf $pdf, array $headers, array $rowValues, ?string $clientHoldOverride = null): void
     {
         $rows = [];
         foreach ($headers as $i => $h) {
             if ($this->skipHeader((string)$h)) { continue; }
-            $val = $this->fmt($rowValues[$i] ?? '');
-            if (trim($val) === '') { $val = 'N/A'; }
+            $val = trim((string)($rowValues[$i] ?? ''));
+            // Drop rows with no real answer (empty or "N/A") -- e.g. an
+            // unanswered "If Yes : why?" follow-up when parent question is "No".
+            if ($val === '' || strtolower($val) === 'n/a') { continue; }
             $rows[] = [strtoupper((string)$h), $val];
+        }
+
+        // Surface a step held UP BY THE CLIENT as one "STUCK BY CLIENT" row right
+        // after "Project Engineer Name". Holds stuck by VAPL are NOT shown.
+        // Prefer the caller-supplied value (from the submission payload, since the
+        // response sheet has no Hold Reason columns); fall back to a header scan.
+        $clientHold = $clientHoldOverride !== null
+            ? trim($clientHoldOverride)
+            : $this->clientHoldValue($headers, $rowValues);
+        if ($clientHold !== '') {
+            $newRow = ['STUCK BY CLIENT', $clientHold];
+            $pos = null;
+            foreach ($rows as $idx => $r) {
+                if (stripos($r[0], 'PROJECT ENGINEER NAME') !== false) { $pos = $idx; break; }
+            }
+            if ($pos !== null) { array_splice($rows, $pos + 1, 0, [$newRow]); }
+            else { $rows[] = $newRow; }
         }
         $kw = 180; $vw = 331; $pad = 5; $idx = 0;
         foreach ($rows as [$key, $val]) {
@@ -253,11 +272,31 @@ class Pdf
             "today's activity", 'if yes: upload the measurement report',
             'upload site photo', 'site photos', 'if yes :upload photo here',
             'if yes: upload photo here',
+            // Raw hold cols handled separately -> single "STUCK BY CLIENT" row.
+            'hold reason',
         ];
         foreach ($patterns as $p) {
             if (strpos($lower, $p) !== false) { return true; }
         }
         return false;
+    }
+
+    /**
+     * If the visit's hold is "Stuck BY Client", return the reason to show
+     * (detail text, else the reason label). VAPL/other holds return ''.
+     */
+    private function clientHoldValue(array $headers, array $rowValues): string
+    {
+        $reason = ''; $detail = '';
+        foreach ($headers as $i => $h) {
+            $lh = strtolower((string)$h);
+            if (strpos($lh, 'hold reason') === false) { continue; }
+            $v = trim((string)($rowValues[$i] ?? ''));
+            if (strpos($lh, 'detail') !== false) { $detail = $v; }
+            else { $reason = $v; }
+        }
+        if (stripos($reason, 'client') === false) { return ''; }
+        return $detail !== '' ? $detail : $reason;
     }
 
     private function fmt($value): string

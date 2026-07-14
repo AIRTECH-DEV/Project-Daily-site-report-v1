@@ -28,7 +28,8 @@ class PmsFpdf extends FPDF
         $this->Line(42, 800, 553, 800);
         if ($this->footerImg && is_file($this->footerImg)) {
             $w = 92; // 414x146 => h ~32.5
-            $this->Image($this->footerImg, (595.28 - $w) / 2, 806, $w, 0, 'PNG');
+            // Left-aligned with the content margin (x=42) instead of centered.
+            $this->Image($this->footerImg, 42, 806, $w, 0, 'PNG');
         }
         // Reset for body.
         $this->SetLineWidth(0.2);
