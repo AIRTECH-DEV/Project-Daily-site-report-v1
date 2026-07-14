@@ -125,13 +125,19 @@
     .status-apply .apply-btn:disabled { opacity:.45; cursor:not-allowed; }
     @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
 
-    /* People-on-site detail rows */
+    /* People-on-site detail rows (one block per person; multiple works each) */
     .people-rows { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
-    .person-row { display:grid; grid-template-columns: 22px 1fr 116px 1fr; gap:8px; align-items:center; }
-    .person-row.has-contractor { grid-template-columns: 22px 1fr 116px 1fr 1fr; }
+    .person-block { border:1px solid #ececec; border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#fcfcfc; }
+    .person-top { display:grid; grid-template-columns: 22px 1fr 116px; gap:8px; align-items:center; }
+    .person-top.has-contractor { grid-template-columns: 22px 1fr 116px 1fr; }
     .person-idx { width:22px; height:22px; border-radius:50%; background:#fbeceb; color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
-    .person-row .field, .person-row .dropdown-field { height:40px; }
-    @media (max-width: 760px) { .person-row, .person-row.has-contractor { grid-template-columns: 1fr; } .person-idx { display:none; } }
+    .person-top .field, .person-top .dropdown-field, .person-work .dropdown-field { height:40px; }
+    .person-work { display:flex; flex-direction:column; gap:8px; }
+    .work-add { max-width:260px; }
+    .work-chips { }
+    .work-chip { display:inline-flex; align-items:center; gap:7px; background:#fff5f5; border:1px solid #f2c0c3; color:#b60f17; border-radius:14px; padding:4px 6px 4px 11px; font-size:12px; font-weight:600; }
+    .work-chip button { border:0; background:none; color:#b60f17; cursor:pointer; font-size:15px; line-height:1; padding:0 2px; }
+    @media (max-width: 760px) { .person-top, .person-top.has-contractor { grid-template-columns: 1fr; } .person-idx { display:none; } .work-add { max-width:none; } }
     .card-option {
       position: relative; border: 1px solid #e1e1e1; border-radius: 8px; min-height: 80px; padding: 14px 10px 10px; text-align:center; cursor:pointer; background:#fff;
       display:flex; flex-direction: column; align-items:center; justify-content:center; gap:8px; transition: all .2s ease;
@@ -210,6 +216,17 @@
     /* Read-only value adopted from the sheet (Amendment / Drawing / Measurement) */
     .prefill-note { display:flex; align-items:center; gap:10px; height:34px; padding:0 12px; border:1px solid #dfe6df; border-radius:6px; background:#f5f7f5; color:#333; font-weight:600; font-size:13px; }
     .prefill-tag { margin-left:auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#5c6b5c; background:#e9efe9; border:1px solid #d3e0d3; border-radius:4px; padding:1px 6px; }
+
+    /* Plan-for-tomorrow suggestion chips (pending steps) */
+    .plan-suggest-label { font-size:11px; color:#8a8a8a; margin-bottom:8px; }
+    .chip-row { display:flex; flex-wrap:wrap; gap:8px; }
+    .plan-chip { border:1px solid #dcdcdc; background:#fff; border-radius:16px; padding:6px 12px; font-size:12px; color:#555; cursor:pointer; transition:all .15s ease; }
+    .plan-chip:hover { border-color:#f2b0b3; }
+    .plan-chip.on { border-color:var(--red); background:#fff5f5; color:#b60f17; font-weight:600; }
+    .plan-chip.on::before { content:"✓ "; }
+    .plan-chip.st-done { border-color:#cfe6d0; color:#2f7d32; }
+    .plan-chip.st-pending { border-color:#f0dcae; color:#8a5a00; }
+    .plan-chip.st-hold { border-color:#f2b8bb; color:#b60f17; }
 
     .yesno-row { display:flex; gap: 10px; }
     .yesno-btn { flex:1; height: 34px; border:1px solid #ddd; border-radius:6px; background:#fff; font-weight: 600; cursor:pointer; color:#666; }

@@ -191,7 +191,9 @@
     function isStep2Valid() {
       const pf = answers.prefilled || {};
       const amendOk = pf.amendment ? true : (answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true);
-      return String(answers.nextPlan || '').trim() !== '' && !!answers.drawingChange && amendOk;
+      // Plan satisfied by picking pending steps OR typing notes.
+      const planOk = effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '';
+      return planOk && !!answers.drawingChange && amendOk;
     }
     function isStep3Valid() {
       const pf = answers.prefilled || {};
@@ -356,19 +358,27 @@
                   ${Array.from({length: peopleCount}).map((_, i) => {
                     const r = peopleRows[i] || {};
                     const type = r.techType || '';
-                    return `<div class="person-row ${type === 'Contractor' ? 'has-contractor' : ''}">
-                      <div class="person-idx">${i + 1}</div>
-                      <input type="text" class="field" placeholder="Name" value="${escapeHtml(r.name || '')}" oninput="setPersonField(${i}, 'name', this.value)" autocomplete="off">
-                      <select class="dropdown-field ${type ? '' : 'placeholder'}" onchange="setPersonField(${i}, 'techType', this.value)">
-                        <option value="">Type</option>
-                        ${TECH_TYPES.map(t => `<option value="${escapeHtml(t)}" ${type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
-                      </select>
-                      ${type === 'Contractor' ? `<input type="text" class="field" placeholder="Contractor name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
-                      <select class="dropdown-field ${r.workDone ? '' : 'placeholder'}" onchange="setPersonField(${i}, 'workDone', this.value)">
-                        <option value="">What work done</option>
-                        ${(r.workDone && !availableWork.some(w => compact(w) === compact(r.workDone)) ? [r.workDone].concat(availableWork) : availableWork)
-                          .map(w => `<option value="${escapeHtml(w)}" ${r.workDone === w ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('')}
-                      </select>
+                    const works = Array.isArray(r.workDone) ? r.workDone : (r.workDone ? [r.workDone] : []);
+                    const rowOpts = availableWork.filter(w => !works.some(x => compact(x) === compact(w)));
+                    return `<div class="person-block">
+                      <div class="person-top ${type === 'Contractor' ? 'has-contractor' : ''}">
+                        <div class="person-idx">${i + 1}</div>
+                        <input type="text" class="field" placeholder="Name" value="${escapeHtml(r.name || '')}" oninput="setPersonField(${i}, 'name', this.value)" autocomplete="off">
+                        <select class="dropdown-field ${type ? '' : 'placeholder'}" onchange="setPersonField(${i}, 'techType', this.value)">
+                          <option value="">Type</option>
+                          ${TECH_TYPES.map(t => `<option value="${escapeHtml(t)}" ${type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+                        </select>
+                        ${type === 'Contractor' ? `<input type="text" class="field" placeholder="Contractor name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
+                      </div>
+                      <div class="person-work">
+                        <select class="dropdown-field placeholder work-add" onchange="addPersonWork(${i}, this.value)">
+                          <option value="">${works.length ? '+ Add another work' : 'What work done'}</option>
+                          ${rowOpts.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('')}
+                        </select>
+                        ${works.length ? `<div class="chip-row work-chips">
+                          ${works.map(w => `<span class="work-chip">${escapeHtml(w)}<button type="button" title="Remove" onclick="removePersonWork(${i}, '${escapeHtml(w)}')">&times;</button></span>`).join('')}
+                        </div>` : ''}
+                      </div>
                     </div>`;
                   }).join('')}
                 </div>` : ''}
@@ -457,8 +467,14 @@
               <div class="section">
                 <div class="section-head">
                   ${iconNotes()}
-                  <div><div class="section-title">Activity Notes</div><div class="section-sub">Provide a brief description of the site visit and activities performed.</div></div>
+                  <div><div class="section-title">Activity Notes</div><div class="section-sub">Tap a step below to add a ready-made line, and/or write your own.</div></div>
                 </div>
+                ${(answers.stepStatuses || []).length ? `<div class="plan-suggest" style="margin-bottom:10px;">
+                  <div class="plan-suggest-label">From today's status — tap to add a line:</div>
+                  <div class="chip-row">
+                    ${(answers.stepStatuses || []).map(e => `<button type="button" class="plan-chip ${statusTagClass(e.status)}" onclick="addActivityStatement('${escapeHtml(e.step)}')">${escapeHtml(e.step)} · ${escapeHtml(e.status)}</button>`).join('')}
+                  </div>
+                </div>` : ''}
                 <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
               </div>
 
@@ -502,6 +518,8 @@
       const drawingChange = answers.drawingChange || '';
       const amendmentWhy = answers.amendmentWhy || '';
       const prefilled = answers.prefilled || {};
+      const remaining = remainingSteps();
+      const tomorrowSet = new Set((answers.tomorrowSteps || []).map(compact));
       return `
         <div class="panel">
           <div class="twocol">
@@ -509,9 +527,15 @@
               <div class="section">
                 <div class="section-head">
                   ${iconNotes()}
-                  <div><div class="section-title">Plan for Tomorrow</div><div class="section-sub">What is the plan for this site tomorrow?</div></div>
+                  <div><div class="section-title">Plan for Tomorrow</div><div class="section-sub">Tap the steps planned for tomorrow (steps not done yet), and/or add notes.</div></div>
                 </div>
-                <textarea class="textarea" id="nextPlanInput" placeholder="Enter the next day plan / upcoming work...">${escapeHtml(nextPlan)}</textarea>
+                ${remaining.length ? `<div class="plan-suggest">
+                  <div class="plan-suggest-label">Upcoming steps (not done — includes today's pending/hold) — tap to add:</div>
+                  <div class="chip-row">
+                    ${remaining.map(s => `<button type="button" class="plan-chip ${tomorrowSet.has(compact(s)) ? 'on' : ''}" onclick="toggleTomorrowStep('${escapeHtml(s)}')">${escapeHtml(s)}</button>`).join('')}
+                  </div>
+                </div>` : `<div class="hint-note">All steps are done — add any notes below.</div>`}
+                <textarea class="textarea" id="nextPlanInput" placeholder="Any extra notes for tomorrow (optional if steps picked above)..." style="margin-top:12px;">${escapeHtml(nextPlan)}</textarea>
               </div>
               <div class="section">
                 <div class="section-head">
@@ -637,7 +661,7 @@
             <div class="review-card">
               <h4>Notes & Files</h4>
               ${reviewRow('Activity', answers.activity || '-')}
-              ${reviewRow('Next Plan', answers.nextPlan || '-')}
+              ${reviewRow('Next Plan', tomorrowPlanText() || '-')}
               ${reviewRow('Amendment Why', answers.amendmentWhy || '-')}
               ${reviewRow('Site Photos', photoNames || '-')}
               ${reviewRow('Drawing Change', answers.drawingChange || '-')}
@@ -837,6 +861,64 @@
       answers.stepStatuses = (answers.stepStatuses || []).filter(e => compact(e.step) !== key);
       renderCurrentPage();
     }
+
+    // Upcoming steps for "Plan for Tomorrow": everything not DONE — i.e. untouched
+    // steps PLUS ones marked Pending/Hold today (still upcoming work). Only Done
+    // (locked from sheet, or assigned Done this visit) is excluded.
+    function remainingSteps() {
+      const statusSteps = STATUS_STEPS[answers.siteType || ''] || [];
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      const doneSet = new Set((answers.stepStatuses || []).filter(e => e.status === 'Done').map(e => compact(e.step)));
+      return statusSteps.filter(s => !lockedSet.has(compact(s)) && !doneSet.has(compact(s)));
+    }
+    // Picked tomorrow steps, minus any that became done/locked since picking.
+    function effectiveTomorrowSteps() {
+      const rem = new Set(remainingSteps().map(compact));
+      return (answers.tomorrowSteps || []).filter(s => rem.has(compact(s)));
+    }
+    // Professional next-plan text: picked steps as a sentence + any free-text notes.
+    function tomorrowPlanText() {
+      const t = effectiveTomorrowSteps();
+      const parts = [];
+      if (t.length) parts.push('Planned for tomorrow: ' + t.join(', ') + '.');
+      const notes = String(answers.nextPlan || '').trim();
+      if (notes) parts.push(notes);
+      return parts.join(' ');
+    }
+    function toggleTomorrowStep(step) {
+      const key = compact(step);
+      const list = answers.tomorrowSteps || (answers.tomorrowSteps = []);
+      const at = list.findIndex(s => compact(s) === key);
+      if (at > -1) list.splice(at, 1); else list.push(step);
+      renderCurrentPage();
+    }
+
+    // Turns one applied step-status into a professional sentence for Activity Notes.
+    function stepStatement(entry) {
+      const step = entry.step;
+      if (entry.status === 'Done') return step + ' completed today.';
+      if (entry.status === 'Pending') return step + ' is currently pending.';
+      if (entry.status === 'Hold') {
+        const m = /by\s+(.+)$/i.exec(entry.holdReason || '');
+        const who = m ? m[1].trim() : '';
+        const detail = String(entry.holdReasonDetail || '').trim();
+        if (who) return step + ' is on hold — stuck by ' + who + (detail ? ' (' + detail + ')' : '') + '.';
+        return step + ' is on hold' + (detail ? ' — ' + detail : '') + '.';
+      }
+      return '';
+    }
+    // Appends the sentence for a step to Activity Notes (no duplicates).
+    function addActivityStatement(step) {
+      const key = compact(step);
+      const entry = (answers.stepStatuses || []).find(e => compact(e.step) === key);
+      if (!entry) return;
+      const s = stepStatement(entry);
+      if (!s) return;
+      const cur = String(answers.activity || '');
+      if (cur.indexOf(s) !== -1) return;
+      answers.activity = cur.trim() === '' ? s : (cur.replace(/\s*$/, '') + ' ' + s);
+      renderCurrentPage();
+    }
     function setStatusValue(val) {
       answers.status = val;
       if (val !== 'Hold') { answers.holdReason = ''; answers.holdReasonDetail = ''; }
@@ -851,9 +933,26 @@
     function syncPeopleRows() {
       const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
       const rows = answers.peopleRows || [];
-      while (rows.length < n) rows.push({ name: '', techType: '', contractorName: '', workDone: '' });
+      while (rows.length < n) rows.push({ name: '', techType: '', contractorName: '', workDone: [] });
       if (rows.length > n) rows.length = n;
+      // Normalise workDone to an array (one person can log several works).
+      rows.forEach(r => { if (!Array.isArray(r.workDone)) r.workDone = r.workDone ? [r.workDone] : []; });
       answers.peopleRows = rows;
+    }
+    function addPersonWork(i, val) {
+      if (!val) return;
+      syncPeopleRows();
+      const r = answers.peopleRows[i] || (answers.peopleRows[i] = { name: '', techType: '', contractorName: '', workDone: [] });
+      if (!Array.isArray(r.workDone)) r.workDone = r.workDone ? [r.workDone] : [];
+      if (!r.workDone.some(x => compact(x) === compact(val))) r.workDone.push(val);
+      renderCurrentPage();
+    }
+    function removePersonWork(i, work) {
+      syncPeopleRows();
+      const r = answers.peopleRows[i];
+      if (!r) return;
+      r.workDone = (Array.isArray(r.workDone) ? r.workDone : []).filter(x => compact(x) !== compact(work));
+      renderCurrentPage();
     }
     function setPeople(val) { answers.people = val; syncPeopleRows(); renderCurrentPage(); }
     function adjustPeople(delta) {
@@ -875,13 +974,16 @@
         updatePrimaryButton();    // keep focus while typing name/contractor
       }
     }
+    function personWorks(r) {
+      return Array.isArray(r.workDone) ? r.workDone : (r.workDone ? [r.workDone] : []);
+    }
     function peopleRowsValid() {
       const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
       if (n < 1) return false;
       const rows = answers.peopleRows || [];
       for (let i = 0; i < n; i++) {
         const r = rows[i] || {};
-        if (String(r.name || '').trim() === '' || !r.techType || !r.workDone) return false;
+        if (String(r.name || '').trim() === '' || !r.techType || personWorks(r).length === 0) return false;
         if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') return false;
       }
       return true;
@@ -890,7 +992,8 @@
     function peopleWorkSummary() {
       return (answers.peopleRows || []).map(r => {
         const who = r.techType === 'Contractor' ? ('Contractor-' + String(r.contractorName || '').trim()) : (r.techType || '');
-        return String(r.name || '').trim() + ' [' + who + ']' + (r.workDone ? ' - ' + r.workDone : '');
+        const works = personWorks(r);
+        return String(r.name || '').trim() + ' [' + who + ']' + (works.length ? ' - ' + works.join(', ') : '');
       }).filter(s => s.trim() !== '[]' && s.trim() !== '').join(', ');
     }
     function setYesNo(key, val) { answers[key] = val; renderCurrentPage(); }
@@ -943,7 +1046,7 @@
 
     function clearCurrentPage() {
       if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; answers.prefilled={}; }
-      else if (currentPage === 1) { answers.nextPlan=''; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
       else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; if (answers.prefilled) answers.prefilled.measurement=false; }
       renderCurrentPage();
     }
@@ -993,7 +1096,8 @@
         people: answers.people,
         engineer: answers.engineer,
         activity: answers.activity,
-        nextPlan: answers.nextPlan,
+        nextPlan: tomorrowPlanText(),
+        tomorrowSteps: effectiveTomorrowSteps(),
         photos: answers.photo || [],
         amendment: answers.amendment,
         amendmentWhy: answers.amendmentWhy,
@@ -1053,6 +1157,7 @@
       if (!Array.isArray(answers.lockedSteps)) answers.lockedSteps = [];
       if (!Array.isArray(answers.stepStatuses)) answers.stepStatuses = [];
       if (!Array.isArray(answers.peopleRows)) answers.peopleRows = [];
+      if (!Array.isArray(answers.tomorrowSteps)) answers.tomorrowSteps = [];
       syncPeopleRows();
       renderCurrentPage();
       if (answers.siteType) loadProjectList(answers.siteType);
