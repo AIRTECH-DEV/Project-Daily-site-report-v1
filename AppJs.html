@@ -21,8 +21,8 @@
     // site type. Each string is matched (name-based) to a step group column
     // in the PMS sheet on submit.
     const STATUS_STEPS = {
-      'VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
-      'Non-VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
+      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
     };
     // Cold Room / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
     STATUS_STEPS['Cold Room'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
@@ -38,6 +38,7 @@
     const TECH_TYPES = ['VAPL', 'Contractor'];
     // Per-person "what work done" dropdown options (independent of the status steps).
     const WORK_DONE_OPTIONS = [
+      'Marking','Civil Opening','Support',
       'Underdake Insulation','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct',
       'Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining'
     ];
@@ -207,6 +208,59 @@
       if (currentPage === 1) return isStep2Valid();
       if (currentPage === 2) return isStep3Valid();
       return true;
+    }
+
+    // Human-readable list of what's still blocking "Save & Next" on the current step.
+    function missingFields() {
+      const m = [];
+      if (currentPage === 0) {
+        if (!answers.siteType) m.push('Site Type');
+        if (!answers.clientType) m.push('Client Type');
+        if (answers.clientType === 'Developer') {
+          if (!answers.developer) m.push('Developer');
+          if (!answers.building) m.push('Building');
+          if (String(answers.floor || '').trim() === '') m.push('Floor');
+          if (String(answers.flatNo || '').trim() === '') m.push('Flat No');
+        } else if (String(answers.project || '').trim() === '') {
+          m.push('Project / Client');
+        }
+        if (!answers.engineer) m.push('Assigned Engineer');
+        if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) m.push('Current Status — tick steps, pick a status, hit Apply');
+        if (String(answers.tentativeEndDate || '').trim() === '') m.push('Tentative Project End Date');
+        const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
+        if (n < 1) m.push('People on Site — set the count');
+        for (let i = 0; i < n; i++) {
+          const r = (answers.peopleRows || [])[i] || {};
+          const probs = [];
+          if (String(r.name || '').trim() === '') probs.push('name');
+          if (!r.techType) probs.push('type');
+          if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor name');
+          if (personWorks(r).length === 0) probs.push('work done');
+          if (probs.length) m.push('Person ' + (i + 1) + ' — ' + probs.join(', '));
+        }
+        if (String(answers.activity || '').trim() === '') m.push('Activity Notes');
+        if (!(Array.isArray(answers.photo) && answers.photo.length > 0)) m.push('Site Photos');
+        if (!answers.amendment) m.push('Amendment Required?');
+      } else if (currentPage === 1) {
+        const pf = answers.prefilled || {};
+        if (!(effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '')) m.push('Plan for Tomorrow — pick steps or add notes');
+        if (!answers.drawingChange) m.push('Drawing Change');
+        if (!pf.amendment && answers.amendment === 'Yes' && String(answers.amendmentWhy || '').trim() === '') m.push('Amendment Notes');
+      } else if (currentPage === 2) {
+        const pf = answers.prefilled || {};
+        if (!answers.measurement) m.push('Measurement Report Created Today?');
+        if (!pf.drawingChange && answers.drawingChange === 'Yes' && !answers.drawingPhoto) m.push('Drawing Change Photo');
+        if (!pf.measurement && answers.measurement === 'Yes' && !answers.measurementFile) m.push('Measurement Report File');
+      }
+      return m;
+    }
+    function missingBoxHtml() {
+      const m = missingFields();
+      if (!m.length) return '';
+      return `<div class="missing-box">
+        <div class="missing-title">⚠ Fill these to continue:</div>
+        <ul>${m.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+      </div>`;
     }
 
     function updateStepper() {
@@ -692,6 +746,7 @@
 
     function renderActionBar(isSubmit = false) {
       return `
+        <div id="missingBox">${(!isSubmit && currentPage < 3) ? missingBoxHtml() : ''}</div>
         <div class="actionbar">
           <div class="actions-left">
             <button class="btn ghost" onclick="goBack()">Back</button>
@@ -1042,6 +1097,9 @@
     function updatePrimaryButton() {
       const btn = document.getElementById('primaryBtn');
       if (btn && currentPage < 3) btn.disabled = !isCurrentPageValid();
+      // Keep the "what's missing" list live as fields are filled (without a full re-render).
+      const box = document.getElementById('missingBox');
+      if (box && currentPage < 3) box.innerHTML = missingBoxHtml();
     }
 
     function clearCurrentPage() {
