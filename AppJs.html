@@ -21,8 +21,8 @@
     // site type. Each string is matched (name-based) to a step group column
     // in the PMS sheet on submit.
     const STATUS_STEPS = {
-      'VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
-      'Non-VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
+      'VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
     };
     // Cold Room / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
     STATUS_STEPS['Cold Room'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
@@ -110,6 +110,12 @@
     function resetProgressState() {
       answers.lockedSteps = [];
       answers.generatedOrderId = '';
+      // Clear only the answers that were auto-filled from the sheet last time.
+      const pf = answers.prefilled || {};
+      if (pf.amendment) { answers.amendment = ''; answers.amendmentWhy = ''; }
+      if (pf.drawingChange) answers.drawingChange = '';
+      if (pf.measurement) answers.measurement = '';
+      answers.prefilled = {};
     }
 
     // Reads the PMS/developer sheet for steps already marked Done and locks them.
@@ -136,6 +142,13 @@
           } else {
             answers.tentativeLocked = false;
           }
+          // Amendment / Drawing / Measurement already answered in the response sheet
+          // -> adopt the answer and hide that field.
+          const pf = res.prefill || {};
+          answers.prefilled = {};
+          if (pf.amendment) { answers.amendment = pf.amendment; answers.prefilled.amendment = true; if (pf.amendmentWhy) answers.amendmentWhy = pf.amendmentWhy; }
+          if (pf.drawingChange) { answers.drawingChange = pf.drawingChange; answers.prefilled.drawingChange = true; }
+          if (pf.measurement) { answers.measurement = pf.measurement; answers.prefilled.measurement = true; }
           renderCurrentPage();
         })
         .withFailureHandler(function (err) {
@@ -176,12 +189,15 @@
       return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && peopleRowsValid() && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
     }
     function isStep2Valid() {
-      const amendOk = answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true;
+      const pf = answers.prefilled || {};
+      const amendOk = pf.amendment ? true : (answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true);
       return String(answers.nextPlan || '').trim() !== '' && !!answers.drawingChange && amendOk;
     }
     function isStep3Valid() {
-      const drawingOk = answers.drawingChange === 'Yes' ? !!answers.drawingPhoto : true;
-      const measurementOk = answers.measurement === 'Yes' ? !!answers.measurementFile : !!answers.measurement;
+      const pf = answers.prefilled || {};
+      // Prefilled-from-sheet answers don't require a fresh file upload.
+      const drawingOk = (!pf.drawingChange && answers.drawingChange === 'Yes') ? !!answers.drawingPhoto : true;
+      const measurementOk = (!pf.measurement && answers.measurement === 'Yes') ? !!answers.measurementFile : true;
       return drawingOk && !!answers.measurement && measurementOk;
     }
     function isCurrentPageValid() {
@@ -248,6 +264,9 @@
       const peopleCount = Math.max(0, parseInt(answers.people || 0, 10) || 0);
       const peopleRows = answers.peopleRows || [];
       const tentativeLocked = !!answers.tentativeLocked;
+      // "What work done" hides steps already done (locked from the sheet).
+      const availableWork = WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
+      const prefilled = answers.prefilled || {};
       return `
         <div class="panel">
           <div class="twocol">
@@ -347,7 +366,8 @@
                       ${type === 'Contractor' ? `<input type="text" class="field" placeholder="Contractor name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
                       <select class="dropdown-field ${r.workDone ? '' : 'placeholder'}" onchange="setPersonField(${i}, 'workDone', this.value)">
                         <option value="">What work done</option>
-                        ${WORK_DONE_OPTIONS.map(w => `<option value="${escapeHtml(w)}" ${r.workDone === w ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('')}
+                        ${(r.workDone && !availableWork.some(w => compact(w) === compact(r.workDone)) ? [r.workDone].concat(availableWork) : availableWork)
+                          .map(w => `<option value="${escapeHtml(w)}" ${r.workDone === w ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('')}
                       </select>
                     </div>`;
                   }).join('')}
@@ -460,12 +480,14 @@
                 <div class="section" style="margin-bottom:0;">
                   <div class="section-head">
                     ${iconNotes()}
-                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">Is any amendment or change required?</div></div>
+                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">${prefilled.amendment ? 'Already answered in the sheet.' : 'Is any amendment or change required?'}</div></div>
                   </div>
-                  <div class="yesno-row">
+                  ${prefilled.amendment
+                    ? `<div class="prefill-note">${escapeHtml(amend)} <span class="prefill-tag">from sheet</span></div>`
+                    : `<div class="yesno-row">
                     <button class="yesno-btn ${amend === 'Yes' ? 'selected' : ''}" onclick="setYesNo('amendment','Yes')">Yes</button>
                     <button class="yesno-btn ${amend === 'No' ? 'selected' : ''}" onclick="setYesNo('amendment','No')">No</button>
-                  </div>
+                  </div>`}
                 </div>
               </div>
             </div>
@@ -479,6 +501,7 @@
       const nextPlan = answers.nextPlan || '';
       const drawingChange = answers.drawingChange || '';
       const amendmentWhy = answers.amendmentWhy || '';
+      const prefilled = answers.prefilled || {};
       return `
         <div class="panel">
           <div class="twocol">
@@ -493,22 +516,25 @@
               <div class="section">
                 <div class="section-head">
                   ${iconProject()}
-                  <div><div class="section-title">Drawing Change</div><div class="section-sub">Any changes in drawing as per project condition?</div></div>
+                  <div><div class="section-title">Drawing Change</div><div class="section-sub">${prefilled.drawingChange ? 'Already answered in the sheet.' : 'Any changes in drawing as per project condition?'}</div></div>
                 </div>
-                <div class="yesno-row">
+                ${prefilled.drawingChange
+                  ? `<div class="prefill-note">${escapeHtml(drawingChange)} <span class="prefill-tag">from sheet</span></div>`
+                  : `<div class="yesno-row">
                   <button class="yesno-btn ${drawingChange === 'Yes' ? 'selected' : ''}" onclick="setYesNo('drawingChange','Yes')">Yes</button>
                   <button class="yesno-btn ${drawingChange === 'No' ? 'selected' : ''}" onclick="setYesNo('drawingChange','No')">No</button>
-                </div>
+                </div>`}
               </div>
             </div>
             <div class="col">
+              ${prefilled.amendment ? '' : `
               <div class="section">
                 <div class="section-head">
                   ${iconNotes()}
                   <div><div class="section-title">Amendment Notes</div><div class="section-sub">If amendment / PO / approval is required, explain the reason.</div></div>
                 </div>
                 <textarea class="textarea" id="amendmentWhyInput" placeholder="If yes — mention why..." ${answers.amendment === 'Yes' ? '' : 'disabled style="background:#fafafa;color:#999;"'}>${escapeHtml(amendmentWhy)}</textarea>
-              </div>
+              </div>`}
             </div>
           </div>
           ${renderActionBar()}
@@ -520,7 +546,10 @@
       const drawingPhoto = answers.drawingPhoto ? [answers.drawingPhoto] : [];
       const measurement = answers.measurement || '';
       const measurementFile = answers.measurementFile ? [answers.measurementFile] : [];
-      const drawingPhotoBlock = answers.drawingChange === 'Yes'
+      const prefilled = answers.prefilled || {};
+      const drawingPhotoBlock = prefilled.drawingChange
+        ? '<div class="hint-note">Drawing change already recorded in the sheet — no upload needed.</div>'
+        : (answers.drawingChange === 'Yes'
         ? `
                 <div class="dropzone ${drawingPhoto.length ? 'has-files' : ''}" onclick="document.getElementById('drawingPhotoInput').click()">
                   <div class="drop-icon">+</div>
@@ -529,8 +558,10 @@
                 </div>
                 <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('drawingPhoto', this.files, false)">
                 <div class="file-list" id="fileList-drawingPhoto"></div>`
-        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>';
-      const measurementFileBlock = measurement === 'Yes'
+        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>');
+      const measurementFileBlock = prefilled.measurement
+        ? '<div class="hint-note">Measurement status already recorded in the sheet — no upload needed.</div>'
+        : (measurement === 'Yes'
         ? `
                 <div class="dropzone ${measurementFile.length ? 'has-files' : ''}" onclick="document.getElementById('measurementFileInput').click()">
                   <div class="drop-icon">+</div>
@@ -539,7 +570,7 @@
                 </div>
                 <input type="file" id="measurementFileInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('measurementFile', this.files, false)">
                 <div class="file-list" id="fileList-measurementFile"></div>`
-        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
+        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>');
       return `
         <div class="panel">
           <div class="twocol">
@@ -556,12 +587,14 @@
               <div class="section">
                 <div class="section-head">
                   ${iconCalendar()}
-                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">Tell us if the measurement report was created today.</div></div>
+                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">${prefilled.measurement ? 'Already answered in the sheet.' : 'Tell us if the measurement report was created today.'}</div></div>
                 </div>
-                <div class="yesno-row">
+                ${prefilled.measurement
+                  ? `<div class="prefill-note">${escapeHtml(measurement)} <span class="prefill-tag">from sheet</span></div>`
+                  : `<div class="yesno-row">
                   <button class="yesno-btn ${measurement === 'Yes' ? 'selected' : ''}" onclick="setYesNo('measurement','Yes')">Yes</button>
                   <button class="yesno-btn ${measurement === 'No' ? 'selected' : ''}" onclick="setYesNo('measurement','No')">No</button>
-                </div>
+                </div>`}
               </div>
               <div class="section">
                 <div class="section-head">
@@ -909,9 +942,9 @@
     }
 
     function clearCurrentPage() {
-      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; }
-      else if (currentPage === 1) { answers.nextPlan=''; answers.drawingChange=''; answers.amendmentWhy=''; }
-      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
+      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; answers.prefilled={}; }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
+      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; if (answers.prefilled) answers.prefilled.measurement=false; }
       renderCurrentPage();
     }
 

@@ -50,13 +50,86 @@ class Pms
     public function getProgressState(array $p): array
     {
         try {
-            if (($p['clientType'] ?? '') === 'Developer') {
-                return $this->progressDeveloper($p);
-            }
-            return $this->progressGeneral($p);
+            $base = (($p['clientType'] ?? '') === 'Developer')
+                ? $this->progressDeveloper($p)
+                : $this->progressGeneral($p);
         } catch (Throwable $e) {
-            return ['found' => false, 'doneSteps' => [], 'orderId' => ''];
+            $base = ['found' => false, 'doneSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
         }
+        // Amendment / Drawing / Measurement come from the RESPONSE sheet (per-submission
+        // log), not the PMS sheet — read the latest matching row so the form can skip them.
+        $base['prefill'] = $this->getResponsePrefill($p);
+        return $base;
+    }
+
+    /**
+     * Latest response-sheet answers for Amendment / Drawing change / Measurement (+ amendment why)
+     * for this project (General) or building+flat (Developer). Empty strings when not found.
+     */
+    private function getResponsePrefill(array $p): array
+    {
+        $out = ['amendment' => '', 'amendmentWhy' => '', 'drawingChange' => '', 'measurement' => ''];
+        try {
+            $ssId = $this->cfg['response_sheet_id'];
+            // Prefer a tab named after the site type (future Cold Room/Storage/PAC tabs),
+            // else the current VRV / Non-VRV split (matches ResponseSheet routing).
+            $title = $this->sheets->titleForName($ssId, (string)($p['siteType'] ?? ''));
+            if ($title === null) {
+                $tab = ($p['siteType'] ?? '') === 'VRV'
+                    ? $this->cfg['tab_names']['VRV'] : $this->cfg['tab_names']['NONVRV'];
+                $title = $this->sheets->titleForName($ssId, $tab);
+            }
+            if ($title === null) {
+                return $out;
+            }
+            $rows = $this->sheets->getTab($ssId, $title);
+            if (count($rows) < 2) {
+                return $out;
+            }
+            $headers = $rows[0];
+            $amoCol = Sheets::findColIndex($headers, 'approval required?', 'why');
+            $whyCol = Sheets::findColIndex($headers, 'why');
+            $drwCol = Sheets::findColIndex($headers, 'changes in drawing', 'upload photo here');
+            $meaCol = Sheets::findColIndex($headers, 'measurement report created today', 'upload the measurement');
+
+            $isDev   = ($p['clientType'] ?? '') === 'Developer';
+            $projCol = Sheets::findColIndex($headers, 'select project name');
+            $bldCol  = Sheets::findColIndex($headers, 'building');
+            $flatCol = Sheets::findColIndex($headers, 'flat no');
+            $wantProj = Sheets::normalizeKey($p['project'] ?? '');
+            $wantBld  = Sheets::normalizeKey($p['building'] ?? '');
+            $wantFlat = Sheets::normalizeKey($p['flatNo'] ?? '');
+
+            $match = -1;
+            for ($r = count($rows) - 1; $r >= 1; $r--) {   // latest first
+                $row = $rows[$r];
+                if ($isDev) {
+                    if ($bldCol > -1 && $flatCol > -1 && $wantFlat !== ''
+                        && Sheets::normalizeKey($row[$bldCol] ?? '') === $wantBld
+                        && Sheets::normalizeKey($row[$flatCol] ?? '') === $wantFlat) {
+                        $match = $r; break;
+                    }
+                } elseif ($projCol > -1 && $wantProj !== ''
+                    && Sheets::normalizeKey($row[$projCol] ?? '') === $wantProj) {
+                    $match = $r; break;
+                }
+            }
+            if ($match < 0) {
+                return $out;
+            }
+            $row = $rows[$match];
+            $val = function (int $c) use ($row) {
+                $v = $c > -1 ? trim((string)($row[$c] ?? '')) : '';
+                return strcasecmp($v, 'N/A') === 0 ? '' : $v;
+            };
+            $out['amendment']    = $val($amoCol);
+            $out['amendmentWhy'] = $val($whyCol);
+            $out['drawingChange']= $val($drwCol);
+            $out['measurement']  = $val($meaCol);
+        } catch (Throwable $e) {
+            // best-effort: no prefill on error
+        }
+        return $out;
     }
 
     private function progressDeveloper(array $p): array
@@ -180,28 +253,49 @@ class Pms
         return -1;
     }
 
-    /** Collects step names whose per-step "Status" cell reads "Done" on a given row. */
+    /** Non-step single-column headers to ignore when detecting date-type "done" steps. */
+    private const NON_STEP_COLS = [
+        'timestamp', 'orderid', 'order id', 'project exective by', 'project executive by',
+        'project name', 'tentitive project end date', 'tentative project end date',
+        'remarks', 'work done by', 'email address', 'email', 'shipping address',
+        'total order value', 'sales person', 'order type', 'floor', 'flat no',
+    ];
+
+    /**
+     * Step names counted as done on a row:
+     *   - grouped steps whose "Status" sub-cell reads "Done", plus
+     *   - single-column DATE steps (e.g. "LS Material Delivery") that hold any value.
+     * Over-returning is harmless: the front-end only locks names in its STATUS_STEPS.
+     */
     private function readDoneSteps(array $rows, int $row, array $info): array
     {
         $out = [];
         $seen = [];
-        for ($i = 0; $i < $info['lastCol']; $i++) {
-            if (Sheets::normalizeKey($info['subVals'][$i] ?? '') !== 'status') {
-                continue;
-            }
-            if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) !== 'done') {
-                continue;
-            }
-            $name = trim((string)($info['groupVals'][$i] ?? ''));
-            if ($name === '') {
-                continue;
-            }
+        $add = function (string $name) use (&$out, &$seen) {
             $key = Sheets::compactKey($name);
-            if (isset($seen[$key])) {
-                continue;
+            if ($name === '' || isset($seen[$key])) {
+                return;
             }
             $seen[$key] = true;
             $out[] = $name;
+        };
+
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            $name = trim((string)($info['groupVals'][$i] ?? ''));
+            if ($sub === 'status') {
+                if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
+                    $add($name);
+                }
+                continue;
+            }
+            // Single-column date step: no sub-label, a real (non-base) header, value present.
+            if ($sub !== '' || $name === '' || in_array(Sheets::normalizeKey($name), self::NON_STEP_COLS, true)) {
+                continue;
+            }
+            if (trim((string)$this->cell($rows, $row, $i + 1)) !== '') {
+                $add($name);
+            }
         }
         return $out;
     }
@@ -387,6 +481,19 @@ class Pms
             if ($statusCol < 1) {
                 continue;
             }
+            // Single-column DATE steps (e.g. "LS Material Delivery") have no Status
+            // sub-header — they store a DATE, so writing "Done" is invalid. Stamp the
+            // date when marked Done (only if still empty); ignore Pending/Hold there.
+            if (Sheets::normalizeKey($info['subVals'][$statusCol - 1] ?? '') !== 'status') {
+                if ($stat === 'Done') {
+                    $cur = $this->cell($rows, $row, $statusCol);
+                    if ($cur === '' || $cur === null) {
+                        $this->sheets->setCell($ssId, $title, $row, $statusCol, $this->today());
+                    }
+                }
+                continue;
+            }
+
             $cellVal = ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat;
             $this->sheets->setCell($ssId, $title, $row, $statusCol, $cellVal);
 
@@ -700,6 +807,12 @@ class Pms
     private function now(): string
     {
         return (new DateTime('now', new DateTimeZone($this->cfg['timezone'])))->format('d-M-Y H:i:s');
+    }
+
+    /** Date only (no time) — for single-column date cells with strict date validation. */
+    private function today(): string
+    {
+        return (new DateTime('now', new DateTimeZone($this->cfg['timezone'])))->format('d-M-Y');
     }
 
     private function skip(string $msg): array
