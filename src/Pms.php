@@ -558,6 +558,28 @@ class Pms
             }
         }
 
+        // Plan-for-tomorrow: stamp Start Date on each planned next step (only if the
+        // cell is empty), mirroring the End-Date-on-Done logic above. One common date
+        // for all picked steps. First-process step (LS Material Delivery) is excluded
+        // client-side and, as a single-column date step, has no Start Date sub-col.
+        $startDate = $this->toSheetDate((string)($p['nextStepStartDate'] ?? ''));
+        if ($startDate !== '') {
+            foreach ((array)($p['tomorrowSteps'] ?? []) as $tStep) {
+                $tStep = (string)$tStep;
+                if ($tStep === '') {
+                    continue;
+                }
+                $startCol = $this->findStepSubCol($info, $tStep, 'Start Date');
+                if ($startCol < 1) {
+                    continue;
+                }
+                $cur = $this->cell($rows, $row, $startCol);
+                if ($cur === '' || $cur === null) {
+                    $this->sheets->setCell($ssId, $title, $row, $startCol, $startDate);
+                }
+            }
+        }
+
         // Hold -> one Remarks line per held step; otherwise clear a stale hold remark.
         if ($holdEntries) {
             $parts = [];
@@ -860,6 +882,17 @@ class Pms
     private function today(): string
     {
         return (new DateTime('now', new DateTimeZone($this->cfg['timezone'])))->format('d-M-Y');
+    }
+
+    /** Convert an input[type=date] value (YYYY-MM-DD) to sheet date format d-M-Y. */
+    private function toSheetDate(string $ymd): string
+    {
+        $ymd = trim($ymd);
+        if ($ymd === '') {
+            return '';
+        }
+        $d = DateTime::createFromFormat('Y-m-d', $ymd, new DateTimeZone($this->cfg['timezone']));
+        return $d ? $d->format('d-M-Y') : $ymd;
     }
 
     private function skip(string $msg): array

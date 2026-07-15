@@ -582,6 +582,8 @@
       const prefilled = answers.prefilled || {};
       const remaining = remainingSteps();
       const tomorrowSet = new Set((answers.tomorrowSteps || []).map(compact));
+      const nextStepStartDate = answers.nextStepStartDate || '';
+      const pickedTomorrow = effectiveTomorrowSteps();
       return `
         <div class="panel">
           <div class="twocol">
@@ -597,6 +599,10 @@
                     ${remaining.map(s => `<button type="button" class="plan-chip ${tomorrowSet.has(compact(s)) ? 'on' : ''}" onclick="toggleTomorrowStep('${escapeHtml(s)}')">${escapeHtml(s)}</button>`).join('')}
                   </div>
                 </div>` : `<div class="hint-note">All steps are done — add any notes below.</div>`}
+                ${pickedTomorrow.length ? `<div class="plan-startdate" style="margin-top:12px;">
+                  <div class="plan-suggest-label">Next Step Start Date — the planned steps above will start on this date:</div>
+                  <input type="date" class="field" id="nextStepStartDateInput" value="${escapeHtml(nextStepStartDate)}" onchange="setNextStepStartDate(this.value)" style="margin-top:6px;max-width:220px;">
+                </div>` : ''}
                 <textarea class="textarea" id="nextPlanInput" placeholder="Any extra notes for tomorrow (optional if steps picked above)..." style="margin-top:12px;">${escapeHtml(nextPlan)}</textarea>
               </div>
               <div class="section">
@@ -969,11 +975,13 @@
     // Upcoming steps for "Plan for Tomorrow": everything not DONE — i.e. untouched
     // steps PLUS ones marked Pending/Hold today (still upcoming work). Only Done
     // (locked from sheet, or assigned Done this visit) is excluded.
+    // First process step (LS Material Delivery) is never a "plan for tomorrow" item.
+    const NEVER_TOMORROW = new Set(['LS Material Delivery'].map(compact));
     function remainingSteps() {
       const statusSteps = STATUS_STEPS[answers.siteType || ''] || [];
       const lockedSet = new Set((answers.lockedSteps || []).map(compact));
       const doneSet = new Set((answers.stepStatuses || []).filter(e => e.status === 'Done').map(e => compact(e.step)));
-      return statusSteps.filter(s => !lockedSet.has(compact(s)) && !doneSet.has(compact(s)));
+      return statusSteps.filter(s => !NEVER_TOMORROW.has(compact(s)) && !lockedSet.has(compact(s)) && !doneSet.has(compact(s)));
     }
     // Picked tomorrow steps, minus any that became done/locked since picking.
     function effectiveTomorrowSteps() {
@@ -1031,6 +1039,7 @@
     function setHoldReason(val) { answers.holdReason = val; renderCurrentPage(); }
     function setHoldReasonDetail(val) { answers.holdReasonDetail = val; refreshApplyBtn(); }
     function setTentativeEndDate(val) { answers.tentativeEndDate = val; updatePrimaryButton(); }
+    function setNextStepStartDate(val) { answers.nextStepStartDate = val; }
     function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
 
     // ----- People on Site: count drives one detail row per person -----
@@ -1153,7 +1162,7 @@
 
     function clearCurrentPage() {
       if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; answers.prefilled={}; }
-      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.nextStepStartDate=''; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
       else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; if (answers.prefilled) answers.prefilled.measurement=false; }
       renderCurrentPage();
     }
@@ -1205,6 +1214,7 @@
         activity: answers.activity,
         nextPlan: tomorrowPlanText(),
         tomorrowSteps: effectiveTomorrowSteps(),
+        nextStepStartDate: effectiveTomorrowSteps().length ? (answers.nextStepStartDate || '') : '',
         photos: answers.photo || [],
         amendment: answers.amendment,
         amendmentWhy: answers.amendmentWhy,

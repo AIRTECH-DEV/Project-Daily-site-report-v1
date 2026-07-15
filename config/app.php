@@ -7,7 +7,7 @@
  * NOTE: keep config/ out of git — it holds the SA private key. See .gitignore.
  */
 
-return [
+$cfg = [
     // ---- Google service account + auth ----------------------------------
     'service_account' => __DIR__ . '/google-service-account.json',
     'token_cache_dir' => __DIR__ . '/../storage/tokens',
@@ -92,7 +92,7 @@ return [
         ],
         'order_tab'       => 'Orders',
         'developer_emails'=> [
-            'Kasturi'      => 'devops@vakhariaairtech.com',  // TODO: real Kasturi client email
+            'Kasturi'      => 'kasturi@vakhariaairtech.com',
             'Suyog Navkar' => '',                            // TODO: Suyog Navkar client email
         ],
     ],
@@ -144,3 +144,34 @@ return [
     // Full path to the PHP CLI binary (PHP_BINARY is unreliable under mod_php).
     'php_binary'           => 'C:\\xampp\\php\\php.exe',
 ];
+
+// ---- Admin-panel overrides (config/overrides.json) ----------------------
+// The admin panel (admin/settings.php) writes runtime-tunable values here so
+// developer client contacts / notification modes can be changed without editing
+// this file. Both the web app and the CLI worker load this, so a change applies
+// everywhere. Anything not present in the JSON keeps the defaults above.
+$overridesFile = __DIR__ . '/overrides.json';
+if (is_file($overridesFile)) {
+    $ov = json_decode((string)file_get_contents($overridesFile), true);
+    if (is_array($ov)) {
+        if (!empty($ov['developer_emails']) && is_array($ov['developer_emails'])) {
+            $cfg['email']['developer_emails'] =
+                array_merge($cfg['email']['developer_emails'] ?? [], $ov['developer_emails']);
+        }
+        if (!empty($ov['developer_phones']) && is_array($ov['developer_phones'])) {
+            $cfg['whatsapp']['developer_phones'] =
+                array_merge($cfg['whatsapp']['developer_phones'] ?? [], $ov['developer_phones']);
+        }
+        if (!empty($ov['email_mode']) && in_array($ov['email_mode'], ['OFF', 'TEST', 'LIVE'], true)) {
+            $cfg['email']['mode'] = $ov['email_mode'];
+        }
+        if (!empty($ov['whatsapp_mode']) && in_array($ov['whatsapp_mode'], ['OFF', 'TEST', 'LIVE'], true)) {
+            $cfg['whatsapp']['mode'] = $ov['whatsapp_mode'];
+        }
+        if (isset($ov['notify_delay_seconds']) && is_numeric($ov['notify_delay_seconds'])) {
+            $cfg['notify_delay_seconds'] = (int)$ov['notify_delay_seconds'];
+        }
+    }
+}
+
+return $cfg;
