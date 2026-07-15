@@ -22,8 +22,16 @@ $prevWk  = (int)$one("SELECT COUNT(*) FROM submissions WHERE created_at >= DATE_
 $genProj = (int)$one("SELECT COUNT(DISTINCT LOWER(TRIM(project))) FROM submissions WHERE client_type='General' AND project<>''");
 $devUnit = (int)$one("SELECT COUNT(DISTINCT CONCAT(LOWER(developer),'|',LOWER(building),'|',LOWER(flat_no))) FROM submissions WHERE client_type='Developer'");
 $projects = $genProj + $devUnit;
-$holdN   = (int)$one("SELECT COUNT(*) FROM submissions WHERE status='Hold'");
 $pendN   = (int)$one("SELECT COUNT(*) FROM submissions WHERE status='Pending'");
+
+// current holds at project level (latest report per project == Hold) — matches holds.php
+$curHold = 0; $seenH = [];
+foreach ($db->query("SELECT client_type, developer, building, flat_no, project, status FROM submissions ORDER BY id DESC") as $r) {
+    $k = projectKey($r);
+    if (isset($seenH[$k])) continue;
+    $seenH[$k] = true;
+    if ($r['status'] === 'Hold') $curHold++;
+}
 
 $stepDone   = (int)$one("SELECT COUNT(*) FROM process_log WHERE status='done'");
 $stepFailed = (int)$one("SELECT COUNT(*) FROM process_log WHERE status='failed'");
@@ -82,13 +90,10 @@ Layout::head('Dashboard', 'dashboard');
     <div class="kpi-label">Active Projects</div><div class="kpi-value"><?= $projects ?></div>
     <div class="kpi-foot"><?= $genProj ?> general · <?= $devUnit ?> dev units</div></div>
 
-  <div class="kpi"><div class="kpi-ico ic-amber"><i class="bi bi-pause-circle"></i></div>
-    <div class="kpi-label">On Hold</div><div class="kpi-value"><?= $holdN ?></div>
-    <div class="kpi-foot"><?= $pendN ?> pending steps</div></div>
-
-  <div class="kpi"><div class="kpi-ico <?= $stepFailed > 0 ? 'ic-red' : 'ic-green' ?>"><i class="bi bi-heart-pulse"></i></div>
-    <div class="kpi-label">Pipeline Health</div><div class="kpi-value"><?= $succRate ?>%</div>
-    <div class="kpi-foot"><?= $stepFailed ?> failed step<?= $stepFailed === 1 ? '' : 's' ?></div></div>
+  <a class="kpi" href="<?= Admin::BASE ?>/holds.php" style="text-decoration:none;color:inherit;cursor:pointer">
+    <div class="kpi-ico <?= $curHold > 0 ? 'ic-red' : 'ic-amber' ?>"><i class="bi bi-pause-circle"></i></div>
+    <div class="kpi-label">On Hold</div><div class="kpi-value"><?= $curHold ?></div>
+    <div class="kpi-foot" style="color:#2f81f7;font-weight:600">View why &amp; who <i class="bi bi-arrow-right"></i></div></a>
 
   <div class="kpi"><div class="kpi-ico ic-blue"><i class="bi bi-send-check"></i></div>
     <div class="kpi-label">Notifications Sent</div><div class="kpi-value"><?= $notifSent ?></div>

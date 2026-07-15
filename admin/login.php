@@ -10,14 +10,18 @@ if (Admin::isLoggedIn()) {
     header('Location: ' . Admin::BASE . '/index.php');
     exit;
 }
-if (Admin::needsSetup()) {
+
+$dbDown = !Admin::dbHealthy();
+if (!$dbDown && Admin::needsSetup()) {
     header('Location: ' . Admin::BASE . '/setup.php');
     exit;
 }
 
 $error = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $dbDown) {
+    $error = 'Database is unreachable — cannot sign in right now.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!Admin::rateLimit('admin_login')) {
         $error = 'Too many login attempts. Wait 5 minutes and try again.';
     } elseif (!Admin::checkCsrf()) {
@@ -77,6 +81,14 @@ $A = Admin::ASSETS;
     <div class="form-panel">
       <div class="login-card">
         <h1>Sign In</h1>
+
+        <?php if ($dbDown): ?>
+          <div class="alert alert-warning py-2 small mb-3" role="alert">
+            <i class="bi bi-database-exclamation me-2"></i><b>Database offline.</b>
+            The MySQL/MariaDB server on port <?= Admin::e(Admin::cfg()['db']['port']) ?> isn't answering with the
+            configured credentials. Start XAMPP&nbsp;MySQL (MariaDB) and make sure nothing else holds port 3306.
+          </div>
+        <?php endif; ?>
 
         <?php if ($error): ?>
           <div class="alert alert-danger alert-dismissible fade show py-2 small mb-3" role="alert">

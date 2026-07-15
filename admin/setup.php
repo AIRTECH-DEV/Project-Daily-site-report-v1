@@ -6,7 +6,8 @@
  */
 require __DIR__ . '/inc/bootstrap.php';
 
-if (!Admin::needsSetup()) {
+$dbDown = !Admin::dbHealthy();
+if (!$dbDown && !Admin::needsSetup()) {
     header('Location: ' . Admin::BASE . '/login.php');
     exit;
 }
@@ -14,7 +15,9 @@ if (!Admin::needsSetup()) {
 $error = '';
 $A = Admin::ASSETS;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $dbDown) {
+    $error = 'Database is unreachable — cannot create the admin account yet.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!Admin::checkCsrf()) {
         $error = 'Invalid request token. Refresh and try again.';
     } else {
@@ -69,6 +72,10 @@ $csrf = Admin::csrf();
       <div class="login-card">
         <h1>Create Admin</h1>
         <p class="card-sub">No admin exists yet. Set your login below — this becomes the master account.</p>
+
+        <?php if ($dbDown): ?>
+          <div class="alert alert-warning py-2 small mb-3"><i class="bi bi-database-exclamation me-2"></i><b>Database offline.</b> Start XAMPP MySQL (MariaDB) on port <?= Admin::e(Admin::cfg()['db']['port']) ?> and reload this page.</div>
+        <?php endif; ?>
 
         <?php if ($error): ?>
           <div class="alert alert-danger py-2 small mb-3"><i class="bi bi-exclamation-triangle-fill me-2"></i><?= Admin::e($error) ?></div>

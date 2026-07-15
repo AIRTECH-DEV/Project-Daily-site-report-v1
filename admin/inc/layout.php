@@ -12,6 +12,7 @@ class Layout
         'dashboard'   => ['index.php',       'bi-speedometer2', 'Dashboard'],
         'submissions' => ['submissions.php', 'bi-card-list',    'Site Reports'],
         'projects'    => ['projects.php',    'bi-buildings',    'Projects'],
+        'holds'       => ['holds.php',       'bi-pause-circle', 'On Hold'],
         'developers'  => ['developers.php',  'bi-diagram-3',    'Developers'],
         'pipeline'    => ['pipeline.php',    'bi-diagram-2',    'Pipeline Health'],
         'settings'    => ['settings.php',    'bi-gear',         'Settings'],

@@ -58,6 +58,17 @@ class Admin
         return self::$pdo;
     }
 
+    /** True when the MySQL/MariaDB server is reachable with the configured creds. */
+    public static function dbHealthy(): bool
+    {
+        static $ok = null;
+        if ($ok === null) {
+            try { self::db()->query('SELECT 1'); $ok = true; }
+            catch (Throwable $e) { $ok = false; }
+        }
+        return $ok;
+    }
+
     /* ---------------- auth ---------------- */
 
     public static function isLoggedIn(): bool

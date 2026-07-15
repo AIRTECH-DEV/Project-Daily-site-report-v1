@@ -65,6 +65,51 @@ function driveThumb(string $url, int $w = 400): string
     return $url;
 }
 
+/** The party a step is stuck on, pulled from a "Stuck BY VAPL/Client" reason. */
+function holdParty(string $reason): string
+{
+    if (preg_match('/by\s+(.+)$/i', trim($reason), $m)) {
+        return ucfirst(strtolower(trim($m[1])));
+    }
+    return trim($reason);
+}
+
+/** Colour tone for a hold party (client = red, VAPL/us = amber, other = muted). */
+function partyTone(string $party): string
+{
+    $p = strtolower($party);
+    if (strpos($p, 'client') !== false) return 'bad';
+    if (strpos($p, 'vapl') !== false)   return 'warn';
+    return 'muted';
+}
+
+/**
+ * Splits a submission's stepStatuses into done / pending / hold buckets.
+ * hold entries carry {step, party, detail}. Falls back gracefully on old rows.
+ */
+function parseSteps(array $payload): array
+{
+    $out = ['done' => [], 'pending' => [], 'hold' => []];
+    foreach (($payload['stepStatuses'] ?? []) as $e) {
+        if (!is_array($e)) continue;
+        $step = trim((string)($e['step'] ?? ''));
+        if ($step === '') continue;
+        $st = strtolower(trim((string)($e['status'] ?? '')));
+        if ($st === 'done') {
+            $out['done'][] = $step;
+        } elseif ($st === 'hold') {
+            $out['hold'][] = [
+                'step'   => $step,
+                'party'  => holdParty((string)($e['holdReason'] ?? '')),
+                'detail' => trim((string)($e['holdReasonDetail'] ?? '')),
+            ];
+        } elseif ($st === 'pending') {
+            $out['pending'][] = $step;
+        }
+    }
+    return $out;
+}
+
 /** Short one-line preview of a longer text value. */
 function snip($s, int $len = 60): string
 {

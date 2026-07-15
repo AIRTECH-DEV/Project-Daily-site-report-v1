@@ -18,16 +18,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!Admin::checkCsrf()) {
         $flash = 'Invalid request token. Refresh and try again.'; $flashType = 'bad';
     } else {
-        $names  = $_POST['dev_name']  ?? [];
-        $mails  = $_POST['dev_email'] ?? [];
-        $phones = $_POST['dev_phone'] ?? [];
-
+        // dev[i] = { name, emails[], phones[] } — each developer can have many of both.
+        $clean = function (array $vals): array {
+            $out = [];
+            foreach ($vals as $v) {
+                $v = trim((string)$v);
+                if ($v !== '' && !in_array($v, $out, true)) $out[] = $v;
+            }
+            return $out;
+        };
         $emailMap = []; $phoneMap = [];
-        foreach ($names as $i => $nm) {
-            $nm = trim((string)$nm);
-            if ($nm === '') continue;
-            $emailMap[$nm] = trim((string)($mails[$i]  ?? ''));
-            $phoneMap[$nm] = trim((string)($phones[$i] ?? ''));
+        foreach (($_POST['dev'] ?? []) as $d) {
+            if (!is_array($d)) continue;
+            $nm = trim((string)($d['name'] ?? ''));
+            if ($nm === '') continue;                 // unnamed rows ignored
+            $emailMap[$nm] = implode(',', $clean((array)($d['emails'] ?? [])));
+            $phoneMap[$nm] = implode(',', $clean((array)($d['phones'] ?? [])));
         }
 
         $ov = Admin::overrides();
@@ -57,17 +63,20 @@ $names = array_values(array_unique(array_merge(
     array_keys($cfg['whatsapp']['developer_phones'] ?? [])
 )));
 sort($names);
+// split a stored "a@x, b@y" / "9198.. / 9199.." string into individual values
+$split = function (string $s): array {
+    $parts = array_filter(array_map('trim', preg_split('/[,;\/]+/', $s) ?: []), fn($v) => $v !== '');
+    return $parts ? array_values($parts) : [''];   // always at least one blank input
+};
 $rows = [];
 foreach ($names as $n) {
     $rows[] = [
-        'name'  => $n,
-        'email' => (string)($cfg['email']['developer_emails'][$n] ?? ''),
-        'phone' => (string)($cfg['whatsapp']['developer_phones'][$n] ?? ''),
-        'fixed' => isset($cfg['developer_building_sheets'][$n]),
+        'name'   => $n,
+        'emails' => $split((string)($cfg['email']['developer_emails'][$n] ?? '')),
+        'phones' => $split((string)($cfg['whatsapp']['developer_phones'][$n] ?? '')),
+        'fixed'  => isset($cfg['developer_building_sheets'][$n]),
     ];
 }
-$rows[] = ['name' => '', 'email' => '', 'phone' => '', 'fixed' => false];
-$rows[] = ['name' => '', 'email' => '', 'phone' => '', 'fixed' => false];
 
 $emailMode = $cfg['email']['mode'] ?? 'TEST';
 $waMode    = $cfg['whatsapp']['mode'] ?? 'TEST';
@@ -84,36 +93,59 @@ Layout::head('Settings', 'settings');
 
   <div class="card2">
     <div class="card2-head"><i class="bi bi-person-vcard text-primary"></i><h2>Developer Contacts</h2>
-      <span class="sub">client email &amp; WhatsApp number the daily report is sent to</span></div>
+      <span class="sub">every email &amp; WhatsApp number the daily report is sent to</span></div>
     <div class="card2-body">
-      <p style="color:#5b6b82;margin:0 0 14px;font-size:13px">
-        These replace the hardcoded developer contacts. Email supports comma-separated addresses; phone supports
-        multiple numbers separated by <span class="mono">/</span> or <span class="mono">,</span> (country code recommended, e.g. <span class="mono">9198XXXXXXXX</span>).
-        Leave blank to send nothing for that developer.
+      <p style="color:#5b6b82;margin:0 0 16px;font-size:13px">
+        Each report for a developer is sent to <b>all</b> of that developer's emails and <b>all</b> of their phone numbers.
+        Use <b>+ Add email</b> / <b>+ Add number</b> for more than one. Phones want a country code, e.g. <span class="mono">9198XXXXXXXX</span>.
+        Leave a developer with no email/phone to send nothing for them.
       </p>
-      <div class="table-wrap">
-        <table class="tbl">
-          <thead><tr><th style="width:210px">Developer</th><th>Client Email(s)</th><th>Client Phone(s)</th></tr></thead>
-          <tbody>
-            <?php foreach ($rows as $r): $slug = preg_replace('/[^a-z0-9]+/i','-',$r['name']); ?>
-              <tr id="dev-<?= Admin::e($slug) ?>">
-                <td>
-                  <?php if ($r['fixed']): ?>
-                    <input type="hidden" name="dev_name[]" value="<?= Admin::e($r['name']) ?>">
-                    <strong><?= Admin::e($r['name']) ?></strong>
-                    <div style="font-size:11px;color:#94a3b8">from progress sheet</div>
-                  <?php else: ?>
-                    <input class="inp" type="text" name="dev_name[]" value="<?= Admin::e($r['name']) ?>" placeholder="Developer name" style="width:100%">
-                  <?php endif; ?>
-                </td>
-                <td><input class="inp" type="text" name="dev_email[]" value="<?= Admin::e($r['email']) ?>" placeholder="client@example.com" style="width:100%"></td>
-                <td><input class="inp" type="text" name="dev_phone[]" value="<?= Admin::e($r['phone']) ?>" placeholder="9198XXXXXXXX" style="width:100%"></td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
+
+      <div id="devList">
+        <?php foreach ($rows as $i => $r): $slug = preg_replace('/[^a-z0-9]+/i','-', strtolower($r['name'])); ?>
+          <div class="dev-block" id="dev-<?= Admin::e($slug) ?>" data-idx="<?= $i ?>">
+            <div class="dev-head">
+              <i class="bi bi-building" style="color:#2f81f7"></i>
+              <?php if ($r['fixed']): ?>
+                <input type="hidden" name="dev[<?= $i ?>][name]" value="<?= Admin::e($r['name']) ?>">
+                <span class="dev-nm"><?= Admin::e($r['name']) ?></span>
+                <span class="tag">from progress sheet</span>
+              <?php else: ?>
+                <input class="inp dev-name-in" type="text" name="dev[<?= $i ?>][name]" value="<?= Admin::e($r['name']) ?>" placeholder="Developer name">
+                <button type="button" class="btn-x" title="Remove developer" onclick="rmDev(this)"><i class="bi bi-trash"></i></button>
+              <?php endif; ?>
+            </div>
+            <div class="dev-cols">
+              <div class="dev-col">
+                <label><i class="bi bi-envelope"></i> Client email(s)</label>
+                <div class="email-list">
+                  <?php foreach ($r['emails'] as $em): ?>
+                    <div class="multi-row">
+                      <input class="inp" type="text" name="dev[<?= $i ?>][emails][]" value="<?= Admin::e($em) ?>" placeholder="client@example.com">
+                      <button type="button" class="btn-x" onclick="rmRow(this)"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  <?php endforeach; ?>
+                </div>
+                <button type="button" class="btn-add" onclick="addField(this,'emails')"><i class="bi bi-plus-lg"></i> Add email</button>
+              </div>
+              <div class="dev-col">
+                <label><i class="bi bi-whatsapp"></i> Client phone(s)</label>
+                <div class="phone-list">
+                  <?php foreach ($r['phones'] as $ph): ?>
+                    <div class="multi-row">
+                      <input class="inp" type="text" name="dev[<?= $i ?>][phones][]" value="<?= Admin::e($ph) ?>" placeholder="9198XXXXXXXX">
+                      <button type="button" class="btn-x" onclick="rmRow(this)"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                  <?php endforeach; ?>
+                </div>
+                <button type="button" class="btn-add" onclick="addField(this,'phones')"><i class="bi bi-plus-lg"></i> Add number</button>
+              </div>
+            </div>
+          </div>
+        <?php endforeach; ?>
       </div>
-      <p style="color:#94a3b8;font-size:12px;margin:12px 0 0"><i class="bi bi-info-circle"></i> The last blank rows are for adding new developers. Empty names are ignored.</p>
+
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addDev()" style="margin-top:6px"><i class="bi bi-plus-circle"></i> Add developer</button>
     </div>
   </div>
 
@@ -169,4 +201,61 @@ Layout::head('Settings', 'settings');
     </p>
   </div>
 </div>
+<script>
+(function () {
+  let nextIdx = <?= count($rows) ?>;   // fresh group index for newly-added developers
+
+  window.rmRow = function (btn) {
+    const list = btn.closest('.email-list, .phone-list');
+    btn.closest('.multi-row').remove();
+    if (list && !list.querySelector('.multi-row')) addFieldTo(list); // keep one blank input
+  };
+  window.rmDev = function (btn) { btn.closest('.dev-block').remove(); };
+
+  function addFieldTo(list) {
+    const block = list.closest('.dev-block');
+    const idx = block.dataset.idx;
+    const isEmail = list.classList.contains('email-list');
+    const key = isEmail ? 'emails' : 'phones';
+    const ph  = isEmail ? 'client@example.com' : '9198XXXXXXXX';
+    const row = document.createElement('div');
+    row.className = 'multi-row';
+    row.innerHTML =
+      '<input class="inp" type="text" name="dev[' + idx + '][' + key + '][]" placeholder="' + ph + '">' +
+      '<button type="button" class="btn-x" onclick="rmRow(this)"><i class="bi bi-x-lg"></i></button>';
+    list.appendChild(row);
+    row.querySelector('input').focus();
+  }
+
+  window.addField = function (btn, key) {
+    const block = btn.closest('.dev-block');
+    addFieldTo(block.querySelector(key === 'emails' ? '.email-list' : '.phone-list'));
+  };
+
+  window.addDev = function () {
+    const idx = nextIdx++;
+    const b = document.createElement('div');
+    b.className = 'dev-block';
+    b.dataset.idx = idx;
+    b.innerHTML =
+      '<div class="dev-head"><i class="bi bi-building" style="color:#2f81f7"></i>' +
+        '<input class="inp dev-name-in" type="text" name="dev[' + idx + '][name]" placeholder="Developer name">' +
+        '<button type="button" class="btn-x" title="Remove developer" onclick="rmDev(this)"><i class="bi bi-trash"></i></button></div>' +
+      '<div class="dev-cols">' +
+        '<div class="dev-col"><label><i class="bi bi-envelope"></i> Client email(s)</label>' +
+          '<div class="email-list"><div class="multi-row">' +
+            '<input class="inp" type="text" name="dev[' + idx + '][emails][]" placeholder="client@example.com">' +
+            '<button type="button" class="btn-x" onclick="rmRow(this)"><i class="bi bi-x-lg"></i></button></div></div>' +
+          '<button type="button" class="btn-add" onclick="addField(this,\'emails\')"><i class="bi bi-plus-lg"></i> Add email</button></div>' +
+        '<div class="dev-col"><label><i class="bi bi-whatsapp"></i> Client phone(s)</label>' +
+          '<div class="phone-list"><div class="multi-row">' +
+            '<input class="inp" type="text" name="dev[' + idx + '][phones][]" placeholder="9198XXXXXXXX">' +
+            '<button type="button" class="btn-x" onclick="rmRow(this)"><i class="bi bi-x-lg"></i></button></div></div>' +
+          '<button type="button" class="btn-add" onclick="addField(this,\'phones\')"><i class="bi bi-plus-lg"></i> Add number</button></div>' +
+      '</div>';
+    document.getElementById('devList').appendChild(b);
+    b.querySelector('.dev-name-in').focus();
+  };
+})();
+</script>
 <?php Layout::foot();
