@@ -224,6 +224,31 @@ class Admin
         return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
     }
 
+    /* ---------------- vendored front-end assets ---------------- */
+    // Bootstrap / Bootstrap-Icons / Chart.js load from the CDN by default, but
+    // some networks serve JS/CSS yet block cross-origin .woff2 fonts (icons show
+    // as boxes). vendor_fetch.php downloads them locally; once present we serve
+    // them same-origin so icons always render (and it works fully offline).
+
+    public static function vendorDir(): string
+    {
+        return __DIR__ . '/../assets/vendor/';
+    }
+
+    /** Local URL if the file has been localized, else the CDN URL. */
+    public static function vendor(string $file, string $cdn): string
+    {
+        return is_file(self::vendorDir() . $file) ? self::BASE . '/assets/vendor/' . $file : $cdn;
+    }
+
+    public static function vendorReady(): bool
+    {
+        foreach (['bootstrap.min.css', 'bootstrap-icons.css', 'fonts/bootstrap-icons.woff2', 'chart.umd.min.js', 'bootstrap.bundle.min.js'] as $f) {
+            if (!is_file(self::vendorDir() . $f)) return false;
+        }
+        return true;
+    }
+
     /** overrides.json path + current contents (admin-tunable runtime config). */
     public static function overridesPath(): string
     {

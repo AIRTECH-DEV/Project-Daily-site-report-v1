@@ -40,14 +40,16 @@ $notifSent  = (int)$one("SELECT COUNT(*) FROM process_log WHERE step IN ('email'
 
 $wkDelta = $prevWk > 0 ? round(($week - $prevWk) * 100 / $prevWk) : ($week > 0 ? 100 : 0);
 
-// ---- Trend: reports per day, last 14 days ----
+// ---- Trend: reports per day, selectable window ----
+$days = (int)($_GET['days'] ?? 14);
+if (!in_array($days, [7, 14, 30], true)) $days = 14;
 $trend = array_fill_keys(
-    array_map(fn($i) => date('Y-m-d', strtotime("-$i day")), range(13, 0)),
+    array_map(fn($i) => date('Y-m-d', strtotime("-$i day")), range($days - 1, 0)),
     0
 );
-foreach ($db->query("SELECT DATE(created_at) d, COUNT(*) c FROM submissions WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 13 DAY) GROUP BY DATE(created_at)") as $r) {
-    $trend[$r['d']] = (int)$r['c'];
-}
+$st = $db->prepare("SELECT DATE(created_at) d, COUNT(*) c FROM submissions WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) GROUP BY DATE(created_at)");
+$st->execute([$days - 1]);
+foreach ($st as $r) { if (isset($trend[$r['d']])) $trend[$r['d']] = (int)$r['c']; }
 $trendLabels = array_map(fn($d) => date('d M', strtotime($d)), array_keys($trend));
 $trendData   = array_values($trend);
 
@@ -56,13 +58,6 @@ $bySite = []; foreach ($db->query("SELECT site_type, COUNT(*) c FROM submissions
 $byClient = []; foreach ($db->query("SELECT client_type, COUNT(*) c FROM submissions GROUP BY client_type") as $r) $byClient[$r['client_type'] ?: 'Unknown'] = (int)$r['c'];
 $byStatus = ['Done' => 0, 'Pending' => 0, 'Hold' => 0];
 foreach ($db->query("SELECT status, COUNT(*) c FROM submissions WHERE status<>'' GROUP BY status") as $r) $byStatus[$r['status']] = (int)$r['c'];
-
-// ---- Pipeline outcomes per step ----
-$steps = ['sheet_write','photo_save','pms_update','pdf','email','whatsapp'];
-$pipe = array_fill_keys($steps, ['done'=>0,'failed'=>0,'skipped'=>0]);
-foreach ($db->query("SELECT step, status, COUNT(*) c FROM process_log GROUP BY step, status") as $r) {
-    if (isset($pipe[$r['step']][$r['status']])) $pipe[$r['step']][$r['status']] = (int)$r['c'];
-}
 
 // ---- Top engineers ----
 $engineers = [];
@@ -78,47 +73,74 @@ Layout::head('Dashboard', 'dashboard');
 ?>
 
 <div class="kpi-grid">
-  <div class="kpi"><div class="kpi-ico ic-blue"><i class="bi bi-card-list"></i></div>
-    <div class="kpi-label">Total Reports</div><div class="kpi-value"><?= $total ?></div>
-    <div class="kpi-foot"><?= $today ?> today</div></div>
+  <div class="kpi grad grad-blue">
+    <div class="kpi-top"><span class="kpi-ic"><i class="bi bi-file-earmark-text"></i></span><span class="kpi-label">Total Reports</span></div>
+    <div class="kpi-value"><?= $total ?></div>
+    <div class="kpi-foot"><i class="bi bi-arrow-up-short"></i> <?= $today ?> today</div></div>
 
-  <div class="kpi"><div class="kpi-ico ic-green"><i class="bi bi-graph-up-arrow"></i></div>
-    <div class="kpi-label">This Week</div><div class="kpi-value"><?= $week ?></div>
-    <div class="kpi-foot"><?php if ($wkDelta >= 0): ?><span class="up">▲ <?= $wkDelta ?>%</span><?php else: ?><span class="down">▼ <?= abs($wkDelta) ?>%</span><?php endif; ?> vs prev week</div></div>
+  <div class="kpi grad grad-cyan">
+    <div class="kpi-top"><span class="kpi-ic"><i class="bi bi-calendar-week"></i></span><span class="kpi-label">This Week</span></div>
+    <div class="kpi-value"><?= $week ?></div>
+    <div class="kpi-foot"><i class="bi bi-arrow-<?= $wkDelta >= 0 ? 'up' : 'down' ?>-short"></i> <?= abs($wkDelta) ?>% vs last week</div></div>
 
-  <div class="kpi"><div class="kpi-ico ic-slate"><i class="bi bi-buildings"></i></div>
-    <div class="kpi-label">Active Projects</div><div class="kpi-value"><?= $projects ?></div>
+  <div class="kpi grad grad-violet">
+    <div class="kpi-top"><span class="kpi-ic"><i class="bi bi-briefcase"></i></span><span class="kpi-label">Active Projects</span></div>
+    <div class="kpi-value"><?= $projects ?></div>
     <div class="kpi-foot"><?= $genProj ?> general · <?= $devUnit ?> dev units</div></div>
 
-  <a class="kpi" href="<?= Admin::BASE ?>/holds.php" style="text-decoration:none;color:inherit;cursor:pointer">
-    <div class="kpi-ico <?= $curHold > 0 ? 'ic-red' : 'ic-amber' ?>"><i class="bi bi-pause-circle"></i></div>
-    <div class="kpi-label">On Hold</div><div class="kpi-value"><?= $curHold ?></div>
-    <div class="kpi-foot" style="color:#2f81f7;font-weight:600">View why &amp; who <i class="bi bi-arrow-right"></i></div></a>
+  <a class="kpi grad grad-coral" href="<?= Admin::BASE ?>/holds.php">
+    <div class="kpi-top"><span class="kpi-ic"><i class="bi bi-pause-circle"></i></span><span class="kpi-label">On Hold</span></div>
+    <div class="kpi-value"><?= $curHold ?></div>
+    <div class="kpi-foot">View details <i class="bi bi-arrow-right"></i></div></a>
 
-  <div class="kpi"><div class="kpi-ico ic-blue"><i class="bi bi-send-check"></i></div>
-    <div class="kpi-label">Notifications Sent</div><div class="kpi-value"><?= $notifSent ?></div>
-    <div class="kpi-foot">email + WhatsApp</div></div>
+  <div class="kpi grad grad-pink">
+    <div class="kpi-top"><span class="kpi-ic"><i class="bi bi-bell"></i></span><span class="kpi-label">Notifications</span></div>
+    <div class="kpi-value"><?= $notifSent ?></div>
+    <div class="kpi-foot">email + WhatsApp sent</div></div>
+</div>
+
+<?php
+$siteTotal = array_sum($bySite);
+$mixColors = ['#2f81f7', '#7c5cff', '#94a3b8', '#d97706'];
+$legend = [];
+$ci = 0;
+foreach ($bySite as $name => $c) {
+    $pct = $siteTotal > 0 ? round($c * 100 / $siteTotal) : 0;
+    $legend[] = ['label' => $name, 'pct' => $pct, 'color' => $mixColors[$ci % count($mixColors)]];
+    $ci++;
+}
+?>
+<div class="grid-2">
+  <div class="card2">
+    <div class="card2-head"><h2>Report Volume</h2><span class="spacer"></span>
+      <select class="card-select" onchange="location.href='?days='+this.value">
+        <?php foreach ([7 => 'Last 7 days', 14 => 'Last 14 days', 30 => 'Last 30 days'] as $v => $t): ?>
+          <option value="<?= $v ?>" <?= $days === $v ? 'selected' : '' ?>><?= $t ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="card2-body"><div class="chart-box"><canvas id="trendChart"></canvas></div></div>
+  </div>
+  <div class="card2">
+    <div class="card2-head"><h2>Report Mix</h2></div>
+    <div class="card2-body">
+      <div class="donut-wrap">
+        <div class="chart-box"><canvas id="mixChart"></canvas></div>
+        <div class="donut-center"><div class="dc-num"><?= $siteTotal ?></div><div class="dc-lbl">Total</div></div>
+      </div>
+      <div class="donut-legend">
+        <?php foreach ($legend as $l): ?>
+          <span class="dl"><span class="dot" style="background:<?= $l['color'] ?>"></span><?= Admin::e($l['label']) ?> (<?= $l['pct'] ?>%)</span>
+        <?php endforeach; ?>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="grid-2">
   <div class="card2">
-    <div class="card2-head"><i class="bi bi-activity text-primary"></i><h2>Report Volume</h2><span class="sub">last 14 days</span></div>
-    <div class="card2-body"><div class="chart-box"><canvas id="trendChart"></canvas></div></div>
-  </div>
-  <div class="card2">
-    <div class="card2-head"><i class="bi bi-pie-chart text-primary"></i><h2>Report Mix</h2></div>
-    <div class="card2-body"><div class="chart-box"><canvas id="mixChart"></canvas></div></div>
-  </div>
-</div>
-
-<div class="grid-3">
-  <div class="card2">
     <div class="card2-head"><i class="bi bi-clipboard-check text-primary"></i><h2>Work Status</h2></div>
     <div class="card2-body"><div class="chart-box sm"><canvas id="statusChart"></canvas></div></div>
-  </div>
-  <div class="card2">
-    <div class="card2-head"><i class="bi bi-diagram-2 text-primary"></i><h2>Pipeline Steps</h2></div>
-    <div class="card2-body"><div class="chart-box sm"><canvas id="pipeChart"></canvas></div></div>
   </div>
   <div class="card2">
     <div class="card2-head"><i class="bi bi-person-badge text-primary"></i><h2>Top Engineers</h2></div>
@@ -146,11 +168,11 @@ Layout::head('Dashboard', 'dashboard');
       <?php foreach ($recent as $r): ?>
         <tr>
           <td><a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['id'] ?>"><?= Admin::e(projectLabel($r)) ?></a></td>
-          <td><span class="pill pill-muted"><?= Admin::e($r['site_type']) ?></span> <?= Admin::e($r['client_type']) ?></td>
+          <td><span class="pill pill-type"><?= Admin::e($r['site_type']) ?></span></td>
           <td><?= Admin::e(snip($r['current_status'], 26)) ?: '—' ?></td>
           <td><?= Layout::statusBadge((string)$r['status']) ?></td>
           <td><?= Admin::e($r['engineer']) ?: '—' ?></td>
-          <td><?= Layout::statusBadge((string)$r['overall_status']) ?></td>
+          <td><?= Layout::pipelinePill((string)$r['overall_status']) ?></td>
           <td title="<?= Admin::e(fmtDateTime($r['created_at'])) ?>"><?= Admin::e(ago($r['created_at'])) ?></td>
           <td><a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['id'] ?>"><i class="bi bi-chevron-right"></i></a></td>
         </tr>
@@ -175,9 +197,9 @@ new Chart(document.getElementById("trendChart"), {
 new Chart(document.getElementById("mixChart"), {
   type:"doughnut",
   data:{labels:' . json_encode(array_keys($bySite)) . ',datasets:[
-    {label:"Site type",data:' . json_encode(array_values($bySite)) . ',backgroundColor:[BRAND,PURPLE,SLATE,AMBER]}
+    {label:"Site type",data:' . json_encode(array_values($bySite)) . ',backgroundColor:' . json_encode($mixColors) . ',borderWidth:0,hoverOffset:6}
   ]},
-  options:{responsive:true,maintainAspectRatio:false,cutout:"58%",plugins:{legend:{position:"bottom",labels:{usePointStyle:true,padding:14}}}}
+  options:{responsive:true,maintainAspectRatio:false,cutout:"72%",plugins:{legend:{display:false}}}
 });
 new Chart(document.getElementById("statusChart"), {
   type:"bar",
@@ -185,17 +207,6 @@ new Chart(document.getElementById("statusChart"), {
     backgroundColor:[GREEN,AMBER,RED],borderRadius:6,barThickness:46}]},
   options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
     scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:"#eef2f8"}},x:{grid:{display:false}}}}
-});
-new Chart(document.getElementById("pipeChart"), {
-  type:"bar",
-  data:{labels:' . json_encode(array_map(fn($s) => ucfirst(str_replace('_',' ',$s)), $steps)) . ',
-    datasets:[
-      {label:"Done",data:' . json_encode(array_map(fn($s) => $pipe[$s]['done'], $steps)) . ',backgroundColor:GREEN,borderRadius:4,stack:"s"},
-      {label:"Skipped",data:' . json_encode(array_map(fn($s) => $pipe[$s]['skipped'], $steps)) . ',backgroundColor:SLATE,borderRadius:4,stack:"s"},
-      {label:"Failed",data:' . json_encode(array_map(fn($s) => $pipe[$s]['failed'], $steps)) . ',backgroundColor:RED,borderRadius:4,stack:"s"}
-    ]},
-  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom",labels:{usePointStyle:true,padding:12,boxWidth:8}}},
-    scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true,ticks:{precision:0},grid:{color:"#eef2f8"}}}}
 });
 </script>';
 Layout::foot($js);

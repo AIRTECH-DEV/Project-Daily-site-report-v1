@@ -28,6 +28,22 @@ $issues = $db->query(
      ORDER BY p.id DESC LIMIT 60"
 )->fetchAll();
 
+// ---- Per-report processing timeline (moved here from the report detail page) ----
+$stepName = ['photo_save'=>'Photo Save','sheet_write'=>'Sheet Save','pms_update'=>'PMS Update','pdf'=>'PDF','email'=>'Email','whatsapp'=>'WhatsApp'];
+$dotTone  = ['done'=>'ok','failed'=>'bad','skipped'=>'muted','running'=>'info','pending'=>'warn'];
+$dotIcon  = ['ok'=>'bi-check-lg','bad'=>'bi-x-lg','muted'=>'bi-dash-lg','info'=>'bi-arrow-repeat','warn'=>'bi-hourglass'];
+
+$reportId = (int)($_GET['report'] ?? 0);
+$rptSub = null; $rptLogs = [];
+if ($reportId > 0) {
+    $q = $db->prepare("SELECT * FROM submissions WHERE id = ?"); $q->execute([$reportId]); $rptSub = $q->fetch();
+    if ($rptSub) {
+        $q = $db->prepare("SELECT * FROM process_log WHERE submission_id = ? ORDER BY id ASC");
+        $q->execute([$reportId]); $rptLogs = $q->fetchAll();
+    }
+}
+$pickList = $db->query("SELECT id, project, developer, building, flat_no, client_type, created_at FROM submissions ORDER BY id DESC LIMIT 50")->fetchAll();
+
 require __DIR__ . '/inc/layout.php';
 Layout::head('Pipeline Health', 'pipeline');
 ?>
@@ -36,6 +52,42 @@ Layout::head('Pipeline Health', 'pipeline');
   <div class="kpi"><div class="kpi-ico <?= $totalFailed ? 'ic-red' : 'ic-slate' ?>"><i class="bi bi-x-octagon"></i></div><div class="kpi-label">Failures</div><div class="kpi-value"><?= $totalFailed ?></div><div class="kpi-foot">need attention</div></div>
   <div class="kpi"><div class="kpi-ico ic-slate"><i class="bi bi-skip-forward"></i></div><div class="kpi-label">Skipped</div><div class="kpi-value"><?= $totalSkip ?></div><div class="kpi-foot">mode off / not applicable</div></div>
   <div class="kpi"><div class="kpi-ico <?= $stuck ? 'ic-amber' : 'ic-slate' ?>"><i class="bi bi-hourglass"></i></div><div class="kpi-label">Stuck &gt;30m</div><div class="kpi-value"><?= $stuck ?></div><div class="kpi-foot">running / pending</div></div>
+</div>
+
+<div class="card2">
+  <div class="card2-head"><i class="bi bi-list-ol text-primary"></i><h2>Report Processing Timeline</h2>
+    <span class="spacer"></span>
+    <select class="card-select" onchange="if(this.value)location.href='?report='+this.value">
+      <option value="">Select a report…</option>
+      <?php foreach ($pickList as $r): ?>
+        <option value="<?= (int)$r['id'] ?>" <?= $reportId === (int)$r['id'] ? 'selected' : '' ?>>#<?= (int)$r['id'] ?> · <?= Admin::e(snip(projectLabel($r), 32)) ?> · <?= Admin::e(fmtDate($r['created_at'])) ?></option>
+      <?php endforeach; ?>
+    </select>
+  </div>
+  <div class="card2-body">
+    <?php if (!$rptSub): ?>
+      <div class="t-empty">Pick a report above to see how its pipeline ran — photo save → sheet → PMS → PDF → email → WhatsApp.</div>
+    <?php else: ?>
+      <div style="margin-bottom:16px;font-size:13.5px">
+        <a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$rptSub['id'] ?>"><?= Admin::e(projectLabel($rptSub)) ?></a>
+        <span style="color:#8190a5"> · report #<?= (int)$rptSub['id'] ?> · <?= Admin::e(fmtDateTime($rptSub['created_at'])) ?></span>
+      </div>
+      <?php if (!$rptLogs): ?><div class="t-empty">No pipeline steps logged for this report.</div><?php endif; ?>
+      <ul class="tl2">
+        <?php foreach ($rptLogs as $l): $tone = $dotTone[$l['status']] ?? 'muted'; ?>
+          <li>
+            <span class="tl2-dot <?= $tone ?>"><i class="bi <?= $dotIcon[$tone] ?? 'bi-dot' ?>"></i></span>
+            <div class="tl2-step"><?= Admin::e($stepName[$l['step']] ?? ucwords(str_replace('_', ' ', $l['step']))) ?> <?= Layout::statusBadge((string)$l['status']) ?></div>
+            <div class="tl2-meta">
+              <?php if ($l['finished_at']): ?><?= Admin::e(fmtDateTime($l['finished_at'])) ?><?php elseif ($l['started_at']): ?><?= Admin::e(fmtDateTime($l['started_at'])) ?><?php endif; ?>
+              <?php if ($l['target']): ?> · <span class="mono"><?= Admin::e(snip($l['target'], 54)) ?></span><?php endif; ?>
+            </div>
+            <?php if ($l['message']): ?><div class="tl2-msg"><?= Admin::e($l['message']) ?></div><?php endif; ?>
+          </li>
+        <?php endforeach; ?>
+      </ul>
+    <?php endif; ?>
+  </div>
 </div>
 
 <div class="card2">
