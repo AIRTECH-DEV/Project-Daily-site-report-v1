@@ -293,7 +293,7 @@ class Layout
         echo '<link rel="icon" type="image/png" href="' . $A . '/favicon.png">';
         echo '<link rel="stylesheet" href="' . Admin::e(Admin::vendor('bootstrap.min.css', 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css')) . '">';
         echo '<link rel="stylesheet" href="' . Admin::e(Admin::vendor('bootstrap-icons.css', 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css')) . '">';
-        echo '<link rel="stylesheet" href="' . $b . '/assets/admin.css?v=8">';
+        echo '<link rel="stylesheet" href="' . $b . '/assets/admin.css?v=12">';
         echo '</head><body>';
 
         echo '<div class="admin-shell">';

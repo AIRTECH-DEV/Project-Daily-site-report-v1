@@ -54,30 +54,24 @@ Layout::head('Worker · ' . $w['name'], 'workforce', 'worker');
 <div class="breadcrumb2"><a href="<?= Admin::BASE ?>/workforce.php">Workforce</a> › <?= Admin::e($w['name']) ?></div>
 
 <div class="card2">
-  <div class="detail-head">
-    <div class="dh-ic" style="background:<?= $w['type']==='Contractor'?'var(--warn-bg)':'var(--info-bg)' ?>;color:<?= $w['type']==='Contractor'?'var(--warn)':'var(--info)' ?>"><i class="bi bi-<?= $w['type']==='Contractor'?'hammer':'person-workspace' ?>"></i></div>
-    <div class="dh-titles">
-      <h2><?= Admin::e($w['name']) ?> <span class="pill pill-<?= $w['type']==='Contractor'?'warn':'type' ?>"><?= Admin::e($w['type']) ?></span></h2>
-      <div class="dh-sub"><?= $w['contractor'] ? 'Company: ' . Admin::e($w['contractor']) . ' · ' : '' ?><?= (int)$w['visits'] ?> visits · <?= count($projects) ?> projects · seen <?= Admin::e(fmtDate($w['first_seen'])) ?> → <?= Admin::e(fmtDate($w['last_seen'])) ?></div>
+  <div class="wf-head">
+    <div class="wf-id">
+      <div class="dh-ic" style="background:<?= $w['type']==='Contractor'?'var(--warn-bg)':'var(--info-bg)' ?>;color:<?= $w['type']==='Contractor'?'var(--warn)':'var(--info)' ?>"><i class="bi bi-<?= $w['type']==='Contractor'?'hammer':'person-workspace' ?>"></i></div>
+      <div class="dh-titles">
+        <h2><?= Admin::e($w['name']) ?> <span class="pill pill-<?= $w['type']==='Contractor'?'warn':'type' ?>"><?= Admin::e($w['type']) ?></span></h2>
+        <div class="dh-sub"><?= $w['contractor'] ? 'Company: ' . Admin::e($w['contractor']) . ' · ' : '' ?><?= (int)$w['visits'] ?> visits · <?= count($projects) ?> projects · seen <?= Admin::e(fmtDate($w['first_seen'])) ?> → <?= Admin::e(fmtDate($w['last_seen'])) ?></div>
+      </div>
     </div>
-  </div>
-  <div class="info-grid">
-    <div class="info-col">
-      <div class="info-row"><div class="info-key"><i class="bi bi-diagram-3"></i>Projects</div><div class="info-val"><?= count($projects) ?></div></div>
-      <div class="info-row"><div class="info-key"><i class="bi bi-list-check"></i>Distinct steps</div><div class="info-val"><?= count($stepsAll) ?></div></div>
-    </div>
-    <div class="info-col">
-      <div class="info-row"><div class="info-key"><i class="bi bi-calendar-check"></i>Total visits</div><div class="info-val"><?= (int)$w['visits'] ?></div></div>
-      <div class="info-row"><div class="info-key"><i class="bi bi-clock-history"></i>Last active</div><div class="info-val"><?= Admin::e(fmtDate($w['last_seen'])) ?> <span class="info-val soft">(<?= Admin::e(ago($w['last_seen'])) ?>)</span></div></div>
-    </div>
-    <div class="info-col">
-      <div class="info-row"><div class="info-key"><i class="bi bi-graph-up"></i>Active months</div><div class="info-val"><?= count($months) ?></div></div>
-    </div>
+    <div class="wstat wblue"><div class="ws-ic"><i class="bi bi-briefcase-fill"></i></div><div class="ws-l">Projects</div><div class="ws-v"><?= count($projects) ?></div></div>
+    <div class="wstat wgreen"><div class="ws-ic"><i class="bi bi-people-fill"></i></div><div class="ws-l">Total Visits</div><div class="ws-v"><?= (int)$w['visits'] ?></div></div>
+    <div class="wstat wpurple"><div class="ws-ic"><i class="bi bi-list-check"></i></div><div class="ws-l">Distinct Steps</div><div class="ws-v"><?= count($stepsAll) ?></div></div>
+    <div class="wstat wamber"><div class="ws-ic"><i class="bi bi-clock-history"></i></div><div class="ws-l">Last Active</div><div class="ws-v"><?= Admin::e(fmtDate($w['last_seen'])) ?><small>(<?= Admin::e(ago($w['last_seen'])) ?>)</small></div></div>
+    <div class="wstat wpink"><div class="ws-ic"><i class="bi bi-graph-up-arrow"></i></div><div class="ws-l">Active Months</div><div class="ws-v"><?= count($months) ?></div></div>
   </div>
 </div>
 
 <div class="grid-2">
-  <div class="card2">
+  <div class="card2 card-accent-blue">
     <div class="card2-head"><i class="bi bi-diagram-3 text-primary"></i><h2>Projects Worked</h2></div>
     <div class="card2-body">
       <?php if (!$projects): ?><div class="t-empty">None.</div><?php endif; ?>
@@ -92,7 +86,7 @@ Layout::head('Worker · ' . $w['name'], 'workforce', 'worker');
     </div>
   </div>
 
-  <div class="card2">
+  <div class="card2 card-accent-purple">
     <div class="card2-head"><i class="bi bi-bar-chart text-primary"></i><h2>Activity by Month</h2></div>
     <div class="card2-body">
       <?php if (!$months): ?><div class="t-empty">None.</div><?php endif; ?>
@@ -121,7 +115,7 @@ Layout::head('Worker · ' . $w['name'], 'workforce', 'worker');
           <tr>
             <td><?= Admin::e(fmtDate($r['visit_date'] ?: $r['created_at'])) ?></td>
             <td><a class="row-link" href="<?= Admin::BASE ?>/project.php?key=<?= urlencode($r['project_key']) ?>"><?= Admin::e($r['label'] ?: $r['project_key']) ?></a></td>
-            <td class="info-val soft" style="font-size:12.5px"><?= Admin::e($r['steps']) ?: '—' ?></td>
+            <td><?php $sts = array_filter(array_map('trim', explode(',', (string)$r['steps']))); if (!$sts): ?><span class="info-val soft">—</span><?php else: foreach ($sts as $st): ?><span class="pill pill-type"><?= Admin::e($st) ?></span> <?php endforeach; endif; ?></td>
             <td><?= Admin::e($r['engineer']) ?: '—' ?></td>
             <td><a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['submission_id'] ?>">#<?= (int)$r['submission_id'] ?></a></td>
           </tr>

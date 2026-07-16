@@ -118,6 +118,7 @@ Layout::head('Settings', 'settings');
 
 <form method="POST">
   <?= Admin::csrfField() ?>
+  <fieldset <?= Admin::isViewer() ? 'disabled' : '' ?> class="ro-fieldset">
 
   <div class="card2">
     <div class="card2-head"><i class="bi bi-person-vcard text-primary"></i><h2>Developer Contacts</h2>
@@ -263,6 +264,7 @@ Layout::head('Settings', 'settings');
     <a class="btn btn-ghost" href="<?= Admin::BASE ?>/developers.php">View developers</a>
   </div>
   <?php endif; ?>
+  </fieldset>
 </form>
 
 <div class="card2" style="margin-top:22px">

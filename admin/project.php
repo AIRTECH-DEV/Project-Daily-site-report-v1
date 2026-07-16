@@ -69,6 +69,7 @@ foreach ($canon as $i => $nm) {
 }
 $changes = [];      // chronological status changes
 $prevStatus = [];
+$lastHoldReason = [];   // remember why a step was held, to carry into its resolution
 $remarksLog = [];   // activity / next-plan / hold remarks per visit
 
 foreach ($visits as $v) {
@@ -100,13 +101,18 @@ foreach ($visits as $v) {
         if ($steps[$k]['actualStart'] === '') $steps[$k]['actualStart'] = $date;
         $steps[$k]['status'] = $stt;
         if ($stt === 'Done' && $steps[$k]['doneOn'] === '') { $steps[$k]['doneOn'] = $date; $steps[$k]['author'] = $author; $steps[$k]['pe'] = $pe; }
+        $reason = '';
         if ($stt === 'Hold') {
             $party = holdParty((string)($e['holdReason'] ?? ''));
             $detail = trim((string)($e['holdReasonDetail'] ?? ''));
+            $reason = trim(($party ? "Stuck on $party" : 'On hold') . ($detail ? " — $detail" : ''));
+            if ($reason !== '') $lastHoldReason[$k] = $reason;
             $steps[$k]['remarks'][] = trim(($party ? "Hold by $party" : 'Hold') . ($detail ? ": $detail" : ''));
         }
         if (($prevStatus[$k] ?? '') !== $stt) {
-            $changes[] = ['date'=>$v['created_at'], 'step'=>$nm, 'from'=>$prevStatus[$k] ?? '', 'to'=>$stt, 'author'=>$author, 'pe'=>$pe];
+            // moving OUT of hold keeps the earlier hold reason so the log never loses it
+            $resolved = (($prevStatus[$k] ?? '') === 'Hold' && $stt !== 'Hold') ? ($lastHoldReason[$k] ?? '') : '';
+            $changes[] = ['date'=>$v['created_at'], 'step'=>$nm, 'from'=>$prevStatus[$k] ?? '', 'to'=>$stt, 'author'=>$author, 'pe'=>$pe, 'reason'=>$reason, 'resolved'=>$resolved];
             $prevStatus[$k] = $stt;
         }
     }
@@ -261,6 +267,8 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
           <li>
             <span class="tl2-dot <?= $tone ?>"><i class="bi <?= $ch['to']==='Done'?'bi-check-lg':($ch['to']==='Hold'?'bi-pause':'bi-arrow-right') ?>"></i></span>
             <div class="tl2-step"><?= Admin::e($ch['step']) ?> <?= Layout::statusBadge($ch['to']) ?></div>
+            <?php if (!empty($ch['reason'])): ?><div class="tl2-reason"><i class="bi bi-pause-circle"></i> <?= Admin::e($ch['reason']) ?></div><?php endif; ?>
+            <?php if (!empty($ch['resolved'])): ?><div class="tl2-resolved"><i class="bi bi-check-circle"></i> Resolved — earlier hold: <?= Admin::e($ch['resolved']) ?></div><?php endif; ?>
             <div class="tl2-meta"><?= Admin::e(fmtDateTime($ch['date'])) ?> · PE <?= Admin::e($ch['pe']) ?: '—' ?> · by <?= Admin::e($ch['author']) ?></div>
           </li>
         <?php endforeach; ?>

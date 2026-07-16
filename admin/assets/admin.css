@@ -206,6 +206,36 @@ a.mini:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .proj-cols .pcol { min-width: 0; }
 @media (max-width: 1050px) { .proj-cols { grid-template-columns: 1fr; } }
 
+/* ---------------- workforce 360: identity + pastel stat cards ---------------- */
+.wf-head { display: grid; grid-template-columns: minmax(230px, 1.5fr) repeat(5, 1fr); gap: 12px; padding: 14px; align-items: stretch; }
+@media (max-width: 1150px) { .wf-head { grid-template-columns: repeat(3, 1fr); } .wf-head .wf-id { grid-column: 1 / -1; } }
+@media (max-width: 620px)  { .wf-head { grid-template-columns: repeat(2, 1fr); } }
+.wf-id { display: flex; align-items: center; gap: 14px; background: #f4f8fd; border: 1px solid var(--line-soft); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+.wf-id .dh-titles { min-width: 0; }
+.wf-id h2 { font-size: 19px; font-weight: 800; margin: 0; color: #0f1b30; display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.wf-id .dh-sub { color: var(--muted); font-size: 12px; margin-top: 5px; line-height: 1.5; }
+.wstat { border-radius: 14px; padding: 13px 14px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.wstat .ws-ic { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 17px; margin-bottom: 3px; }
+.wstat .ws-l { font-size: 11.5px; font-weight: 600; color: #5b6b82; }
+.wstat .ws-v { font-size: 22px; font-weight: 800; color: #0f1b30; line-height: 1.15; word-break: break-word; }
+.wstat .ws-v small { display: block; font-size: 11px; font-weight: 600; color: #8190a5; margin-top: 2px; }
+.wstat.wblue   { background: #eaf1fe; } .wstat.wblue   .ws-ic { background: #3b82f6; }
+.wstat.wgreen  { background: #e7f7ec; } .wstat.wgreen  .ws-ic { background: #22c55e; }
+.wstat.wpurple { background: #efe9fe; } .wstat.wpurple .ws-ic { background: #8b5cf6; }
+.wstat.wamber  { background: #fdf3e0; } .wstat.wamber  .ws-ic { background: #f59e0b; }
+.wstat.wpink   { background: #fdeaf3; } .wstat.wpink   .ws-ic { background: #ec4899; }
+.card-accent-blue   { border-left: 4px solid #3b82f6; }
+.card-accent-purple { border-left: 4px solid #8b5cf6; }
+
+/* read-only form wrapper (viewer role) — controls disabled, look clearly locked */
+.ro-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ro-fieldset[disabled] .inp,
+.ro-fieldset[disabled] input,
+.ro-fieldset[disabled] select { background: #f4f6fa; color: #6b7a90; cursor: not-allowed; }
+.ro-fieldset[disabled] .btn-add,
+.ro-fieldset[disabled] .btn-x,
+.ro-fieldset[disabled] .btn { opacity: .5; pointer-events: none; }
+
 .chart-box { position: relative; height: 300px; }
 .chart-box.sm { height: 240px; }
 
@@ -361,6 +391,8 @@ textarea.inp { height: auto; padding: 10px 12px; resize: vertical; }
 .tl2-dot.warn { background: var(--warn); } .tl2-dot.info { background: var(--info); } .tl2-dot.muted { background: #94a3b8; }
 .tl2 .tl2-step { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 14px; color: #0f1b30; }
 .tl2 .tl2-meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.tl2 .tl2-reason { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; padding: 3px 9px; border-radius: 8px; background: var(--bad-bg); color: #9a2b2b; font-size: 12.5px; font-weight: 600; }
+.tl2 .tl2-resolved { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; padding: 3px 9px; border-radius: 8px; background: var(--ok-bg); color: #0f7a35; font-size: 12.5px; font-weight: 600; }
 .tl2 .tl2-msg { color: var(--ink-soft); font-size: 12.5px; margin-top: 5px; background: #f7faff; border-radius: 8px; padding: 7px 10px; word-break: break-word; }
 
 /* work-progress (site steps) */
