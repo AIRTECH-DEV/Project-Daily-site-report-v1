@@ -46,6 +46,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (in_array($wa, ['OFF','TEST','LIVE'], true)) $ov['whatsapp_mode'] = $wa;
         $ov['notify_delay_seconds'] = max(0, (int)($_POST['notify_delay_seconds'] ?? 0));
 
+        // team & alerts
+        $am = strtoupper($_POST['alerts_mode'] ?? '');
+        if (in_array($am, ['OFF','TEST','LIVE'], true)) $ov['alerts_mode'] = $am;
+        $ov['alerts_email'] = !empty($_POST['alerts_email']) ? 1 : 0;
+        $ov['alert_manager_email'] = trim($_POST['alert_manager_email'] ?? '');
+        $team = [];
+        foreach (($_POST['team'] ?? []) as $t) {
+            if (!is_array($t)) continue;
+            $nm = trim((string)($t['name'] ?? ''));
+            if ($nm === '') continue;
+            $team[$nm] = ['email' => trim((string)($t['email'] ?? '')), 'phone' => trim((string)($t['phone'] ?? ''))];
+        }
+        $ov['team_contacts'] = $team;
+
         if (Admin::saveOverrides($ov)) {
             Admin::audit('update_settings', 'overrides', null, '', json_encode($ov));
             $flash = 'Settings saved. Applies to the next report the app or worker processes.';
@@ -81,6 +95,20 @@ foreach ($names as $n) {
 $emailMode = $cfg['email']['mode'] ?? 'TEST';
 $waMode    = $cfg['whatsapp']['mode'] ?? 'TEST';
 $delay     = (int)($cfg['notify_delay_seconds'] ?? 180);
+
+// team & alerts prefill
+$ov = Admin::overrides();
+$teamContacts = is_array($ov['team_contacts'] ?? null) ? $ov['team_contacts'] : [];
+$alertsMode   = $ov['alerts_mode'] ?? 'OFF';
+$alertsEmail  = !empty($ov['alerts_email']);
+$managerEmail = (string)($ov['alert_manager_email'] ?? '');
+$peNames = array_keys($teamContacts);
+try { foreach (Admin::db()->query("SELECT DISTINCT primary_pe FROM projects WHERE primary_pe<>''") as $r) $peNames[] = $r['primary_pe']; } catch (Throwable $e) {}
+$peNames = array_values(array_unique($peNames));
+sort($peNames);
+$teamRows = [];
+foreach ($peNames as $n) $teamRows[] = ['name' => $n, 'email' => $teamContacts[$n]['email'] ?? '', 'phone' => $teamContacts[$n]['phone'] ?? ''];
+$teamRows[] = ['name' => '', 'email' => '', 'phone' => ''];
 
 require __DIR__ . '/inc/layout.php';
 Layout::head('Settings', 'settings');
@@ -181,6 +209,51 @@ Layout::head('Settings', 'settings');
         <input class="inp" type="number" name="notify_delay_seconds" min="0" value="<?= $delay ?>" style="width:100%;margin-top:6px">
         <div style="margin-top:10px;font-size:12px;color:#8190a5">Gives the site engineer time to fix a wrong entry before the client is notified.</div>
       </div>
+    </div>
+  </div>
+
+  <div class="card2">
+    <div class="card2-head"><i class="bi bi-bell text-primary"></i><h2>Team &amp; Alerts</h2>
+      <span class="sub">internal alert recipients — never client contacts</span></div>
+    <div class="card2-body">
+      <div class="grid-3" style="margin-bottom:8px">
+        <div>
+          <label class="form-lbl">Alerts mode</label>
+          <select name="alerts_mode" class="inp" style="width:100%;margin-top:6px">
+            <?php foreach (['OFF'=>'OFF — no sending (inbox only)','TEST'=>'TEST — send only to test inbox','LIVE'=>'LIVE — send to PE + manager'] as $v=>$t): ?>
+              <option value="<?= $v ?>" <?= $alertsMode === $v ? 'selected' : '' ?>><?= $t ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div>
+          <label class="form-lbl">Email channel</label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:#5b6b82">
+            <input type="checkbox" name="alerts_email" value="1" <?= $alertsEmail ? 'checked' : '' ?>> Send critical alerts + digests by email
+          </label>
+        </div>
+        <div>
+          <label class="form-lbl">Manager / ops email(s)</label>
+          <input class="inp" type="text" name="alert_manager_email" value="<?= Admin::e($managerEmail) ?>" placeholder="ops@…, manager@…" style="width:100%;margin-top:6px">
+        </div>
+      </div>
+      <p style="color:#8190a5;font-size:12px;margin:4px 0 14px"><i class="bi bi-info-circle"></i> WhatsApp alerts need an approved template (like the report one) — email is used for now. Digests run from the scheduled task (<span class="mono">admin_sync.php --digest=morning|evening|weekly</span>).</p>
+
+      <div class="section-title" style="margin-top:6px">PE / Staff contacts</div>
+      <div class="table-wrap">
+        <table class="tbl">
+          <thead><tr><th style="width:220px">Name (PE)</th><th>Email</th><th>Phone</th></tr></thead>
+          <tbody>
+            <?php foreach ($teamRows as $i => $t): ?>
+              <tr>
+                <td><input class="inp" type="text" name="team[<?= $i ?>][name]" value="<?= Admin::e($t['name']) ?>" placeholder="e.g. Paresh" style="width:100%"></td>
+                <td><input class="inp" type="text" name="team[<?= $i ?>][email]" value="<?= Admin::e($t['email']) ?>" placeholder="pe@example.com" style="width:100%"></td>
+                <td><input class="inp" type="text" name="team[<?= $i ?>][phone]" value="<?= Admin::e($t['phone']) ?>" placeholder="9198XXXXXXXX" style="width:100%"></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:#94a3b8;font-size:12px;margin:10px 0 0"><i class="bi bi-info-circle"></i> Names auto-filled from project PEs. Critical alerts route to the owning PE's email + manager email when mode is LIVE.</p>
     </div>
   </div>
 

@@ -274,4 +274,39 @@ class Admin
             json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
         ) !== false;
     }
+
+    /* ---------------- master-table sync ---------------- */
+
+    private static function syncStampFile(): string
+    {
+        return __DIR__ . '/../../storage/.admin_sync';
+    }
+
+    public static function lastSync(): int
+    {
+        $f = self::syncStampFile();
+        return is_file($f) ? (int)@file_get_contents($f) : 0;
+    }
+
+    /** Rebuilds master tables (workforce/projects/alerts) at most once per throttle. */
+    public static function autoSync(int $throttleSec = 90): void
+    {
+        if (time() - self::lastSync() < $throttleSec) {
+            return;
+        }
+        self::runSync();
+    }
+
+    /** Forces a sync now; returns stats (or [] on failure). Never throws. */
+    public static function runSync(): array
+    {
+        @file_put_contents(self::syncStampFile(), (string)time());   // stamp first to avoid stampede
+        try {
+            require_once __DIR__ . '/helpers.php';
+            require_once __DIR__ . '/Sync.php';
+            return Sync::run(self::db(), self::overrides());
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
 }

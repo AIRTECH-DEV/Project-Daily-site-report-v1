@@ -139,7 +139,7 @@ foreach ($stepOrder as $nm) {
 $wpTotal = count($stepOrder);
 $wpPct = $wpTotal > 0 ? round($wpDone * 100 / $wpTotal) : 0;
 
-Layout::head('Report #' . $id, 'submissions');
+Layout::head('Report #' . $id, 'submissions', 'submission');
 ?>
 <div class="breadcrumb2">
   <a href="<?= Admin::BASE ?>/index.php"><i class="bi bi-house-door"></i></a> ›

@@ -110,6 +110,26 @@ function parseSteps(array $payload): array
     return $out;
 }
 
+/** Canonical ordered site steps (mirrors AppJs STATUS_STEPS) for a site type. */
+function canonicalSteps(string $siteType): array
+{
+    $vrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'];
+    $nonvrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining'];
+    return strcasecmp(trim($siteType), 'VRV') === 0 ? $vrv : $nonvrv;
+}
+
+/** Compact match key for a step name (case/space/punct-insensitive). */
+function stepKey(string $s): string
+{
+    return preg_replace('/[^a-z0-9]/', '', strtolower(trim($s)));
+}
+
+/** True when a step name is (or contains) the commissioning step. */
+function isCommissioning(string $s): bool
+{
+    return strpos(stepKey($s), 'commiss') !== false;
+}
+
 /** Short one-line preview of a longer text value. */
 function snip($s, int $len = 60): string
 {

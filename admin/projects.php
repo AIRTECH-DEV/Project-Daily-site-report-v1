@@ -64,10 +64,9 @@ Layout::head('Projects', 'projects');
     <span class="spacer"></span>
     <form class="filters" method="GET" style="gap:8px">
       <input class="inp" type="text" name="q" value="<?= Admin::e($q) ?>" placeholder="Search project / order id…" style="min-width:200px">
-      <select name="status" class="inp"><option value="">All status</option>
+      <select name="status" class="inp" onchange="this.form.submit()"><option value="">All status</option>
         <?php foreach (['Done','Pending','Hold'] as $o): ?><option value="<?= $o ?>" <?= $statusF === $o ? 'selected' : '' ?>><?= $o ?></option><?php endforeach; ?>
       </select>
-      <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-search"></i></button>
       <?php if ($q || $statusF): ?><a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/projects.php">Reset</a><?php endif; ?>
     </form>
   </div>
@@ -77,9 +76,7 @@ Layout::head('Projects', 'projects');
       <tbody>
         <?php if (!$proj): ?><tr><td colspan="9" class="t-empty">No projects match.</td></tr><?php endif; ?>
         <?php foreach ($proj as $p): $r = $p['row'];
-          $link = $r['client_type'] === 'Developer'
-            ? Admin::BASE . '/submissions.php?client=Developer&dev=' . urlencode($r['developer']) . '&q=' . urlencode($r['flat_no'])
-            : Admin::BASE . '/submissions.php?q=' . urlencode($r['project']);
+          $link = Admin::BASE . '/project.php?key=' . urlencode(projectKey($r));
         ?>
           <tr>
             <td><a class="row-link" href="<?= Admin::e($link) ?>"><?= Admin::e($p['label']) ?></a><?php if ($r['order_id']): ?><div class="mono" style="color:#94a3b8;font-size:11.5px"><?= Admin::e($r['order_id']) ?></div><?php endif; ?></td>
