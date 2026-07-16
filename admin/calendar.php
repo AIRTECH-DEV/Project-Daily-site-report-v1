@@ -108,20 +108,20 @@ Layout::head('Calendar', 'calendar');
         ?>
           <div class="<?= $cls ?>">
             <div class="cal-daynum"><?= (int)$cur->format('j') ?></div>
-            <?php foreach (array_slice($evs, 0, 3) as $e): ?>
+            <?php foreach ($evs as $k => $e): $extra = $k >= 3 ? ' cal-ev-extra' : ''; ?>
               <?php if ($e['type'] === 'plan'): ?>
-                <a class="cal-ev" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="<?= Admin::e($e['label'] . ' — ' . implode(', ', $e['steps'])) ?>">
+                <a class="cal-ev<?= $extra ?>" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="<?= Admin::e($e['label'] . ' — ' . implode(', ', $e['steps'])) ?>">
                   <span class="evp"><?= Admin::e($e['label']) ?></span>
                   <span class="evs"><?= Admin::e(implode(', ', $e['steps'])) ?></span>
                 </a>
               <?php else: ?>
-                <a class="cal-ev end" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="Target end — <?= Admin::e($e['label']) ?>">
+                <a class="cal-ev end<?= $extra ?>" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="Target end — <?= Admin::e($e['label']) ?>">
                   <span class="evp"><i class="bi bi-flag"></i> <?= Admin::e($e['label']) ?></span>
                   <span class="evs">Target end</span>
                 </a>
               <?php endif; ?>
             <?php endforeach; ?>
-            <?php if (count($evs) > 3): ?><span class="cal-more">+<?= count($evs) - 3 ?> more</span><?php endif; ?>
+            <?php if (count($evs) > 3): ?><button type="button" class="cal-more" data-n="<?= count($evs) - 3 ?>" onclick="calMore(this)">+<?= count($evs) - 3 ?> more</button><?php endif; ?>
           </div>
         <?php $cur->modify('+1 day'); endfor; ?>
       </div>
@@ -158,4 +158,4 @@ Layout::head('Calendar', 'calendar');
     <?php endforeach; ?>
   </div>
 </div>
-<?php Layout::foot();
+<?php Layout::foot('<script>function calMore(b){var c=b.closest(".cal-cell");var open=c.classList.toggle("evs-open");b.textContent=open?"− less":("+"+b.dataset.n+" more");}</script>');

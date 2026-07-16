@@ -223,7 +223,11 @@ class Sync
             foreach ($rows as $r) { if (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$r['tentative_end'])) $targetEnd = $r['tentative_end']; }
             $nextSteps = $plLatest['tomorrowSteps'] ?? [];
             if (is_string($nextSteps)) $nextSteps = json_decode($nextSteps, true) ?: [];
-            $nextDate = (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($plLatest['nextStepStartDate'] ?? ''))) ? $plLatest['nextStepStartDate'] : null;
+            // explicit next-step start date, else infer "next working day" (report + 1) so a
+            // delayed plan without an explicit date still trips the plan_missed alert.
+            $nextDate = (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($plLatest['nextStepStartDate'] ?? '')))
+                ? $plLatest['nextStepStartDate']
+                : ((is_array($nextSteps) && $nextSteps) ? date('Y-m-d', strtotime((string)$latest['created_at'] . ' +1 day')) : null);
 
             $orderId = '';
             foreach ($rows as $r) { if (trim((string)$r['order_id']) !== '') $orderId = $r['order_id']; }
