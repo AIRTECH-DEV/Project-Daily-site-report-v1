@@ -119,7 +119,12 @@ class SubmitService
         $log = $tracker->stepStart('pms_update');
         try {
             $res = (new Pms($this->sheets, $this->cfg))->updateProgressSheets($p);
-            if (!empty($res['order_id'])) { $tracker->updateSubmission(['order_id' => $res['order_id']]); }
+            if (!empty($res['order_id'])) {
+                $tracker->updateSubmission(['order_id' => $res['order_id']]);
+                // Stamp Order ID back into the response row so the sheet shows which
+                // project/flat each row belongs to (blank before — writeRow can't know it yet).
+                try { $writer->stampCell($tab, $rowNum, $headers, 'order id', $res['order_id']); } catch (Throwable $x) {}
+            }
             if ($res['updated']) { $tracker->stepDone($log, 'PMS row stamped'); }
             else { $tracker->stepSkipped($log, $res['warning'] ?: 'not updated'); $warnings[] = $res['warning']; }
         } catch (Throwable $e) {

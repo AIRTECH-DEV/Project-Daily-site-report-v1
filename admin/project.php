@@ -152,7 +152,9 @@ foreach ($visits as $v) {
 }
 
 // ---- current risks (open alerts) ----
-$risks = $db->prepare("SELECT * FROM alerts WHERE project_key=? AND status IN ('open','ack','snoozed') ORDER BY FIELD(severity,'critical','warning','info'), id DESC");
+// Exclude technical pipeline failures (cURL/upload errors) — those belong to
+// Pipeline Health only, not this operational risk list.
+$risks = $db->prepare("SELECT * FROM alerts WHERE project_key=? AND status IN ('open','ack','snoozed') AND rule <> 'pipeline_fail' ORDER BY FIELD(severity,'critical','warning','info'), id DESC");
 $risks->execute([$key]);
 $risks = $risks->fetchAll();
 

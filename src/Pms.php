@@ -58,7 +58,7 @@ class Pms
         }
         // Amendment / Drawing / Measurement come from the RESPONSE sheet (per-submission
         // log), not the PMS sheet — read the latest matching row so the form can skip them.
-        $base['prefill'] = $this->getResponsePrefill($p);
+        $base['prefill'] = $this->getResponsePrefill($p, (string)($base['orderId'] ?? ''));
         return $base;
     }
 
@@ -66,7 +66,7 @@ class Pms
      * Latest response-sheet answers for Amendment / Drawing change / Measurement (+ amendment why)
      * for this project (General) or building+flat (Developer). Empty strings when not found.
      */
-    private function getResponsePrefill(array $p): array
+    private function getResponsePrefill(array $p, string $orderId = ''): array
     {
         $out = ['amendment' => '', 'amendmentWhy' => '', 'drawingChange' => '', 'measurement' => ''];
         try {
@@ -94,15 +94,25 @@ class Pms
 
             $isDev   = ($p['clientType'] ?? '') === 'Developer';
             $projCol = Sheets::findColIndex($headers, 'select project name');
+            $ordCol  = Sheets::findColIndex($headers, 'order id');
             $bldCol  = Sheets::findColIndex($headers, 'building');
             $flatCol = Sheets::findColIndex($headers, 'flat no');
             $wantProj = Sheets::normalizeKey($p['project'] ?? '');
             $wantBld  = Sheets::normalizeKey($p['building'] ?? '');
             $wantFlat = Sheets::normalizeKey($p['flatNo'] ?? '');
+            // Order ID (col B) is the exact key for BOTH general (Orders-sheet ID)
+            // and developer (building+flat ID) — the same value we stamp on the row.
+            $wantOrder = Sheets::normalizeKey($orderId);
 
             $match = -1;
             for ($r = count($rows) - 1; $r >= 1; $r--) {   // latest first
                 $row = $rows[$r];
+                // Primary: Order ID match (works for both client types).
+                if ($ordCol > -1 && $wantOrder !== ''
+                    && Sheets::normalizeKey($row[$ordCol] ?? '') === $wantOrder) {
+                    $match = $r; break;
+                }
+                // Fallback for rows written before Order ID was stamped.
                 if ($isDev) {
                     if ($bldCol > -1 && $flatCol > -1 && $wantFlat !== ''
                         && Sheets::normalizeKey($row[$bldCol] ?? '') === $wantBld
