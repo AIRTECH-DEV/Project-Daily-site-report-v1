@@ -266,16 +266,37 @@ class SubmitService
         $ts = $tsIdx > -1 ? (string)($rowValues[$tsIdx] ?? '') : date('d-M-Y H:i:s');
 
         (new Pdf(__DIR__ . '/../assets'))->build([
-            'project_name' => $projectName,
-            'timestamp'    => $ts,
-            'headers'      => $headers,
-            'rowValues'    => $rowValues,
-            'photos'       => $photos,
-            'drawing'      => $drawing,
-            'client_hold'  => $this->clientHoldText($p),
-            'out_path'     => $out,
+            'project_name'     => $projectName,
+            'timestamp'        => $ts,
+            'headers'          => $headers,
+            'rowValues'        => $rowValues,
+            'photos'           => $photos,
+            'drawing'          => $drawing,
+            'client_hold'      => $this->clientHoldText($p),
+            'project_location' => $this->developerLocation($p),
+            'out_path'         => $out,
         ]);
         return $out;
+    }
+
+    /**
+     * Full unit location for a DEVELOPER report: "Developer - Building - Flat N".
+     * Empty parts are skipped. Returns '' for non-developer (General) reports so
+     * the PDF leaves the "Select Project Name" row exactly as before.
+     */
+    private function developerLocation(array $p): string
+    {
+        if (($p['clientType'] ?? '') !== 'Developer') {
+            return '';
+        }
+        $parts = [];
+        $dev  = trim((string)($p['developer'] ?? ''));
+        $bld  = trim((string)($p['building'] ?? ''));
+        $flat = trim((string)($p['flatNo'] ?? ''));
+        if ($dev !== '')  { $parts[] = $dev; }
+        if ($bld !== '')  { $parts[] = $bld; }
+        if ($flat !== '') { $parts[] = 'Flat ' . $flat; }
+        return implode(' - ', $parts);
     }
 
     /**

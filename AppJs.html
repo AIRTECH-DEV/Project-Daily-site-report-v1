@@ -231,13 +231,16 @@
         if (String(answers.tentativeEndDate || '').trim() === '') m.push('Tentative Project End Date');
         const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
         if (n < 1) m.push('People on Site — set the count');
+        // If every work option is already locked (done in the sheet), the dropdown is empty —
+        // nothing to select — so don't require "work done" for that visit.
+        const workSelectable = availableWorkOptions().length > 0;
         for (let i = 0; i < n; i++) {
           const r = (answers.peopleRows || [])[i] || {};
           const probs = [];
           if (String(r.name || '').trim() === '') probs.push('name');
           if (!r.techType) probs.push('type');
           if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor name');
-          if (personWorks(r).length === 0) probs.push('work done');
+          if (workSelectable && personWorks(r).length === 0) probs.push('work done');
           if (probs.length) m.push('Person ' + (i + 1) + ' — ' + probs.join(', '));
         }
         if (String(answers.activity || '').trim() === '') m.push('Activity Notes');
@@ -323,8 +326,11 @@
       const peopleRows = answers.peopleRows || [];
       const tentativeLocked = !!answers.tentativeLocked;
       // "What work done" hides steps already done (locked from the sheet).
-      const availableWork = WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
+      const availableWork = availableWorkOptions();
       const prefilled = answers.prefilled || {};
+      // Activity Notes suggestions: skip steps held up by VAPL itself (internal hold) — only
+      // offer ready-made lines for Done/Pending and client-side holds.
+      const activitySuggestions = (answers.stepStatuses || []).filter(e => !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
       return `
         <div class="panel">
           <div class="twocol">
@@ -531,10 +537,10 @@
                   ${iconNotes()}
                   <div><div class="section-title">Activity Notes</div><div class="section-sub">Tap a step below to add a ready-made line, and/or write your own.</div></div>
                 </div>
-                ${(answers.stepStatuses || []).length ? `<div class="plan-suggest" style="margin-bottom:10px;">
+                ${activitySuggestions.length ? `<div class="plan-suggest" style="margin-bottom:10px;">
                   <div class="plan-suggest-label">From today's status — tap to add a line:</div>
                   <div class="chip-row">
-                    ${(answers.stepStatuses || []).map(e => `<button type="button" class="plan-chip ${statusTagClass(e.status)}" onclick="addActivityStatement('${escapeHtml(e.step)}')">${escapeHtml(e.step)} · ${escapeHtml(e.status)}</button>`).join('')}
+                    ${activitySuggestions.map(e => `<button type="button" class="plan-chip ${statusTagClass(e.status)}" onclick="addActivityStatement('${escapeHtml(e.step)}')">${escapeHtml(e.step)} · ${escapeHtml(e.status)}</button>`).join('')}
                   </div>
                 </div>` : ''}
                 <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
@@ -1090,13 +1096,22 @@
     function personWorks(r) {
       return Array.isArray(r.workDone) ? r.workDone : (r.workDone ? [r.workDone] : []);
     }
+    // "What work done" options minus steps already done (locked from the sheet). When this
+    // is empty there is nothing left for a person to pick, so "work done" can't be required.
+    function availableWorkOptions() {
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      return WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
+    }
     function peopleRowsValid() {
       const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
       if (n < 1) return false;
       const rows = answers.peopleRows || [];
+      // Empty dropdown (all work options locked/done) → "work done" can't be required.
+      const workSelectable = availableWorkOptions().length > 0;
       for (let i = 0; i < n; i++) {
         const r = rows[i] || {};
-        if (String(r.name || '').trim() === '' || !r.techType || personWorks(r).length === 0) return false;
+        if (String(r.name || '').trim() === '' || !r.techType) return false;
+        if (workSelectable && personWorks(r).length === 0) return false;
         if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') return false;
       }
       return true;

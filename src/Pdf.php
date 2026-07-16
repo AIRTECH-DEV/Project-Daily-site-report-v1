@@ -64,7 +64,7 @@ class Pdf
 
         $pdf->Ln(8);
         $this->sectionHeader($pdf, 'PROJECT DETAILS');
-        $this->detailTable($pdf, $ctx['headers'], $ctx['rowValues'], $ctx['client_hold'] ?? null);
+        $this->detailTable($pdf, $ctx['headers'], $ctx['rowValues'], $ctx['client_hold'] ?? null, (string)($ctx['project_location'] ?? ''));
 
         // Page 1 = activity + details only.
         $pdf->AddPage();
@@ -138,7 +138,10 @@ class Pdf
         $pdf->SetFillColor(...$this->SOFT);
         $this->setText($pdf, $this->DARK);
         $x = 42; $y = $pdf->GetY();
-        $lines = $pdf->NbLines(511, $this->ascii($text));
+        // Count lines at the SAME width the text is rendered at (491, the box's
+        // 511 minus 10pt padding each side); using 511 undercounts wraps and the
+        // last line spills below the box.
+        $lines = $pdf->NbLines(491, $this->ascii($text));
         $h = max(24, $lines * 14 + 12);
         if ($y + $h > $pdf->GetPageHeight() - 82) { $pdf->AddPage(); $y = $pdf->GetY(); }
         $pdf->Rect($x, $y, 511, $h, 'DF');
@@ -147,12 +150,19 @@ class Pdf
         $pdf->SetY($y + $h);
     }
 
-    private function detailTable(PmsFpdf $pdf, array $headers, array $rowValues, ?string $clientHoldOverride = null): void
+    private function detailTable(PmsFpdf $pdf, array $headers, array $rowValues, ?string $clientHoldOverride = null, string $projectLocation = ''): void
     {
         $rows = [];
         foreach ($headers as $i => $h) {
             if ($this->skipHeader((string)$h)) { continue; }
             $val = trim((string)($rowValues[$i] ?? ''));
+            // Developer reports: replace the plain developer name in the
+            // "Select Project Name" row with the full location (developer -
+            // building - flat). $projectLocation is '' for General reports, so
+            // those are untouched.
+            if ($projectLocation !== '' && stripos((string)$h, 'select project name') !== false) {
+                $val = $projectLocation;
+            }
             // Drop rows with no real answer (empty or "N/A") -- e.g. an
             // unanswered "If Yes : why?" follow-up when parent question is "No".
             if ($val === '' || strtolower($val) === 'n/a') { continue; }
