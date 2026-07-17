@@ -21,26 +21,26 @@
     // site type. Each string is matched (name-based) to a step group column
     // in the PMS sheet on submit.
     const STATUS_STEPS = {
-      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'],
-      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining']
+      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining']
     };
-    // Cold Room / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
-    STATUS_STEPS['Cold Room'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
+    // Ventilation / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
+    STATUS_STEPS['Ventilation'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
     // Site type cards (label + emoji logo + note). VRV/Non-VRV keep their old look.
     const SITE_TYPES = [
       { value: 'VRV',          icon: '🏢', name: 'VRV Site',      note: 'Variable Refrigerant Volume' },
       { value: 'Non-VRV',      icon: '❄️',  name: 'Non-VRV Site',  note: 'Conventional / Other Systems' },
-      { value: 'Cold Room',    icon: '🧊',  name: 'Cold Room',     note: 'Walk-in / Process Cold Room' },
-      { value: 'Cold Storage', icon: '🏬',  name: 'Cold Storage',  note: 'Warehouse Cold Storage' },
+      { value: 'Ventilation',  icon: '🌀',  name: 'Ventilation',   note: 'Fresh Air / Exhaust System' },
+      { value: 'Cold Storage', icon: '🏬',  name: 'Cold Storage/ Rooms',  note: 'Warehouse Cold Storage' },
       { value: 'PAC/CRAC',     icon: '🖥️', name: 'PACs / CRACs', note: 'Precision / Computer Room AC' }
     ];
     const HOLD_REASONS = ['Stuck BY Client', 'Stuck BY VAPL', 'Other'];
-    const TECH_TYPES = ['VAPL', 'Contractor'];
+    const TECH_TYPES = ['VAPL-Technician', 'VAPL-Helper', 'Contractor'];
     // Per-person "what work done" dropdown options (independent of the status steps).
     const WORK_DONE_OPTIONS = [
       'Marking','Civil Opening','Support',
-      'Underdake Insulation','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct',
-      'Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining'
+      'Underdake Insulation','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct',
+      'Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
     ];
 
     let answers = {};
@@ -71,6 +71,59 @@
     // Loose key for matching step labels to sheet header text (case/space/punct-insensitive).
     function compact(str) {
       return String(str == null ? '' : str).toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    // 'YYYY-MM-DD' -> local-midnight Date. Plain new Date(str) parses ISO as UTC,
+    // which shifts the day for anyone behind GMT. null when not an ISO date.
+    function parseISODate(str) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(str == null ? '' : str).trim());
+      return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+    }
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    // '2026-07-30' -> '30th July 2026'. Anything not ISO passes through as-is.
+    function fmtLongDate(str) {
+      const d = parseISODate(str);
+      if (!d) return String(str == null ? '' : str);
+      const n = d.getDate();
+      const suffix = (n % 100 >= 11 && n % 100 <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+      return n + suffix + ' ' + MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear();
+    }
+    // Whole days from today until `str` (negative = overdue). null when not an ISO date.
+    function daysUntil(str) {
+      const d = parseISODate(str);
+      if (!d) return null;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return Math.round((d - today) / 86400000);
+    }
+    // Countdown chip pieces: colour class, the number, and its unit label. null when
+    // there's no usable date. Overdue counts up; the due day itself has no number.
+    function daysLeftParts(str) {
+      const n = daysUntil(str);
+      if (n === null) return null;
+      const abs = Math.abs(n);
+      return {
+        cls: n < 0 ? 'over' : (n <= 7 ? 'warn' : 'ok'),
+        num: n === 0 ? '' : String(abs),
+        label: n === 0 ? 'due today' : (abs === 1 ? 'day' : 'days') + (n < 0 ? ' overdue' : ' remaining')
+      };
+    }
+    function daysLeftText(str) {
+      const p = daysLeftParts(str);
+      if (!p) return '';
+      return p.num ? p.num + ' ' + p.label : p.label;
+    }
+    function daysLeftHtml(str) {
+      const p = daysLeftParts(str);
+      if (!p) return '';
+      return `<div class="days-left ${p.cls}">
+        <span class="days-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+        <span class="days-sep"></span>
+        <span class="days-txt">
+          ${p.num ? `<span class="days-num">${p.num}</span>` : ''}
+          <span class="days-lbl">${p.label}</span>
+        </span>
+      </div>`;
     }
 
     function fileToBase64(file) {
@@ -113,12 +166,6 @@
     function resetProgressState() {
       answers.lockedSteps = [];
       answers.generatedOrderId = '';
-      // Clear only the answers that were auto-filled from the sheet last time.
-      const pf = answers.prefilled || {};
-      if (pf.amendment) { answers.amendment = ''; answers.amendmentWhy = ''; }
-      if (pf.drawingChange) answers.drawingChange = '';
-      if (pf.measurement) answers.measurement = '';
-      answers.prefilled = {};
     }
 
     // Reads the PMS/developer sheet for steps already marked Done and locks them.
@@ -145,13 +192,8 @@
           } else {
             answers.tentativeLocked = false;
           }
-          // Amendment / Drawing / Measurement already answered in the response sheet
-          // -> adopt the answer and hide that field.
-          const pf = res.prefill || {};
-          answers.prefilled = {};
-          if (pf.amendment) { answers.amendment = pf.amendment; answers.prefilled.amendment = true; if (pf.amendmentWhy) answers.amendmentWhy = pf.amendmentWhy; }
-          if (pf.drawingChange) { answers.drawingChange = pf.drawingChange; answers.prefilled.drawingChange = true; }
-          if (pf.measurement) { answers.measurement = pf.measurement; answers.prefilled.measurement = true; }
+          // Amendment / Drawing / Measurement are asked fresh on every visit — never
+          // adopted from the last response-sheet row.
           renderCurrentPage();
         })
         .withFailureHandler(function (err) {
@@ -193,17 +235,14 @@
       return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && peopleRowsValid() && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
     }
     function isStep2Valid() {
-      const pf = answers.prefilled || {};
-      const amendOk = pf.amendment ? true : (answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true);
+      const amendOk = answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true;
       // Plan satisfied by picking pending steps OR typing notes.
       const planOk = effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '';
       return planOk && !!answers.drawingChange && amendOk;
     }
     function isStep3Valid() {
-      const pf = answers.prefilled || {};
-      // Prefilled-from-sheet answers don't require a fresh file upload.
-      const drawingOk = (!pf.drawingChange && answers.drawingChange === 'Yes') ? !!answers.drawingPhoto : true;
-      const measurementOk = (!pf.measurement && answers.measurement === 'Yes') ? !!answers.measurementFile : true;
+      const drawingOk = answers.drawingChange === 'Yes' ? !!answers.drawingPhoto : true;
+      const measurementOk = answers.measurement === 'Yes' ? !!answers.measurementFile : true;
       return drawingOk && !!answers.measurement && measurementOk;
     }
     function isCurrentPageValid() {
@@ -239,7 +278,7 @@
           const probs = [];
           if (String(r.name || '').trim() === '') probs.push('name');
           if (!r.techType) probs.push('type');
-          if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor name');
+          if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor company name');
           if (workSelectable && personWorks(r).length === 0) probs.push('work done');
           if (probs.length) m.push('Person ' + (i + 1) + ' — ' + probs.join(', '));
         }
@@ -247,15 +286,13 @@
         if (!(Array.isArray(answers.photo) && answers.photo.length > 0)) m.push('Site Photos');
         if (!answers.amendment) m.push('Amendment Required?');
       } else if (currentPage === 1) {
-        const pf = answers.prefilled || {};
         if (!(effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '')) m.push('Plan for Tomorrow — pick steps or add notes');
         if (!answers.drawingChange) m.push('Drawing Change');
-        if (!pf.amendment && answers.amendment === 'Yes' && String(answers.amendmentWhy || '').trim() === '') m.push('Amendment Notes');
+        if (answers.amendment === 'Yes' && String(answers.amendmentWhy || '').trim() === '') m.push('Amendment Notes');
       } else if (currentPage === 2) {
-        const pf = answers.prefilled || {};
         if (!answers.measurement) m.push('Measurement Report Created Today?');
-        if (!pf.drawingChange && answers.drawingChange === 'Yes' && !answers.drawingPhoto) m.push('Drawing Change Photo');
-        if (!pf.measurement && answers.measurement === 'Yes' && !answers.measurementFile) m.push('Measurement Report File');
+        if (answers.drawingChange === 'Yes' && !answers.drawingPhoto) m.push('Drawing Change Photo');
+        if (answers.measurement === 'Yes' && !answers.measurementFile) m.push('Measurement Report File');
       }
       return m;
     }
@@ -327,7 +364,6 @@
       const tentativeLocked = !!answers.tentativeLocked;
       // "What work done" hides steps already done (locked from the sheet).
       const availableWork = availableWorkOptions();
-      const prefilled = answers.prefilled || {};
       // Activity Notes suggestions: skip steps held up by VAPL itself (internal hold) — only
       // offer ready-made lines for Done/Pending and client-side holds.
       const activitySuggestions = (answers.stepStatuses || []).filter(e => !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
@@ -436,7 +472,7 @@
                           <option value="">Type</option>
                           ${TECH_TYPES.map(t => `<option value="${escapeHtml(t)}" ${type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
                         </select>
-                        ${type === 'Contractor' ? `<input type="text" class="field" placeholder="Contractor name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
+                        ${type === 'Contractor' ? `<input type="text" class="field contractor-name" placeholder="Contractor company name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
                       </div>
                       <div class="person-work">
                         <select class="dropdown-field placeholder work-add" onchange="addPersonWork(${i}, this.value)">
@@ -527,9 +563,12 @@
                   ${iconCalendar()}
                   <div><div class="section-title">Tentative Project End Date</div><div class="section-sub">${tentativeLocked ? 'Already set in the progress sheet (read-only).' : 'Select the tentative completion date.'}</div></div>
                 </div>
-                ${tentativeLocked
-                  ? `<input type="text" class="field" value="${escapeHtml(tentativeEndDate)}" disabled style="background:#f5f7f5;color:#555;">`
-                  : `<input type="date" class="field" id="tentativeEndDateInput" value="${escapeHtml(tentativeEndDate)}" onchange="setTentativeEndDate(this.value)">`}
+                <div class="tent-row">
+                  ${tentativeLocked
+                    ? `<input type="text" class="field locked" value="${escapeHtml(fmtLongDate(tentativeEndDate))}" disabled>`
+                    : `<input type="date" class="field" id="tentativeEndDateInput" value="${escapeHtml(tentativeEndDate)}" onchange="setTentativeEndDate(this.value)">`}
+                  <div id="daysLeftBox">${daysLeftHtml(tentativeEndDate)}</div>
+                </div>
               </div>
 
               <div class="section">
@@ -564,14 +603,12 @@
                 <div class="section" style="margin-bottom:0;">
                   <div class="section-head">
                     ${iconNotes()}
-                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">${prefilled.amendment ? 'Already answered in the sheet.' : 'Is any amendment or change required?'}</div></div>
+                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">Is any amendment or change required?</div></div>
                   </div>
-                  ${prefilled.amendment
-                    ? `<div class="prefill-note">${escapeHtml(amend)} <span class="prefill-tag">from sheet</span></div>`
-                    : `<div class="yesno-row">
+                  <div class="yesno-row">
                     <button class="yesno-btn ${amend === 'Yes' ? 'selected' : ''}" onclick="setYesNo('amendment','Yes')">Yes</button>
                     <button class="yesno-btn ${amend === 'No' ? 'selected' : ''}" onclick="setYesNo('amendment','No')">No</button>
-                  </div>`}
+                  </div>
                 </div>
               </div>
             </div>
@@ -585,7 +622,6 @@
       const nextPlan = answers.nextPlan || '';
       const drawingChange = answers.drawingChange || '';
       const amendmentWhy = answers.amendmentWhy || '';
-      const prefilled = answers.prefilled || {};
       const remaining = remainingSteps();
       const tomorrowSet = new Set((answers.tomorrowSteps || []).map(compact));
       const nextStepStartDate = answers.nextStepStartDate || '';
@@ -614,25 +650,22 @@
               <div class="section">
                 <div class="section-head">
                   ${iconProject()}
-                  <div><div class="section-title">Drawing Change</div><div class="section-sub">${prefilled.drawingChange ? 'Already answered in the sheet.' : 'Any changes in drawing as per project condition?'}</div></div>
+                  <div><div class="section-title">Drawing Change</div><div class="section-sub">Any changes in drawing as per project condition?</div></div>
                 </div>
-                ${prefilled.drawingChange
-                  ? `<div class="prefill-note">${escapeHtml(drawingChange)} <span class="prefill-tag">from sheet</span></div>`
-                  : `<div class="yesno-row">
+                <div class="yesno-row">
                   <button class="yesno-btn ${drawingChange === 'Yes' ? 'selected' : ''}" onclick="setYesNo('drawingChange','Yes')">Yes</button>
                   <button class="yesno-btn ${drawingChange === 'No' ? 'selected' : ''}" onclick="setYesNo('drawingChange','No')">No</button>
-                </div>`}
+                </div>
               </div>
             </div>
             <div class="col">
-              ${prefilled.amendment ? '' : `
               <div class="section">
                 <div class="section-head">
                   ${iconNotes()}
                   <div><div class="section-title">Amendment Notes</div><div class="section-sub">If amendment / PO / approval is required, explain the reason.</div></div>
                 </div>
                 <textarea class="textarea" id="amendmentWhyInput" placeholder="If yes — mention why..." ${answers.amendment === 'Yes' ? '' : 'disabled style="background:#fafafa;color:#999;"'}>${escapeHtml(amendmentWhy)}</textarea>
-              </div>`}
+              </div>
             </div>
           </div>
           ${renderActionBar()}
@@ -644,10 +677,7 @@
       const drawingPhoto = answers.drawingPhoto ? [answers.drawingPhoto] : [];
       const measurement = answers.measurement || '';
       const measurementFile = answers.measurementFile ? [answers.measurementFile] : [];
-      const prefilled = answers.prefilled || {};
-      const drawingPhotoBlock = prefilled.drawingChange
-        ? '<div class="hint-note">Drawing change already recorded in the sheet — no upload needed.</div>'
-        : (answers.drawingChange === 'Yes'
+      const drawingPhotoBlock = answers.drawingChange === 'Yes'
         ? `
                 <div class="dropzone ${drawingPhoto.length ? 'has-files' : ''}" onclick="document.getElementById('drawingPhotoInput').click()">
                   <div class="drop-icon">+</div>
@@ -656,10 +686,8 @@
                 </div>
                 <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('drawingPhoto', this.files, false)">
                 <div class="file-list" id="fileList-drawingPhoto"></div>`
-        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>');
-      const measurementFileBlock = prefilled.measurement
-        ? '<div class="hint-note">Measurement status already recorded in the sheet — no upload needed.</div>'
-        : (measurement === 'Yes'
+        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>';
+      const measurementFileBlock = measurement === 'Yes'
         ? `
                 <div class="dropzone ${measurementFile.length ? 'has-files' : ''}" onclick="document.getElementById('measurementFileInput').click()">
                   <div class="drop-icon">+</div>
@@ -668,7 +696,7 @@
                 </div>
                 <input type="file" id="measurementFileInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('measurementFile', this.files, false)">
                 <div class="file-list" id="fileList-measurementFile"></div>`
-        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>');
+        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
       return `
         <div class="panel">
           <div class="twocol">
@@ -685,14 +713,12 @@
               <div class="section">
                 <div class="section-head">
                   ${iconCalendar()}
-                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">${prefilled.measurement ? 'Already answered in the sheet.' : 'Tell us if the measurement report was created today.'}</div></div>
+                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">Tell us if the measurement report was created today.</div></div>
                 </div>
-                ${prefilled.measurement
-                  ? `<div class="prefill-note">${escapeHtml(measurement)} <span class="prefill-tag">from sheet</span></div>`
-                  : `<div class="yesno-row">
+                <div class="yesno-row">
                   <button class="yesno-btn ${measurement === 'Yes' ? 'selected' : ''}" onclick="setYesNo('measurement','Yes')">Yes</button>
                   <button class="yesno-btn ${measurement === 'No' ? 'selected' : ''}" onclick="setYesNo('measurement','No')">No</button>
-                </div>`}
+                </div>
               </div>
               <div class="section">
                 <div class="section-head">
@@ -743,7 +769,7 @@
             <div class="review-card">
               <h4>Additional</h4>
               ${reviewRow('Work Done By', workSummary || '-')}
-              ${reviewRow('Tentative End Date', answers.tentativeEndDate || '-')}
+              ${reviewRow('Tentative End Date', answers.tentativeEndDate ? (fmtLongDate(answers.tentativeEndDate) + (daysLeftText(answers.tentativeEndDate) ? ' · ' + daysLeftText(answers.tentativeEndDate) : '')) : '-')}
               ${holdEntry ? reviewRow('Hold Reason', holdEntry.holdReason || '-') : ''}
               ${holdEntry ? reviewRow('Hold Detail', holdEntry.holdReasonDetail || '-') : ''}
               ${reviewRow('Drawing Photo', answers.drawingPhoto ? answers.drawingPhoto.name : '-')}
@@ -1044,7 +1070,13 @@
     }
     function setHoldReason(val) { answers.holdReason = val; renderCurrentPage(); }
     function setHoldReasonDetail(val) { answers.holdReasonDetail = val; refreshApplyBtn(); }
-    function setTentativeEndDate(val) { answers.tentativeEndDate = val; updatePrimaryButton(); }
+    function setTentativeEndDate(val) {
+      answers.tentativeEndDate = val;
+      // Refresh only the counter — a full re-render would tear down the open date picker.
+      const box = document.getElementById('daysLeftBox');
+      if (box) box.innerHTML = daysLeftHtml(val);
+      updatePrimaryButton();
+    }
     function setNextStepStartDate(val) { answers.nextStepStartDate = val; }
     function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
 
@@ -1176,9 +1208,9 @@
     }
 
     function clearCurrentPage() {
-      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; answers.prefilled={}; }
-      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.nextStepStartDate=''; answers.drawingChange=''; answers.amendmentWhy=''; if (answers.prefilled) { answers.prefilled.drawingChange=false; answers.prefilled.amendment=false; } }
-      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; if (answers.prefilled) answers.prefilled.measurement=false; }
+      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.nextStepStartDate=''; answers.drawingChange=''; answers.amendmentWhy=''; }
+      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
       renderCurrentPage();
     }
 

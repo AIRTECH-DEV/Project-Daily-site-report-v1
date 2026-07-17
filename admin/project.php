@@ -213,8 +213,8 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
     <div><div class="ph-v"><?= (int)$pr['steps_done'] ?>/<?= (int)$pr['steps_total'] ?> <small>steps</small></div><div class="ph-l">Progress</div></div>
     <div class="ph-ring" style="--p:<?= $pct ?>"><span><?= $pct ?>%</span></div>
   </div>
-  <div class="phero g-green"><div class="ph-v"><?= $pr['next_plan_date'] ? Admin::e(fmtDate($pr['next_plan_date'])) : (Admin::e($pr['next_plan_steps']) ?: '—') ?></div><div class="ph-l">Next Plan</div></div>
-  <div class="phero g-orange"><div class="ph-v"><?= $pr['target_end'] ? Admin::e(fmtDate($pr['target_end'])) : '—' ?></div><div class="ph-l">Target End</div></div>
+  <div class="phero g-orange ph-flip"><div class="ph-l">Target End</div><div class="ph-v"><?= $pr['target_end'] ? Admin::e(fmtDate($pr['target_end'])) : '—' ?></div></div>
+  <div class="phero g-green ph-flip"><div class="ph-l">Next Plan</div><div class="ph-v"><?= $pr['next_plan_date'] ? Admin::e(fmtDate($pr['next_plan_date'])) : (Admin::e($pr['next_plan_steps']) ?: '—') ?></div></div>
   <div class="phero g-pink"><div class="ph-v"><?= Admin::e($pr['hold_owner']) ?: '—' ?></div><div class="ph-l">Hold Owner</div></div>
 </div>
 

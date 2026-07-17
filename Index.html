@@ -128,8 +128,9 @@
     /* People-on-site detail rows (one block per person; multiple works each) */
     .people-rows { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
     .person-block { border:1px solid #ececec; border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#fcfcfc; }
-    .person-top { display:grid; grid-template-columns: 22px 1fr 116px; gap:8px; align-items:center; }
-    .person-top.has-contractor { grid-template-columns: 22px 1fr 116px 1fr; }
+    .person-top { display:grid; grid-template-columns: 22px 1fr 176px; gap:8px; align-items:center; }
+    /* Contractor company name drops to its own full-width line — it never fits beside name + type. */
+    .person-top .contractor-name { grid-column: 2 / -1; }
     .person-idx { width:22px; height:22px; border-radius:50%; background:#fbeceb; color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
     .person-top .field, .person-top .dropdown-field, .person-work .dropdown-field { height:40px; }
     .person-work { display:flex; flex-direction:column; gap:8px; }
@@ -137,7 +138,7 @@
     .work-chips { }
     .work-chip { display:inline-flex; align-items:center; gap:7px; background:#fff5f5; border:1px solid #f2c0c3; color:#b60f17; border-radius:14px; padding:4px 6px 4px 11px; font-size:12px; font-weight:600; }
     .work-chip button { border:0; background:none; color:#b60f17; cursor:pointer; font-size:15px; line-height:1; padding:0 2px; }
-    @media (max-width: 760px) { .person-top, .person-top.has-contractor { grid-template-columns: 1fr; } .person-idx { display:none; } .work-add { max-width:none; } }
+    @media (max-width: 760px) { .person-top { grid-template-columns: 1fr; } .person-top .contractor-name { grid-column: auto; } .person-idx { display:none; } .work-add { max-width:none; } }
     .card-option {
       position: relative; border: 1px solid #e1e1e1; border-radius: 8px; min-height: 80px; padding: 14px 10px 10px; text-align:center; cursor:pointer; background:#fff;
       display:flex; flex-direction: column; align-items:center; justify-content:center; gap:8px; transition: all .2s ease;
@@ -213,9 +214,20 @@
     .file-chip { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border:1px solid #eee; border-radius:6px; background:#fafafa; font-size:12px; gap:10px; }
     .file-chip button { border:0; background:none; color:#c33239; cursor:pointer; }
 
-    /* Read-only value adopted from the sheet (Amendment / Drawing / Measurement) */
-    .prefill-note { display:flex; align-items:center; gap:10px; height:34px; padding:0 12px; border:1px solid #dfe6df; border-radius:6px; background:#f5f7f5; color:#333; font-weight:600; font-size:13px; }
-    .prefill-tag { margin-left:auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#5c6b5c; background:#e9efe9; border:1px solid #d3e0d3; border-radius:4px; padding:1px 6px; }
+    /* Tentative end date + "days remaining" counter */
+    .tent-row { display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center; }
+    .tent-row .field.locked { background:#f5f7f5; color:#555; font-weight:600; }
+    .days-left { display:flex; align-items:center; justify-content:center; gap:14px; min-height:62px; padding:10px 20px; border-radius:14px; border:1.5px solid; white-space:nowrap; }
+    .days-ico { width:36px; height:36px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--dl-tint); }
+    .days-ico svg { width:19px; height:19px; }
+    .days-sep { width:1px; align-self:stretch; margin:3px 0; background:var(--dl-tint); }
+    .days-txt { display:flex; align-items:baseline; gap:7px; }
+    .days-num { font-size:29px; font-weight:800; line-height:1; letter-spacing:-.02em; }
+    .days-lbl { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; }
+    .days-left.ok   { --dl-tint:#dcefdd; border-color:#cfe6d0; background:#f4faf4; color:#2f7d32; }
+    .days-left.warn { --dl-tint:#f6e7c4; border-color:#f0dcae; background:#fffbf2; color:#8a5a00; }
+    .days-left.over { --dl-tint:#f8d5d7; border-color:#f2b8bb; background:#fff5f5; color:#b60f17; }
+    @media (max-width: 480px) { .tent-row { grid-template-columns: 1fr; } .days-left { justify-content:flex-start; } }
 
     /* Plan-for-tomorrow suggestion chips (pending steps) */
     .plan-suggest-label { font-size:11px; color:#8a8a8a; margin-bottom:8px; }

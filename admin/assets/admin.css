@@ -196,6 +196,11 @@ a.mini:hover { box-shadow: var(--shadow); transform: translateY(-2px); }
 .phero.g-orange { background: linear-gradient(135deg,#f59e0b,#f97316); }
 .phero.g-pink   { background: linear-gradient(135deg,#ec4899,#f4437a); }
 .phero.ph-prog { flex-direction: row; align-items: center; justify-content: space-between; }
+/* flipped cards: label on top, date below in a highlighted plate */
+.phero.ph-flip { justify-content: flex-start; gap: 12px; }
+.phero.ph-flip .ph-l { font-size: 21px; font-weight: 800; line-height: 1.15; letter-spacing: -.01em; opacity: 1; word-break: break-word; }
+.phero.ph-flip .ph-v { font-size: 16px; font-weight: 700; align-self: flex-start;
+  background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.32); border-radius: 10px; padding: 6px 11px; }
 .ph-ring { position: relative; width: 62px; height: 62px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
   background: conic-gradient(#ffffff calc(var(--p,0) * 1%), rgba(255,255,255,.32) 0); }
 .ph-ring::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #26b0dc; }

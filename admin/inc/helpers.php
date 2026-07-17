@@ -113,8 +113,8 @@ function parseSteps(array $payload): array
 /** Canonical ordered site steps (mirrors AppJs STATUS_STEPS) for a site type. */
 function canonicalSteps(string $siteType): array
 {
-    $vrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Commissining'];
-    $nonvrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen','Grill Installation','Fan Installation','Disk Valve','Commissining'];
+    $vrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'];
+    $nonvrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'];
     return strcasecmp(trim($siteType), 'VRV') === 0 ? $vrv : $nonvrv;
 }
 
@@ -124,10 +124,18 @@ function stepKey(string $s): string
     return preg_replace('/[^a-z0-9]/', '', strtolower(trim($s)));
 }
 
-/** True when a step name is (or contains) the commissioning step. */
+/**
+ * True when a step name is (or contains) the FINAL commissioning step.
+ * "Pre-Commissining" is a separate, earlier step — it must NOT flip a project to
+ * Commissioned, so anything prefixed "pre" is excluded.
+ */
 function isCommissioning(string $s): bool
 {
-    return strpos(stepKey($s), 'commiss') !== false;
+    $k = stepKey($s);
+    if (strncmp($k, 'pre', 3) === 0) {
+        return false;
+    }
+    return strpos($k, 'commiss') !== false;
 }
 
 /** Short one-line preview of a longer text value. */

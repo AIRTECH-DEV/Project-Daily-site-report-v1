@@ -56,90 +56,9 @@ class Pms
         } catch (Throwable $e) {
             $base = ['found' => false, 'doneSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
         }
-        // Amendment / Drawing / Measurement come from the RESPONSE sheet (per-submission
-        // log), not the PMS sheet — read the latest matching row so the form can skip them.
-        $base['prefill'] = $this->getResponsePrefill($p, (string)($base['orderId'] ?? ''));
+        // Amendment / Drawing / Measurement are asked fresh on every visit — the form
+        // never adopts the previous response-sheet answers.
         return $base;
-    }
-
-    /**
-     * Latest response-sheet answers for Amendment / Drawing change / Measurement (+ amendment why)
-     * for this project (General) or building+flat (Developer). Empty strings when not found.
-     */
-    private function getResponsePrefill(array $p, string $orderId = ''): array
-    {
-        $out = ['amendment' => '', 'amendmentWhy' => '', 'drawingChange' => '', 'measurement' => ''];
-        try {
-            $ssId = $this->cfg['response_sheet_id'];
-            // Prefer a tab named after the site type (future Cold Room/Storage/PAC tabs),
-            // else the current VRV / Non-VRV split (matches ResponseSheet routing).
-            $title = $this->sheets->titleForName($ssId, (string)($p['siteType'] ?? ''));
-            if ($title === null) {
-                $tab = ($p['siteType'] ?? '') === 'VRV'
-                    ? $this->cfg['tab_names']['VRV'] : $this->cfg['tab_names']['NONVRV'];
-                $title = $this->sheets->titleForName($ssId, $tab);
-            }
-            if ($title === null) {
-                return $out;
-            }
-            $rows = $this->sheets->getTab($ssId, $title);
-            if (count($rows) < 2) {
-                return $out;
-            }
-            $headers = $rows[0];
-            $amoCol = Sheets::findColIndex($headers, 'approval required?', 'why');
-            $whyCol = Sheets::findColIndex($headers, 'why');
-            $drwCol = Sheets::findColIndex($headers, 'changes in drawing', 'upload photo here');
-            $meaCol = Sheets::findColIndex($headers, 'measurement report created today', 'upload the measurement');
-
-            $isDev   = ($p['clientType'] ?? '') === 'Developer';
-            $projCol = Sheets::findColIndex($headers, 'select project name');
-            $ordCol  = Sheets::findColIndex($headers, 'order id');
-            $bldCol  = Sheets::findColIndex($headers, 'building');
-            $flatCol = Sheets::findColIndex($headers, 'flat no');
-            $wantProj = Sheets::normalizeKey($p['project'] ?? '');
-            $wantBld  = Sheets::normalizeKey($p['building'] ?? '');
-            $wantFlat = Sheets::normalizeKey($p['flatNo'] ?? '');
-            // Order ID (col B) is the exact key for BOTH general (Orders-sheet ID)
-            // and developer (building+flat ID) — the same value we stamp on the row.
-            $wantOrder = Sheets::normalizeKey($orderId);
-
-            $match = -1;
-            for ($r = count($rows) - 1; $r >= 1; $r--) {   // latest first
-                $row = $rows[$r];
-                // Primary: Order ID match (works for both client types).
-                if ($ordCol > -1 && $wantOrder !== ''
-                    && Sheets::normalizeKey($row[$ordCol] ?? '') === $wantOrder) {
-                    $match = $r; break;
-                }
-                // Fallback for rows written before Order ID was stamped.
-                if ($isDev) {
-                    if ($bldCol > -1 && $flatCol > -1 && $wantFlat !== ''
-                        && Sheets::normalizeKey($row[$bldCol] ?? '') === $wantBld
-                        && Sheets::normalizeKey($row[$flatCol] ?? '') === $wantFlat) {
-                        $match = $r; break;
-                    }
-                } elseif ($projCol > -1 && $wantProj !== ''
-                    && Sheets::normalizeKey($row[$projCol] ?? '') === $wantProj) {
-                    $match = $r; break;
-                }
-            }
-            if ($match < 0) {
-                return $out;
-            }
-            $row = $rows[$match];
-            $val = function (int $c) use ($row) {
-                $v = $c > -1 ? trim((string)($row[$c] ?? '')) : '';
-                return strcasecmp($v, 'N/A') === 0 ? '' : $v;
-            };
-            $out['amendment']    = $val($amoCol);
-            $out['amendmentWhy'] = $val($whyCol);
-            $out['drawingChange']= $val($drwCol);
-            $out['measurement']  = $val($meaCol);
-        } catch (Throwable $e) {
-            // best-effort: no prefill on error
-        }
-        return $out;
     }
 
     /** Flats for a developer building: [['flat'=>'D-102','floor'=>'1st floor'], ...] (floor forward-filled over merged cells). */
