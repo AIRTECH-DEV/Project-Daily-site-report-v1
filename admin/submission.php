@@ -247,21 +247,11 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
     </div>
   </div>
 
-<div class="card2">
-  <div class="card2-head accord-head" id="rawHead"><i class="bi bi-code-slash text-primary"></i><h2>Raw Payload</h2>
-    <i class="bi bi-chevron-down chev"></i></div>
-  <div class="card2-body" id="rawBody" style="display:none">
-    <pre class="mono" style="white-space:pre-wrap;word-break:break-word;background:#0f1b30;color:#c7d5ea;padding:16px;border-radius:10px;max-height:420px;overflow:auto;"><?= Admin::e(json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?></pre>
-  </div>
-</div>
-
 <a class="btn btn-ghost" href="<?= Admin::BASE ?>/submissions.php"><i class="bi bi-arrow-left"></i> Back to reports</a>
 
 <?php
 $js = '<script>(function(){'
     . 'var kb=document.getElementById("kebabBtn"),km=document.getElementById("kebabMenu");'
     . 'if(kb&&km){kb.addEventListener("click",function(e){e.stopPropagation();km.classList.toggle("open");});document.addEventListener("click",function(){km.classList.remove("open");});km.addEventListener("click",function(e){e.stopPropagation();});}'
-    . 'var rh=document.getElementById("rawHead"),rb=document.getElementById("rawBody");'
-    . 'if(rh&&rb)rh.addEventListener("click",function(){var o=rb.style.display==="none";rb.style.display=o?"block":"none";rh.classList.toggle("open",o);});'
     . '})();</script>';
 Layout::foot($js);
