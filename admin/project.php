@@ -75,8 +75,13 @@ $remarksLog = [];   // activity / next-plan / hold remarks per visit
 foreach ($visits as $v) {
     $pl = json_decode((string)$v['payload_json'], true) ?: [];
     $date = date('Y-m-d', strtotime((string)$v['created_at']));
-    $author = trim((string)$v['submitter_email']) ?: 'system';
     $pe = trim((string)$v['engineer']);
+    // public form is anonymous — no submitter identity is sent, so submitter_email
+    // lands as literal "unknown". fall back to the visit's PE for a useful author.
+    $rawAuthor = trim((string)$v['submitter_email']);
+    $author = in_array(strtolower($rawAuthor), ['', 'unknown', 'system'], true)
+        ? ($pe !== '' ? $pe : 'unknown')
+        : $rawAuthor;
 
     // planned starts from this visit's next-day plan
     $tSteps = $pl['tomorrowSteps'] ?? [];
