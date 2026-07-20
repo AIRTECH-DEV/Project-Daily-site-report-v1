@@ -1,7 +1,7 @@
 <?php
 /**
  * Sends ONE test email to email.test_to (TEST mode) to verify SMTP creds.
- * Fill config/app.php > email.smtp_pass first. Sends to nobody else, no CC,
+ * Set email.smtp_pass in config/secrets.php first. Sends to nobody else, no CC,
  * touches no sheet.
  *   php scripts/test_email.php
  */
@@ -15,12 +15,12 @@ $app = Bootstrap::init();
 $emailCfg = $cfg['email'];
 $emailCfg['mode'] = 'TEST';                      // force TEST for this script
 if (empty($emailCfg['smtp_pass'])) {
-    fwrite(STDERR, "email.smtp_pass is empty — set the crm@ app password in config/app.php first.\n");
+    fwrite(STDERR, "email.smtp_pass is empty — set the crm@ app password in config/secrets.php first.\n");
     exit(1);
 }
 
-// Minimal real PDF to attach.
-require __DIR__ . '/../vendor/fpdf/fpdf.php';
+// Minimal real PDF to attach. (require_once: PmsFpdf already loaded fpdf.php.)
+require_once __DIR__ . '/../vendor/fpdf/fpdf.php';
 $fp = new FPDF();
 $fp->AddPage(); $fp->SetFont('Arial', 'B', 16);
 $fp->Cell(0, 10, 'PMS SMTP test — ' . date('c'));
