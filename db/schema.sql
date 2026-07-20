@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS `submissions` (
   `response_tab`    VARCHAR(40)     DEFAULT NULL,
   `response_row`    INT UNSIGNED    DEFAULT NULL,
   `pdf_url`         VARCHAR(512)    DEFAULT NULL,
-  `overall_status`  ENUM('received','processing','done','failed','partial')
+  `overall_status`  ENUM('received','queued','processing','awaiting_notify','done','failed','partial')
                     NOT NULL DEFAULT 'received',
   `created_at`      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
