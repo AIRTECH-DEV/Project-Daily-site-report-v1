@@ -13,7 +13,34 @@ require __DIR__ . '/inc/helpers.php';
 $cfg = Admin::cfg();      // already merged with existing overrides
 $flash = ''; $flashType = 'ok';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Operational/tracker tables holding submitted report data + everything derived
+// from it. Cleared by the Danger Zone reset. Auth/ops tables (admin_users,
+// rate_limits, audit_logs) and config/overrides.json are intentionally kept.
+$DATA_TABLES = [
+    'submissions', 'process_log', 'attachments',   // live pipeline (schema.sql)
+    'visit_workers', 'projects', 'contractors', 'workers', 'alerts', 'alert_events', // derived (admin_ext)
+];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'clear_data') {
+    Admin::requireEditor();
+    if (!Admin::checkCsrf()) {
+        $flash = 'Invalid request token. Refresh and try again.'; $flashType = 'bad';
+    } elseif (trim((string)($_POST['confirm'] ?? '')) !== 'DELETE') {
+        $flash = 'Type DELETE in the box to confirm. Nothing was cleared.'; $flashType = 'bad';
+    } else {
+        try {
+            $db = Admin::db();
+            $db->exec('SET FOREIGN_KEY_CHECKS=0');
+            foreach ($DATA_TABLES as $t) $db->exec("TRUNCATE TABLE `$t`");
+            $db->exec('SET FOREIGN_KEY_CHECKS=1');
+            @unlink(__DIR__ . '/../storage/.admin_sync');   // force fresh sync next load
+            Admin::audit('clear_tracker_data', 'submissions', null, '', 'truncated: ' . implode(',', $DATA_TABLES));
+            $flash = 'All tracker data cleared. Sheets untouched. Dashboard is now empty — new submissions rebuild it.';
+        } catch (Throwable $e) {
+            $flash = 'Could not clear data: ' . $e->getMessage(); $flashType = 'bad';
+        }
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     Admin::requireEditor();
     if (!Admin::checkCsrf()) {
         $flash = 'Invalid request token. Refresh and try again.'; $flashType = 'bad';
@@ -134,6 +161,10 @@ if (!$peNumbers) $peNumbers = [''];
 $peTestTo   = $cfg['pe_plan']['test_to'] ?? '';
 $peTpl      = $cfg['pe_plan']['template_name'] ?? 'pe_plan_reminder';
 $peTestDate = date('Y-m-d', strtotime('+1 day'));   // test defaults to tomorrow (the real reminder day)
+
+// Danger Zone — how many submissions currently in the DB (guides the reset copy)
+$subCount = 0;
+try { $subCount = (int)Admin::db()->query("SELECT COUNT(*) FROM submissions")->fetchColumn(); } catch (Throwable $e) {}
 
 // one-shot flash from the "Send test now" endpoint (pe_plan_test.php)
 if (!empty($_SESSION['pe_plan_flash'])) {
@@ -359,6 +390,36 @@ Layout::head('Settings', 'settings');
   <?php endif; ?>
   </fieldset>
 </form>
+
+<?php if (!Admin::isViewer()): ?>
+<div class="card2" style="margin-top:22px;border:1px solid #f0b4b4">
+  <div class="card2-head"><i class="bi bi-exclamation-triangle" style="color:#c0392b"></i><h2>Danger Zone — Clear Tracker Data</h2>
+    <span class="sub">wipe all submitted reports &amp; everything derived from them</span></div>
+  <div class="card2-body">
+    <p style="color:#5b6b82;font-size:13px;margin:0 0 12px">
+      Deletes <b>every submission</b> and all data built from it — process log, attachments, projects,
+      contractors, workers, visits, and alerts. Use once after go-live to drop test data.
+      <b>Google Sheets are NOT touched</b> (clear those manually, as you did). Admin logins, audit trail,
+      and your Settings above are kept. <b>This cannot be undone.</b>
+    </p>
+    <p style="color:#8190a5;font-size:12.5px;margin:0 0 14px">
+      Currently in DB: <b><?= $subCount ?></b> submission<?= $subCount === 1 ? '' : 's' ?> (+ derived rows).
+    </p>
+    <form method="POST" onsubmit="return confirm('Permanently delete ALL tracker data? Sheets stay untouched. This cannot be undone.');">
+      <?= Admin::csrfField() ?>
+      <input type="hidden" name="action" value="clear_data">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:#5b6b82">Type <span class="mono">DELETE</span> to confirm
+          <input class="inp" type="text" name="confirm" autocomplete="off" placeholder="DELETE" style="width:140px;margin-left:8px">
+        </label>
+        <button class="btn" type="submit" style="background:#c0392b;color:#fff;border-color:#c0392b">
+          <i class="bi bi-trash3"></i> Clear all tracker data
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+<?php endif; ?>
 
 <div class="card2" style="margin-top:22px">
   <div class="card2-head"><i class="bi bi-shield-lock text-primary"></i><h2>What stays in code</h2></div>
