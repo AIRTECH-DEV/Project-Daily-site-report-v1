@@ -74,7 +74,7 @@ $cfg = [
         'smtp_port'   => 587,
         'smtp_secure' => 'tls',            // tls (STARTTLS) | ssl | none
         'smtp_user'   => 'crm@vakhariaairtech.com',
-        'smtp_pass'   => 'jkyo bzji crrd sdht',               // TODO: app password for crm@ (fill to go live)
+        'smtp_pass'   => '',                                  // SET IN config/secrets.php (gitignored) — leave blank here
         'from'        => 'crm@vakhariaairtech.com',
         'from_name'   => 'CRM Vakharia Airtech',
         'cc'          => 'crm@vakhariaairtech.com,mis@vakhariaairtech.com,piyush@vakhariaairtech.com',
@@ -100,7 +100,7 @@ $cfg = [
     // ---- WhatsApp (Meta Cloud API) — port of sendReportwhatsapp.js -------
     'whatsapp' => [
         'mode'             => 'TEST',       // OFF | TEST | LIVE
-        'token'            => 'EAAUHbyjDeCEBQnJQ5lZCHwDBhq0UvdQw2VtjhGaXKUsPdRadv2bArqt7763SclpFyi7rdE6coUydGXAWaAOdmxwOCuACOP6Y3kZBEhxxJ3gloJAJlMyAWl5EjVKDv5goEXKNZBN20ImV1oRxRC1wZBXhRYZBP1IGZBZAweZAvhfY406S4PoJWo5zKZCboxRyozQZDZD',          // TODO: META_ACCESS_TOKEN (fill to go live)
+        'token'            => '',          // SET IN config/secrets.php (gitignored) — leave blank here
         'phone_number_id'  => '1002193126304358',
         'template_name'    => 'daily_site_updates',
         'language_code'    => 'en',        // switch to 'en_US' if error 132001
@@ -159,6 +159,34 @@ $cfg = [
     // Full path to the PHP CLI binary (PHP_BINARY is unreliable under mod_php).
     'php_binary'           => 'C:\\xampp\\php\\php.exe',
 ];
+
+// ---- Server-local settings (config/secrets.php) -------------------------
+// Everything that differs per machine or must never enter git lives OUTSIDE
+// this file, in config/secrets.php:  the SMTP app password + WhatsApp token,
+// AND the server-local infra (DB creds, PHP CLI path) — dev XAMPP vs the Linux
+// VM. This file stays version-controlled (Sheet IDs / tabs / modes / tunables),
+// so CI/CD `git reset --hard` refreshes it without wiping/leaking the secrets.
+// Set it ONCE per machine: copy config/secrets.example.php -> config/secrets.php.
+// No env vars. Any key present there overrides the default above; missing = keep.
+$secretsFile = __DIR__ . '/secrets.php';
+if (is_file($secretsFile)) {
+    $secrets = require $secretsFile;
+    if (is_array($secrets)) {
+        if (isset($secrets['email']['smtp_pass']) && $secrets['email']['smtp_pass'] !== '') {
+            $cfg['email']['smtp_pass'] = (string)$secrets['email']['smtp_pass'];
+        }
+        if (isset($secrets['whatsapp']['token']) && $secrets['whatsapp']['token'] !== '') {
+            $cfg['whatsapp']['token'] = (string)$secrets['whatsapp']['token'];
+        }
+        // Server-local infra — DB credentials + PHP CLI binary (per-key merge).
+        if (isset($secrets['db']) && is_array($secrets['db'])) {
+            $cfg['db'] = array_merge($cfg['db'], $secrets['db']);
+        }
+        if (isset($secrets['php_binary']) && $secrets['php_binary'] !== '') {
+            $cfg['php_binary'] = (string)$secrets['php_binary'];
+        }
+    }
+}
 
 // ---- Admin-panel overrides (config/overrides.json) ----------------------
 // The admin panel (admin/settings.php) writes runtime-tunable values here so

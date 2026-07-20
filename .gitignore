@@ -3,6 +3,9 @@ Project tasks.txt
 # Secrets — never commit the service-account private key
 config/google-service-account.json
 
+# Local secrets (SMTP app password, WhatsApp token) — set once per server, never committed
+config/secrets.php
+
 # Admin-panel runtime overrides (developer client contacts, send modes)
 config/overrides.json
 

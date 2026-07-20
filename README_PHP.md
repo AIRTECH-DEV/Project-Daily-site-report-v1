@@ -61,11 +61,12 @@ storage/               tokens, uploads, reports, logs  (gitignored)
   request, recorded in `process_log`. Both default to `MODE=OFF`.
 
 ## Going live with Email + WhatsApp
-Edit `config/app.php`:
-- **Email** (`email` block): set `smtp_pass` = app password for `crm@vakhariaairtech.com`,
+Secrets go in `config/secrets.php` (gitignored — `cp config/secrets.example.php config/secrets.php`);
+modes and `test_to` stay in `config/app.php`:
+- **Email** (`email` block): set `smtp_pass` in `secrets.php` (app password for `crm@vakhariaairtech.com`),
   then `mode` = `TEST` (all mail → `test_to`) or `LIVE` (real client + CC, stamps Mail Status).
   Verify: `php scripts/test_email.php`.
-- **WhatsApp** (`whatsapp` block): set `token` (Meta access token) + `test_to`, then
+- **WhatsApp** (`whatsapp` block): set `token` in `secrets.php` (Meta access token) + `test_to` in `app.php`, then
   `mode` = `TEST`/`LIVE`. Verify: `php scripts/test_whatsapp.php`.
 - Recipient lookup: email = scrape tab → Orders "Client Email Id" → developer map → fallback;
   WhatsApp = Orders "phone" columns → developer map → fallback. The scrape sheet

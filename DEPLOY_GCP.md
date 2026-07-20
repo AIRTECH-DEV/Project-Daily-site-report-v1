@@ -1,171 +1,195 @@
-# PMS — Deploy to Google Cloud (GCP) — Full Step-by-Step Guide
+# PMS — Deploy to Google Cloud (GCP) — Nginx + PHP 8.3-FPM + MySQL 8
 
 This guide takes the PMS / Site-Visit-Report PHP app from XAMPP-on-Windows to a
-production **Google Compute Engine** Linux VM (Apache + PHP + MariaDB), with the
-background worker and PE-plan reminder running as **cron** jobs (they run as
-Windows Scheduled Tasks locally).
+production **Google Compute Engine** VM on a **LEMP** stack — **Ubuntu 24.04 +
+Nginx + PHP 8.3-FPM + MySQL 8** — with the background worker and PE-plan reminder
+running as **cron** jobs (they run as Windows Scheduled Tasks locally).
 
-The app is a normal LAMP app with a few specifics you must respect:
+> **Why Nginx (not Apache)?** Same cost — both are free; you pay only for the VM.
+> Nginx + PHP-FPM uses less RAM on a 2 GB box (FPM `ondemand` frees idle workers;
+> Apache+mod_php loads PHP into every worker), and it **matches the VAPL CRM box**,
+> so both servers use one identical stack. See README §10.1.
+
+The app is a normal PHP app with a few specifics you must respect:
 
 * It is served under a **`/pms/` URL path** (admin paths are hardcoded as
-  `/pms/admin` and `/pms/assets/assets`). Keep the app in a folder named `pms`
+  `/pms/admin`, assets as `/pms/assets/...`). Keep the app in a folder named `pms`
   under the web root — do **not** rename it.
 * It needs a **Google service-account key** and a **Shared Drive** (photos/PDFs
   can't go on the SA's My-Drive — 0 quota).
-* Outbound it talks to **Gmail SMTP (port 587)** and **Meta WhatsApp Cloud API
-  (HTTPS 443)** — both allowed on GCP by default. (GCP blocks outbound port 25;
-  we use 587, so email is fine.)
+* Outbound it talks to **Gmail SMTP (587)** and **Meta WhatsApp Cloud API (443)**
+  — both allowed on GCP. (GCP blocks outbound 25; we use 587, so email is fine.)
 * PDF generation uses FPDF; the PE-plan reminder renders text on an image, so
   **php-gd with FreeType** is required.
+* The web submit **spawns** the worker via `exec()`/`popen()`, so those must not
+  be disabled (Ubuntu's default leaves them on).
+* **Secrets + server-local infra live in `config/secrets.php`** (gitignored), not
+  `config/app.php`. `app.php` stays in git (Sheet IDs, modes, tunables) and is
+  overwritten by every deploy — never hand-edit it on the server. See §6.
 
 ---
 
-## 0. Which GCP instance should you buy?
+## 0. Which GCP instance?
 
-This is a **low-traffic internal tool** (a handful of engineers submitting site
-reports). Photos and PDFs live in Google Drive, not on the VM, so local disk and
-RAM needs are modest. The only real work on the box is PHP + MariaDB + occasional
-PDF/image generation.
-
-### Recommendation
+Low-traffic internal tool (a handful of engineers submitting site reports); photos
+and PDFs live in Google Drive, not on the VM, so disk/RAM needs are modest.
 
 | Instance | vCPU / RAM | Approx cost* | Verdict |
 |---|---|---|---|
-| `e2-micro` | 2 vCPU (shared burst) / **1 GB** | Free-tier eligible** | Works only with 2 GB swap; tight for MariaDB + Apache. Fine to trial, not ideal for prod. |
-| **`e2-small`** ⭐ | 2 vCPU (shared burst) / **2 GB** | **~$13–15 / month** | **Buy this.** Comfortable for LAMP + PDF + worker at this load. |
-| `e2-medium` | 2 vCPU / **4 GB** | ~$25–27 / month | Only if you add many more users or heavier reporting. |
+| `e2-micro` | 2 vCPU (burst) / **1 GB** | Free-tier (US only) | Too tight for MySQL 8 + Nginx + worker; trial only. |
+| **`e2-small`** ⭐ | 2 vCPU (burst) / **2 GB** | **~$13–15 / mo** | **Buy this.** Comfortable with the §3 tuning + 2 GB swap. |
+| `e2-medium` | 2 vCPU / **4 GB** | ~$25–27 / mo | Only if you add many users / heavier reporting. |
 
-\* On-demand pricing in **asia-south1 (Mumbai)**, VM only, before any committed-use
-discount. Add ~$3–4/mo for the 30 GB balanced disk. Check the
-[GCP pricing calculator](https://cloud.google.com/products/calculator) for exact,
-current numbers.
+\* On-demand in **asia-south1 (Mumbai)**, VM only. Add ~$3–4/mo for a 30 GB balanced
+disk. GCP's Always-Free `e2-micro` is US-region only; your users/numbers are in
+India, so prefer a **paid `e2-small` in Mumbai**.
 
-\*\* GCP's Always-Free `e2-micro` is only free in **us-west1 / us-central1 /
-us-east1** (US). Your users and phone numbers are in India (`Asia/Kolkata`), so a
-US VM adds ~250 ms latency. For production, prefer a **paid `e2-small` in Mumbai**
-over a free US micro.
-
-### Final spec to order
-
-* **Machine type:** `e2-small` (2 GB RAM)
-* **Region / zone:** `asia-south1` / `asia-south1-a` (Mumbai — closest to your users)
-* **Boot disk:** **Debian 12 (bookworm)**, **30 GB**, `pd-balanced`
-* **Networking:** allow HTTP + HTTPS, reserve a **static external IP**
-
-> Prefer Ubuntu? Ubuntu 22.04/24.04 LTS works the same; package names are nearly
-> identical. This guide uses **Debian 12** commands.
+**Final spec:** `e2-small` · **Ubuntu 24.04 LTS** · 30 GB `pd-balanced` ·
+`asia-south1` / `asia-south1-c` · static external IP · allow HTTP + HTTPS.
 
 ---
 
-## 1. Create the GCP project & VM
+## 1. Create the project & VM
 
-### 1a. Project + billing (one-time)
+### 1a. Project + billing
+1. <https://console.cloud.google.com> → create a project (e.g. `pms-prod`) → **link billing**.
+2. Enable the **Compute Engine API** (prompts on first open).
 
-1. Go to <https://console.cloud.google.com>.
-2. Create a project (e.g. `pms-prod`) and **link a billing account**.
-3. Enable the **Compute Engine API** (Console → APIs & Services → Enable, or it
-   prompts you the first time you open Compute Engine).
-
-### 1b. Reserve a static IP (so the address never changes)
-
-Console → **VPC network → IP addresses → Reserve external static address**
-(Region: `asia-south1`). Or with the CLI (see 1d).
-
-### 1c. Create the VM (Console)
-
-Console → **Compute Engine → VM instances → Create instance**:
-
-* **Name:** `pms-vm`
-* **Region / Zone:** `asia-south1` / `asia-south1-a`
+### 1b. Create the VM (Console)
+Compute Engine → **Create instance**:
+* **Name:** `pms-vm` · **Region/Zone:** `asia-south1` / `asia-south1-c`
 * **Machine type:** `e2-small`
-* **Boot disk:** Change → **Debian 12**, **Balanced**, **30 GB** → Select
-* **Firewall:** tick **Allow HTTP traffic** and **Allow HTTPS traffic**
-* **Networking → Network interfaces → External IPv4:** pick the static IP from 1b
+* **Boot disk:** Change → **Ubuntu 24.04 LTS (x86/64)**, **Balanced**, **30 GB**
+* **Firewall:** tick **Allow HTTP** + **Allow HTTPS**
 * Create.
 
-### 1d. Or create everything with the gcloud CLI (faster)
-
-Run in Cloud Shell (top-right terminal icon in the console) or a local
-[gcloud install](https://cloud.google.com/sdk/docs/install):
-
+### 1c. Or with the gcloud CLI
 ```bash
 gcloud config set project pms-prod
 gcloud config set compute/region asia-south1
-gcloud config set compute/zone asia-south1-a
+gcloud config set compute/zone asia-south1-c
 
-# Reserve a static IP
 gcloud compute addresses create pms-ip --region asia-south1
-
-# Create the VM (attaches the static IP, opens 80/443 via tags)
 gcloud compute instances create pms-vm \
   --machine-type=e2-small \
-  --image-family=debian-12 --image-project=debian-cloud \
+  --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
   --boot-disk-size=30GB --boot-disk-type=pd-balanced \
   --address=$(gcloud compute addresses describe pms-ip --region asia-south1 --format='value(address)') \
   --tags=http-server,https-server
-
-# Ensure firewall rules for the tags exist (usually auto-created)
-gcloud compute firewall-rules create allow-http  --allow tcp:80  --target-tags=http-server  2>/dev/null || true
-gcloud compute firewall-rules create allow-https --allow tcp:443 --target-tags=https-server 2>/dev/null || true
 ```
 
-### 1e. SSH into the VM
+### 1d. Reserve the IP as static
+VPC network → **IP addresses** → the VM's external IP → **Ephemeral → Static** → Reserve.
+Note it as `SERVER_IP`.
 
-Console: click **SSH** next to the instance. Or CLI:
-
-```bash
-gcloud compute ssh pms-vm --zone asia-south1-a
-```
-
+### 1e. SSH in
+Console: **SSH** button next to the instance. Or `gcloud compute ssh pms-vm --zone asia-south1-c`.
 All remaining commands run **inside the VM** unless noted.
 
 ---
 
-## 2. Install the LAMP stack
+## 2. Install the LEMP stack
 
 ```bash
 sudo apt update && sudo apt -y upgrade
 
-# Apache + PHP 8.2 (Debian 12 default) + required extensions + MariaDB + tools
+# Nginx + PHP 8.3-FPM + the extensions PMS needs + MySQL 8 + tools
 sudo apt -y install \
-  apache2 \
-  php php-cli php-curl php-mysql php-mbstring php-gd php-xml php-zip php-bcmath \
-  libapache2-mod-php \
-  mariadb-server \
-  git unzip certbot python3-certbot-apache
+  nginx \
+  php8.3-fpm php8.3-cli php8.3-mysql php8.3-curl php8.3-mbstring \
+  php8.3-gd php8.3-xml php8.3-bcmath php8.3-zip \
+  mysql-server \
+  git unzip certbot python3-certbot-nginx
 ```
 
-Extension check — all of these must show up:
-
+Verify the extensions PMS relies on (all must appear):
 ```bash
 php -m | grep -Ei 'curl|openssl|pdo_mysql|mbstring|^gd$|json'
 ```
+* `curl` → Google API + WhatsApp calls · `openssl` → signs the SA JWT (PHP core)
+* `pdo_mysql` → DB tracker/audit · `mbstring` → text · `gd` (FreeType) → PE-plan image + PDF glyphs
 
-* `curl` → Google API + WhatsApp calls
-* `openssl` → signs the service-account JWT (built into PHP core)
-* `pdo_mysql` → DB tracker/audit
-* `mbstring` → text handling
-* `gd` (with FreeType) → PE-plan reminder image + PDF glyphs
-
-Enable Apache rewrite (harmless, and future-proof) and restart:
+Confirm `exec`/`popen` are **not** disabled (needed for the per-submit worker spawn):
+```bash
+php -r 'echo "CLI disable_functions: [" , (ini_get("disable_functions") ?: "none") , "]\n";'
+```
+Ubuntu leaves them enabled by default. (Even if a spawn is ever missed, the §10 cron drains the queue.)
 
 ```bash
-sudo a2enmod rewrite
-sudo systemctl enable --now apache2
+sudo systemctl enable --now nginx php8.3-fpm mysql
 ```
 
 ---
 
-## 3. Secure MariaDB & create the database
+## 3. Tune for a 2 GB VM
+
+### 3a. 2 GB swap (safety net for memory spikes)
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo sysctl vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+```
+
+### 3b. MySQL (small DB, low traffic)
+```bash
+sudo tee /etc/mysql/mysql.conf.d/zz-pms.cnf >/dev/null <<'EOF'
+[mysqld]
+innodb_buffer_pool_size        = 256M
+innodb_log_file_size           = 64M
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method            = O_DIRECT
+max_connections                = 50
+performance_schema             = OFF
+EOF
+sudo systemctl restart mysql
+```
+
+### 3c. PHP-FPM `ondemand` (frees idle workers)
+```bash
+sudo sed -i \
+ -e 's/^pm = .*/pm = ondemand/' \
+ -e 's/^pm.max_children = .*/pm.max_children = 10/' \
+ -e 's/^;*pm.process_idle_timeout = .*/pm.process_idle_timeout = 15s/' \
+ -e 's/^pm.max_requests = .*/pm.max_requests = 500/' \
+ /etc/php/8.3/fpm/pool.d/www.conf
+```
+
+### 3d. PHP limits + timezone (photos need big uploads; worker needs the TZ)
+PMS site-visit submits carry photos, so raise upload limits; set the timezone for
+**both** the FPM (web) and CLI (worker/cron) SAPIs:
+```bash
+sudo tee /etc/php/8.3/fpm/conf.d/99-pms.ini >/dev/null <<'EOF'
+date.timezone       = Asia/Kolkata
+upload_max_filesize = 64M
+post_max_size       = 80M
+max_execution_time  = 120
+max_file_uploads    = 50
+memory_limit        = 256M
+opcache.enable      = 1
+opcache.memory_consumption      = 128
+opcache.max_accelerated_files   = 10000
+opcache.validate_timestamps     = 1
+EOF
+# CLI (worker/cron) — timezone matters here
+sudo cp /etc/php/8.3/fpm/conf.d/99-pms.ini /etc/php/8.3/cli/conf.d/99-pms.ini
+sudo systemctl restart php8.3-fpm
+```
+
+> **Do NOT change the server clock.** PMS cron is interval-based (`* * * * *`,
+> `*/15`) so the OS timezone is irrelevant; the app reads `Asia/Kolkata` from
+> config. Leave the VM on UTC.
+
+---
+
+## 4. Create the database + app user
 
 ```bash
-sudo mysql_secure_installation
+sudo mysql_secure_installation   # set a root password, remove anon users, test DB, reload
 ```
-Answer: set a root password (or keep unix_socket auth), remove anonymous users,
-disallow remote root, remove test DB, reload privileges.
 
-Create the app database and a dedicated user (do **not** reuse root for the app):
-
+Create the app DB and a dedicated user (never run the app as root). The app connects
+over **TCP to 127.0.0.1**, so the grant is for `'pms_user'@'127.0.0.1'`:
 ```bash
 sudo mysql <<'SQL'
 CREATE DATABASE IF NOT EXISTS pms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -174,386 +198,276 @@ GRANT ALL PRIVILEGES ON pms.* TO 'pms_user'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
 ```
-
-> Keep MariaDB on the default **port 3306**. (On the Windows dev box, a stray
-> MySQL 8 on 33060 could shadow it — that's a Windows-only gotcha; a clean Debian
-> box won't have it.)
+Keep MySQL bound to localhost (default) — never expose 3306 publicly.
 
 ---
 
-## 4. Deploy the application code
+## 5. Deploy the application code
 
-Target directory: **`/var/www/html/pms`** (so the app answers at
-`http://SERVER/pms/`, matching the hardcoded `/pms/` paths).
-
-### Option A — git (recommended)
+Target: **`/var/www/html/pms`** (so the app answers at `http://SERVER/pms/`).
 
 ```bash
+sudo mkdir -p /var/www/html
 cd /var/www/html
-sudo git clone <YOUR_REPO_URL> pms
+sudo git clone https://github.com/AIRTECH-DEV/<pms-repo>.git pms
 cd pms
-sudo git checkout <branch>   # e.g. main, or your release branch
+sudo git checkout main            # or your release branch
 ```
 
-### Option B — copy from your Windows machine
-
-From your **local machine** (PowerShell/Terminal), upload everything **except**
-`storage/`, `.git/`, and `vendor/` cache noise. `vendor/fpdf` **is** needed and is
-committed, so include it. Then on the VM move it into place:
-
-```bash
-# local → VM home dir, then move into web root on the VM
-gcloud compute scp --recurse ./pms pms-vm:~/pms --zone asia-south1-a
-# on the VM:
-sudo rm -rf /var/www/html/pms && sudo mv ~/pms /var/www/html/pms
-```
-
-### Files that are NOT in git — you must add them by hand
-
-These are `.gitignored` (secrets/runtime). Create them on the server:
-
-* `config/google-service-account.json` — the SA private key (see §6).
-* `config/overrides.json` — optional; the admin panel writes it. Skip for now.
-* `storage/…` runtime dirs — created in §7.
+### Files NOT in git — create them by hand (§6)
+These are gitignored (secrets/runtime): `config/secrets.php`,
+`config/google-service-account.json`, `config/overrides.json` (optional; the admin
+panel writes it), and the `storage/…` runtime dirs (§7).
 
 ---
 
-## 5. Point Apache at the app & tune PHP
+## 6. Configure — `config/secrets.php` (NOT `app.php`)
 
-### 5a. Make `/pms/` load `index.php` and keep the doc root at `/var/www/html`
-
-The default Debian vhost already serves `/var/www/html`, so
-`http://SERVER/pms/` works out of the box once the code is in
-`/var/www/html/pms`. Just make sure `DirectoryIndex` includes `index.php`
-(it does by default) and `.htaccess`/overrides are allowed:
-
-```bash
-sudo tee /etc/apache2/conf-available/pms.conf >/dev/null <<'CONF'
-<Directory /var/www/html/pms>
-    Options -Indexes +FollowSymLinks
-    AllowOverride All
-    Require all granted
-    DirectoryIndex index.php
-</Directory>
-
-# Block direct web access to secrets and CLI-only areas
-<DirectoryMatch "^/var/www/html/pms/(config|storage|db)/">
-    Require all denied
-</DirectoryMatch>
-CONF
-
-sudo a2enconf pms
-sudo systemctl reload apache2
-```
-
-> The `DirectoryMatch` block stops the outside world from fetching
-> `config/google-service-account.json`, the DB schema, or queued jobs over HTTP.
-> The diagnostic scripts in `scripts/` are meant to be run from the CLI, not the
-> browser; leave them, but they don't expose secrets on their own.
-
-### 5b. PHP settings (uploads + timezone + execution time)
-
-Site-visit submits carry photos, so raise the upload limits and set the timezone:
+`config/app.php` is **tracked in git** and holds only non-secret config (Sheet/folder
+IDs, notification modes, tunables). It is overwritten by every deploy — **do not edit
+it on the server.** All server-local values — DB creds, the PHP binary path, and the
+two secrets — go in **`config/secrets.php`** (gitignored), which `app.php` loads and
+merges. Deploys never touch it.
 
 ```bash
-PHPINI=$(php -r 'echo php_ini_loaded_file();' | sed 's#/cli/#/apache2/#')  # the Apache php.ini
-sudo sed -i \
-  -e 's/^;*date.timezone.*/date.timezone = Asia\/Kolkata/' \
-  -e 's/^upload_max_filesize.*/upload_max_filesize = 64M/' \
-  -e 's/^post_max_size.*/post_max_size = 80M/' \
-  -e 's/^max_execution_time.*/max_execution_time = 120/' \
-  -e 's/^;*max_file_uploads.*/max_file_uploads = 50/' \
-  "$PHPINI"
+cd /var/www/html/pms
+sudo cp config/secrets.example.php config/secrets.php
+sudo nano config/secrets.php
 ```
-
-Also set the CLI php.ini timezone (used by the worker/cron):
-
-```bash
-CLIINI=$(php -r 'echo php_ini_loaded_file();')
-sudo sed -i 's/^;*date.timezone.*/date.timezone = Asia\/Kolkata/' "$CLIINI"
-```
-
-**Important — the background worker needs `exec()`/`popen()`.** After a submit,
-the web request spawns the worker (`src/Spawn.php`). Confirm neither `exec` nor
-`popen` is in `disable_functions`:
-
-```bash
-php -r 'echo ini_get("disable_functions") ?: "(none)"; echo "\n";'
-```
-If they're disabled, the cron safety net in §8 still drains the queue — but leave
-them enabled for instant processing.
-
-Restart Apache to load the ini changes:
-
-```bash
-sudo systemctl restart apache2
-```
-
----
-
-## 6. Configure the app (`config/app.php`)
-
-Edit `/var/www/html/pms/config/app.php`. Change these from the dev values:
-
+Set the Linux values:
 ```php
-// Point PHP CLI at the Linux binary (was C:\xampp\php\php.exe on Windows)
-'php_binary' => '/usr/bin/php',
-
-'db' => [
-    'host' => '127.0.0.1',
-    'port' => 3306,
-    'name' => 'pms',
-    'user' => 'pms_user',                 // the app user from §3
-    'pass' => 'CHANGE_ME_STRONG_PASSWORD',// the password you set
-    'charset' => 'utf8mb4',
-],
-
-'timezone' => 'Asia/Kolkata',   // already correct
+return [
+    'email'    => ['smtp_pass' => 'GMAIL_APP_PASSWORD_FOR_crm@'],   // fill to go live
+    'whatsapp' => ['token'     => 'META_ACCESS_TOKEN'],             // fill to go live
+    'db' => [
+        'host' => '127.0.0.1', 'port' => 3306, 'name' => 'pms',
+        'user' => 'pms_user',                    // from §4
+        'pass' => 'CHANGE_ME_STRONG_PASSWORD',   // from §4
+    ],
+    'php_binary' => '/usr/bin/php',              // was C:\xampp\php\php.exe on Windows
+];
 ```
 
-**Secrets** — set these when you're ready to go live (keep TEST/OFF until then):
+> **Modes** (`email.mode`, `whatsapp.mode`, `pe_plan.mode`) stay in `app.php` and are
+> best flipped from the **admin panel** later (§12) — it writes `config/overrides.json`.
+> Keep them TEST/OFF until diagnostics pass.
 
-* `email.smtp_pass` → Gmail **app password** for `crm@vakhariaairtech.com`.
-* `whatsapp.token` → Meta access token.
-* Notification **modes** (`email.mode`, `whatsapp.mode`, `pe_plan.mode`) are best
-  flipped from the **admin panel** later (§10), which writes `config/overrides.json`.
-
-### 6a. Install the Google service-account key
-
-Copy your SA JSON to the server as `config/google-service-account.json`. From your
-local machine:
-
+### 6a. Install the service-account key
+Copy your SA JSON to the server as `config/google-service-account.json`. From your laptop:
 ```bash
-gcloud compute scp ./config/google-service-account.json \
-  pms-vm:~/google-service-account.json --zone asia-south1-a
+gcloud compute scp ./config/google-service-account.json pms-vm:~/gsa.json --zone asia-south1-c
 # on the VM:
-sudo mv ~/google-service-account.json /var/www/html/pms/config/google-service-account.json
+sudo mv ~/gsa.json /var/www/html/pms/config/google-service-account.json
 ```
-
 **Shared Drive requirement:** the SA cannot upload to its own My-Drive (0 quota).
-Confirm the SA (`service-data-syncer@…gserviceaccount.com`) is added as
-**Content manager** on the "Daily Site Reports" **Shared Drive** and that
-`parent_folder_id` / `shared_drive_id` in `config/app.php` match it. Also share
-the Sheets the app reads/writes with the SA email.
+Confirm the SA is **Content manager** on the "Daily Site Reports" **Shared Drive** and
+that `parent_folder_id` / `shared_drive_id` in `config/app.php` match it. Share every
+Sheet the app reads/writes with the SA email too.
 
 ---
 
 ## 7. File ownership & runtime storage
 
-Apache (and the worker it spawns) runs as **`www-data`**. It must own the code and
-be able to write `storage/` and `config/overrides.json`.
-
+Nginx/PHP-FPM (and the worker it spawns) run as **`www-data`**.
 ```bash
 cd /var/www/html/pms
-
-# Create the runtime dirs the app writes to
 sudo mkdir -p storage/tokens storage/uploads storage/reports storage/logs storage/queue
-
-# Ownership: www-data owns everything
 sudo chown -R www-data:www-data /var/www/html/pms
-
-# Sensible perms: dirs 755, files 644, storage writable
 sudo find . -type d -exec chmod 755 {} \;
 sudo find . -type f -exec chmod 644 {} \;
 sudo chmod -R 775 storage
-# The SA key: readable by www-data only
-sudo chmod 640 config/google-service-account.json
+sudo chmod 640 config/google-service-account.json config/secrets.php   # secrets: www-data-only
 ```
-
-If cron runs the worker as `www-data` (recommended, §8), ownership above is all
-you need. If you ever run a script as your login user for testing, use `sudo -u
-www-data php scripts/…` so it writes files `www-data` can later read.
+(If you set up CI/CD, §A4 of the CI/CD guide changes ownership to the deploy user +
+`www-data` group with setgid — follow that instead.)
 
 ---
 
 ## 8. Import the database schema
 
-The repo ships three SQL files — import all three:
-
+Three idempotent files (`CREATE TABLE IF NOT EXISTS`) — import all three:
 ```bash
 cd /var/www/html/pms
-sudo mysql pms < db/schema.sql            # core: submissions + process_log
-sudo mysql pms < db/admin_schema.sql      # admin panel (users, audit, …)
-sudo mysql pms < db/admin_ext_schema.sql  # admin extensions
-```
-
-Verify tables exist:
-
-```bash
-sudo mysql pms -e 'SHOW TABLES;'
+sudo mysql pms < db/schema.sql            # core: submissions, process_log, attachments
+sudo mysql pms < db/admin_schema.sql      # admin auth (admin_users, rate_limits, audit_logs)
+sudo mysql pms < db/admin_ext_schema.sql  # admin master (projects, alerts, workers, …)
+sudo mysql pms -e 'SHOW TABLES;'          # verify
 ```
 
 ---
 
-## 9. Schedule the worker & PE-plan reminder (cron replaces the Windows tasks)
+## 9. Nginx — serve `/pms/` + block secrets
 
-On Windows these are Scheduled Tasks (`register_worker_task.ps1`,
-`register_pe_plan_task.ps1`). On Linux, use **cron running as `www-data`** so the
-files it writes match web ownership:
+PMS uses real `.php` paths (no front-controller rewrite needed). Point the doc root at
+`/var/www/html` so `/pms/` maps to the code:
+```bash
+sudo tee /etc/nginx/sites-available/pms >/dev/null <<'EOF'
+server {
+    listen 80;
+    server_name _;                 # change to your domain in §13
 
+    root /var/www/html;
+    index index.php index.html;
+
+    client_max_body_size 80M;      # site-photo uploads
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_read_timeout 120;
+    }
+
+    # Block web access to secrets, runtime storage and the SQL schema
+    location ~ ^/pms/(config|storage|db)/ { deny all; return 404; }
+    location ~ /\.(?!well-known) { deny all; }
+}
+EOF
+
+sudo ln -s /etc/nginx/sites-available/pms /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Verify the secret block:** `curl -s http://localhost/pms/config/secrets.php` and
+`.../config/app.php` must return **403/404**, not PHP source.
+
+---
+
+## 10. Schedule the worker & PE-plan reminder (cron)
+
+On Windows these are Scheduled Tasks; on Linux use **cron as `www-data`** so files it
+writes match web ownership:
 ```bash
 sudo crontab -u www-data -e
 ```
-
 Add:
-
 ```cron
 # Drain the submission queue every minute (core work + delayed email/WhatsApp).
 * * * * * /usr/bin/php /var/www/html/pms/scripts/worker.php --once >> /var/www/html/pms/storage/logs/worker_cron.log 2>&1
 
-# PE-plan reminder — runs every 15 min but self-gates to send once/day at send_time.
+# PE-plan reminder — runs every 15 min, self-gates to send once/day at send_time.
 */15 * * * * /usr/bin/php /var/www/html/pms/scripts/pe_plan_send.php >> /var/www/html/pms/storage/logs/pe_plan_cron.log 2>&1
 ```
+Check: `sudo crontab -u www-data -l`.
 
-Check it registered:
-
-```bash
-sudo crontab -u www-data -l
-```
-
-> The per-submit spawn (§5b) handles instant processing; this cron is the safety
-> net that guarantees the queue drains and the delayed notifications fire even if
-> a spawn is missed. Keep the every-minute worker even if `exec()` is enabled.
+> The per-submit spawn handles instant processing; this cron is the safety net that
+> guarantees the queue drains and delayed notifications fire even if a spawn is missed.
+> Keep the every-minute worker even with `exec()` enabled.
 
 ---
 
-## 10. First run, admin setup & diagnostics
+## 11. First run + diagnostics
 
-### 10a. Smoke test the site
-
-Open `http://YOUR_STATIC_IP/pms/` — the report form should load.
-
-### 10b. Create the first admin account
-
-Open `http://YOUR_STATIC_IP/pms/admin/setup.php`. This page works **only while
-`admin_users` is empty** — create your admin (username + 8+ char password). After
-that it self-disables; add more admins from **Admin → Users**.
-
-### 10c. Run the diagnostics (from the VM, as www-data)
-
-```bash
-cd /var/www/html/pms
-sudo -u www-data php scripts/verify_auth.php   # SA token + a sheet read
-sudo -u www-data php scripts/check_access.php  # which sheets the SA can reach
-sudo -u www-data php scripts/check_drive.php   # Shared-Drive upload works
-sudo -u www-data php scripts/test_submit.php   # full end-to-end (writes+deletes a test row)
-```
-
-All four should pass before you trust production submits. If `check_drive` fails,
-re-check the Shared Drive sharing/IDs (§6a).
+1. **Smoke test:** open `http://SERVER_IP/pms/` — the report form loads.
+2. **First admin:** open `http://SERVER_IP/pms/admin/setup.php` — create the admin
+   (username + 8+ char password). Works only while `admin_users` is empty, then
+   self-disables; add more from **Admin → Users**.
+3. **Diagnostics** (as `www-data`, so files it writes stay web-owned):
+   ```bash
+   cd /var/www/html/pms
+   sudo -u www-data php scripts/verify_auth.php    # SA token + a sheet read
+   sudo -u www-data php scripts/check_access.php   # which sheets the SA can reach
+   sudo -u www-data php scripts/check_drive.php    # Shared-Drive upload works
+   sudo -u www-data php scripts/test_submit.php    # full E2E (writes + deletes a test row)
+   ```
+   All four should pass before trusting production submits. If `check_drive` fails,
+   re-check the Shared-Drive sharing/IDs (§6a).
 
 ---
 
-## 11. Go live with notifications
+## 12. Go live with notifications
 
-Do this **after** the diagnostics pass. Prefer the admin panel so changes land in
-`config/overrides.json` and apply to both web and worker:
+After diagnostics pass. Prefer the admin panel so changes land in
+`config/overrides.json` and apply to both web + worker:
 
-1. Fill secrets in `config/app.php`: `email.smtp_pass`, `whatsapp.token`.
-2. Test in isolation first:
+1. Fill `email.smtp_pass` + `whatsapp.token` in **`config/secrets.php`** (§6).
+2. Test in isolation:
    ```bash
    sudo -u www-data php scripts/test_email.php      # email to test_to
    sudo -u www-data php scripts/test_whatsapp.php   # WhatsApp to test_to
    ```
-3. In **Admin → Settings**: set **Email mode** and **WhatsApp mode** to `TEST`
-   (everything to your test address/number) and confirm, then switch to `LIVE`.
-4. Confirm/adjust `notify_delay_seconds` (default 180 s — the gap between the PDF
-   being ready and the email/WhatsApp going out).
-5. **PE-plan reminder:** in Admin → Settings set `pe_plan` mode `TEST` → `LIVE`,
-   the `send_time`, and the recipient `numbers`. The §9 cron delivers it.
+3. In **Admin → Settings**: set **Email** + **WhatsApp** mode to `TEST` (everything to
+   your test address/number), confirm, then switch to `LIVE`.
+4. Confirm `notify_delay_seconds` (default 180 s — gap between PDF ready and email/WA).
+5. **PE-plan reminder:** Admin → Settings → `pe_plan` mode `TEST` → `LIVE`, set
+   `send_time` + recipient `numbers`. The §10 cron delivers it.
 
-**WhatsApp document delivery:** to attach the real PDF (not just a link),
-`whatsapp.delivery` must be `document` **and** the `daily_site_update_doc`
-document-header template must be **APPROVED**. Check with
+**WhatsApp document delivery:** to attach the real PDF (not a link), `whatsapp.delivery`
+must be `document` **and** the `daily_site_update_doc` template must be **APPROVED**:
 `sudo -u www-data php scripts/check_wa_template.php`.
 
 ---
 
-## 12. Add a domain + HTTPS (recommended)
+## 13. Domain + HTTPS
 
-Running on a bare IP works, but a domain with TLS is safer (the admin login sends
-a password).
-
-1. In your DNS provider, add an **A record** → your static IP
-   (e.g. `pms.vakhariaairtech.com`).
-2. Set the Apache ServerName and issue a Let's Encrypt cert:
-
+The admin login sends a password, so use TLS.
+1. DNS: add an **A record** `pms.vakhariaairtech.com` → `SERVER_IP`.
+2. Set the server name + issue a Let's Encrypt cert:
 ```bash
-sudo sed -i 's/#ServerName.*/ServerName pms.vakhariaairtech.com/' /etc/apache2/sites-available/000-default.conf
-sudo systemctl reload apache2
-sudo certbot --apache -d pms.vakhariaairtech.com   # auto-configures HTTPS + renewal
+sudo sed -i 's/server_name _;/server_name pms.vakhariaairtech.com;/' /etc/nginx/sites-available/pms
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d pms.vakhariaairtech.com   # auto-configures HTTPS + renewal
 ```
-
-Now the app is at `https://pms.vakhariaairtech.com/pms/`. Certbot installs a renew
-timer automatically.
+App is now at `https://pms.vakhariaairtech.com/pms/`. Certbot installs a renew timer.
 
 ---
 
-## 13. Security hardening (do this)
+## 14. Security hardening
 
-* **Rotate the service-account key.** The old key was committed to git history
-  earlier. Create a **new key** in GCP → IAM → Service Accounts, replace
-  `config/google-service-account.json`, and disable the old key. Purge the key
-  from git history if the repo is shared.
-* **Firewall:** only 80/443 (public) and 22 (SSH) should be open. Prefer restricting
-  SSH to your IP, or use **IAP TCP forwarding** instead of a public port 22.
-* **DB:** the app user (`pms_user`) is not root and is bound to `127.0.0.1`; MariaDB
-  isn't exposed publicly. Keep it that way (no `0.0.0.0` bind, no external 3306
-  firewall rule).
-* **Secrets in `config/`** are blocked from HTTP by the §5a `DirectoryMatch`. Verify:
-  `curl -s http://YOUR_IP/pms/config/app.php` should return **403**, not PHP source.
-* **Admin panel:** strong password; consider IP-allowlisting `/pms/admin` in Apache
-  if only office IPs need it.
-* Optional: `sudo apt install fail2ban` to throttle SSH brute force.
+* **Rotate the service-account key** — it was committed to git history earlier. Create a
+  **new** key (GCP → IAM → Service Accounts), replace the JSON, disable the old key.
+* **Rotate the SMTP app password + WhatsApp token** — also in git history. Regenerate
+  both, put the new values in `config/secrets.php`.
+* **Firewall / OS:** `sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw --force enable`.
+  Prefer restricting SSH to your IP or use IAP TCP forwarding. `sudo apt install fail2ban`.
+* **DB:** `pms_user` is not root, bound to `127.0.0.1`; keep MySQL off the public net.
+* **Secrets blocked from HTTP** by §9 — verify the 403/404 curl test.
+* **Admin panel:** strong password; consider IP-allowlisting `/pms/admin` in Nginx.
 
 ---
 
-## 14. Backups & maintenance
+## 15. Backups & maintenance
 
-**Nightly DB dump** (add to root's crontab, `sudo crontab -e`):
-
+**Nightly DB dump** (root crontab, `sudo crontab -e`; `sudo mkdir -p /var/backups` first):
 ```cron
 0 2 * * * mysqldump pms | gzip > /var/backups/pms-$(date +\%F).sql.gz && find /var/backups -name 'pms-*.sql.gz' -mtime +14 -delete
 ```
-(`sudo mkdir -p /var/backups` first.)
+**Disk snapshots:** Compute Engine → **Snapshots → Create snapshot schedule**, attach to the boot disk (daily, keep 7).
 
-**Disk snapshots:** Console → Compute Engine → **Snapshots → Create snapshot
-schedule**, attach it to the VM's boot disk (e.g. daily, keep 7).
-
-**Updates:** `sudo apt update && sudo apt upgrade` periodically; certbot renews TLS
-automatically.
-
-**Logs to watch:**
-* App/worker: `storage/logs/`, `storage/queue/spawn.log`, `storage/logs/worker_cron.log`
-* Apache: `/var/log/apache2/error.log`
-* PHP errors surface in the Apache error log.
-
-**Updating the app later:**
+**Updating the app:** if not using CI/CD (see [docs/CICD_AUTODEPLOY.md](docs/CICD_AUTODEPLOY.md)):
 ```bash
 cd /var/www/html/pms
 sudo -u www-data git pull
-sudo mysql pms < db/schema.sql   # only if schema changed (files are idempotent-ish; review first)
-sudo systemctl reload apache2
+sudo mysql pms < db/schema.sql   # only if schema changed (files are idempotent; review first)
+sudo systemctl reload php8.3-fpm # clears OPcache so new code is live
 ```
+
+**Logs:** `storage/logs/`, `storage/queue/spawn.log`, `storage/logs/worker_cron.log`;
+Nginx `/var/log/nginx/error.log`; PHP `/var/log/php8.3-fpm.log`.
+**Handy:** `free -h` · `swapon --show` · `sudo systemctl restart nginx php8.3-fpm mysql`.
 
 ---
 
-## 15. Quick deployment checklist
+## 16. Deployment checklist
 
-- [ ] `e2-small`, Debian 12, 30 GB, `asia-south1`, static IP, HTTP+HTTPS allowed
-- [ ] LAMP installed; `php -m` shows curl, openssl, pdo_mysql, mbstring, gd
-- [ ] MariaDB secured; `pms` DB + `pms_user` created
-- [ ] Code in `/var/www/html/pms` (folder named `pms`)
-- [ ] `config/app.php`: `php_binary=/usr/bin/php`, DB creds, timezone
-- [ ] `config/google-service-account.json` in place; SA on Shared Drive + Sheets
-- [ ] `storage/*` dirs created; owned by `www-data`; SA key `chmod 640`
-- [ ] Apache `pms.conf` enabled; secrets blocked (403 test passes)
-- [ ] PHP upload limits + timezone set; `exec` not disabled
-- [ ] All 3 SQL schemas imported
+- [ ] `e2-small`, **Ubuntu 24.04**, 30 GB, `asia-south1`, static IP, HTTP+HTTPS allowed
+- [ ] LEMP installed; `php -m` shows curl, openssl, pdo_mysql, mbstring, **gd**, json; `exec` not disabled
+- [ ] 2 GB tuning: swap on, `zz-pms.cnf`, FPM `ondemand`, `99-pms.ini` (fpm **and** cli)
+- [ ] MySQL secured; `pms` DB + `'pms_user'@'127.0.0.1'` created
+- [ ] Code in `/var/www/html/pms` (folder named `pms`), branch checked out
+- [ ] **`config/secrets.php`** set: db creds + `php_binary=/usr/bin/php` (+ secrets when going live)
+- [ ] `config/google-service-account.json` in place; SA is Content-manager on Shared Drive + shares the Sheets
+- [ ] `storage/*` dirs created, `www-data`-owned; `secrets.php` + SA key `chmod 640`
+- [ ] All 3 SQL schemas imported (`SHOW TABLES` looks right)
+- [ ] Nginx `pms` site enabled, default removed; **403/404** on `config/`, `storage/`, `db/`
 - [ ] Cron (as `www-data`): worker every min + pe_plan every 15 min
 - [ ] `http://IP/pms/` loads; `admin/setup.php` first admin created
 - [ ] `verify_auth` / `check_access` / `check_drive` / `test_submit` all pass
 - [ ] Email + WhatsApp tested, then flipped to LIVE in admin
-- [ ] Domain + Let's Encrypt HTTPS
-- [ ] SA key rotated; SSH restricted; nightly DB dump + disk snapshots
+- [ ] Domain + Let's Encrypt HTTPS (`certbot --nginx`)
+- [ ] SA key + SMTP pass + WA token rotated; SSH restricted; nightly DB dump + disk snapshots
 ```
