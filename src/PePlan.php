@@ -106,17 +106,32 @@ class PePlan
         $reg  = $f['regular']  ?? 'C:/Windows/Fonts/segoeui.ttf';
         $semi = $f['semibold'] ?? 'C:/Windows/Fonts/seguisb.ttf';
         $bold = $f['bold']     ?? 'C:/Windows/Fonts/segoeuib.ttf';
-        // fall back to Arial, then to whatever exists, so render never dies
-        $pick = function ($p, $alt) {
+
+        // Cross-platform fallbacks so text renders on Linux (GCP) too, where the
+        // Windows paths above don't exist. Liberation Sans is Arial-metric; DejaVu
+        // and Noto are the usual Ubuntu defaults. Ordered regular / bold candidates.
+        $linuxReg = [
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+            'C:/Windows/Fonts/arial.ttf',
+        ];
+        $linuxBold = [
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+            'C:/Windows/Fonts/arialbd.ttf',
+        ];
+        // fall back to Arial, then to whatever exists on this OS, so render never dies
+        $pick = function ($p, array $alts) {
             if (is_file($p)) return $p;
-            if (is_file($alt)) return $alt;
-            foreach (['C:/Windows/Fonts/arial.ttf', 'C:/Windows/Fonts/arialbd.ttf'] as $x) if (is_file($x)) return $x;
+            foreach ($alts as $x) if (is_file($x)) return $x;
             return $p;
         };
         return [
-            'regular'  => $pick($reg,  'C:/Windows/Fonts/arial.ttf'),
-            'semibold' => $pick($semi, 'C:/Windows/Fonts/arialbd.ttf'),
-            'bold'     => $pick($bold, 'C:/Windows/Fonts/arialbd.ttf'),
+            'regular'  => $pick($reg,  $linuxReg),
+            'semibold' => $pick($semi, $linuxBold),
+            'bold'     => $pick($bold, $linuxBold),
         ];
     }
 
