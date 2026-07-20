@@ -36,8 +36,20 @@ $pdf = [
 
 echo "Report:   {$r['project']}\n";
 echo "Delivery: {$waCfg['delivery']}   ->   {$waCfg['test_to']}\n";
-if ($waCfg['delivery'] === 'document' && $pdf['path'] === '') {
-    echo "(local PDF not found; downloading from Drive not implemented in test — link mode still works)\n";
+
+// Document mode needs a local PDF. If the report's local copy is gone (e.g. after
+// a test_submit), build a minimal one so we still verify the real document-send
+// path (media upload + doc-header template), not just the link fallback.
+if (strtolower($waCfg['delivery']) === 'document' && $pdf['path'] === '') {
+    require_once __DIR__ . '/../vendor/fpdf/fpdf.php';   // already loaded by Bootstrap
+    $fp = new FPDF();
+    $fp->AddPage(); $fp->SetFont('Arial', 'B', 14);
+    $fp->Cell(0, 10, 'PMS WhatsApp document test - ' . date('c'));
+    $tmp = sys_get_temp_dir() . '/pms_wa_test.pdf';
+    $fp->Output('F', $tmp);
+    $pdf['path'] = $tmp;
+    $pdf['name'] = 'PMS WhatsApp Test.pdf';
+    echo "(no local report PDF — built a minimal test PDF to verify document delivery)\n";
 }
 
 $wa = new Whatsapp($app->sheets, $app->drive, $waCfg);
