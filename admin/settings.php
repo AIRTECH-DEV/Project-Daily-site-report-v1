@@ -60,6 +60,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $ov['team_contacts'] = $team;
 
+        // PE Plan reminder (WhatsApp image, day-before)
+        $pp = [];
+        $pm = strtoupper($_POST['pe_plan_mode'] ?? '');
+        if (in_array($pm, ['OFF','TEST','LIVE'], true)) $pp['mode'] = $pm;
+        $pt = trim($_POST['pe_plan_send_time'] ?? '');
+        if (preg_match('/^\d{1,2}:\d{2}$/', $pt)) $pp['send_time'] = sprintf('%02d:%02d', ...array_map('intval', explode(':', $pt)));
+        $nums = [];
+        foreach ((array)($_POST['pe_plan_numbers'] ?? []) as $n) {
+            $n = trim((string)$n);
+            if ($n !== '' && !in_array($n, $nums, true)) $nums[] = $n;
+        }
+        $pp['numbers'] = $nums;
+        $ptest = trim($_POST['pe_plan_test_to'] ?? '');
+        if ($ptest !== '') $pp['test_to'] = $ptest;
+        $ov['pe_plan'] = $pp;
+
         if (Admin::saveOverrides($ov)) {
             Admin::audit('update_settings', 'overrides', null, '', json_encode($ov));
             $flash = 'Settings saved. Applies to the next report the app or worker processes.';
@@ -109,6 +125,22 @@ sort($peNames);
 $teamRows = [];
 foreach ($peNames as $n) $teamRows[] = ['name' => $n, 'email' => $teamContacts[$n]['email'] ?? '', 'phone' => $teamContacts[$n]['phone'] ?? ''];
 $teamRows[] = ['name' => '', 'email' => '', 'phone' => ''];
+
+// PE Plan reminder prefill
+$peMode     = $cfg['pe_plan']['mode'] ?? 'OFF';
+$peSendTime = $cfg['pe_plan']['send_time'] ?? '20:00';
+$peNumbers  = $cfg['pe_plan']['numbers'] ?? [];
+if (!$peNumbers) $peNumbers = [''];
+$peTestTo   = $cfg['pe_plan']['test_to'] ?? '';
+$peTpl      = $cfg['pe_plan']['template_name'] ?? 'pe_plan_reminder';
+$peTestDate = date('Y-m-d', strtotime('+1 day'));   // test defaults to tomorrow (the real reminder day)
+
+// one-shot flash from the "Send test now" endpoint (pe_plan_test.php)
+if (!empty($_SESSION['pe_plan_flash'])) {
+    $flash = $_SESSION['pe_plan_flash']['msg'];
+    $flashType = $_SESSION['pe_plan_flash']['type'];
+    unset($_SESSION['pe_plan_flash']);
+}
 
 require __DIR__ . '/inc/layout.php';
 Layout::head('Settings', 'settings');
@@ -210,6 +242,67 @@ Layout::head('Settings', 'settings');
         <input class="inp" type="number" name="notify_delay_seconds" min="0" value="<?= $delay ?>" style="width:100%;margin-top:6px">
         <div style="margin-top:10px;font-size:12px;color:#8190a5">Gives the site engineer time to fix a wrong entry before the client is notified.</div>
       </div>
+    </div>
+  </div>
+
+  <div class="card2">
+    <div class="card2-head"><i class="bi bi-calendar2-check text-primary"></i><h2>PE Plan Reminder <span class="sub">(WhatsApp)</span></h2>
+      <span class="sub">image of tomorrow's plan, grouped by engineer, sent the evening before</span></div>
+    <div class="card2-body">
+      <p style="color:#5b6b82;margin:0 0 16px;font-size:13px">
+        One day before, this sends a WhatsApp <b>image</b> of the next day's site plan (which engineer goes to which
+        site, and the work step) to every number below. Runs from the scheduled task at the <b>send time</b>.
+        Needs the <span class="mono"><?= Admin::e($peTpl) ?></span> template <b>APPROVED</b> by Meta
+        (<span class="mono">php scripts/create_pe_plan_template.php</span> once, then
+        <span class="mono">php scripts/check_wa_template.php</span>).
+      </p>
+
+      <div class="grid-3" style="margin-bottom:14px">
+        <div>
+          <label class="form-lbl">Mode</label>
+          <select name="pe_plan_mode" class="inp" style="width:100%;margin-top:6px">
+            <?php foreach (['OFF'=>'OFF — send nothing','TEST'=>'TEST — send only to test number','LIVE'=>'LIVE — send to the numbers below'] as $v=>$t): ?>
+              <option value="<?= $v ?>" <?= $peMode === $v ? 'selected' : '' ?>><?= $t ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div>
+          <label class="form-lbl">Send time (day before)</label>
+          <input class="inp" type="time" name="pe_plan_send_time" value="<?= Admin::e($peSendTime) ?>" style="width:100%;margin-top:6px">
+          <div style="margin-top:8px;font-size:12px;color:#8190a5">e.g. 20:00 — evening before the planned work.</div>
+        </div>
+        <div>
+          <label class="form-lbl">Test number</label>
+          <input class="inp" type="text" name="pe_plan_test_to" value="<?= Admin::e($peTestTo) ?>" placeholder="9198XXXXXXXX" style="width:100%;margin-top:6px">
+          <div style="margin-top:8px;font-size:12px;color:#8190a5">Used by TEST mode + the button below.</div>
+        </div>
+      </div>
+
+      <label class="form-lbl"><i class="bi bi-whatsapp"></i> Reminder numbers (LIVE)</label>
+      <div id="pePlanNums" style="margin-top:8px;max-width:520px">
+        <?php foreach ($peNumbers as $n): ?>
+          <div class="multi-row">
+            <input class="inp" type="text" name="pe_plan_numbers[]" value="<?= Admin::e($n) ?>" placeholder="9198XXXXXXXX">
+            <button type="button" class="btn-x" onclick="pePlanRm(this)"><i class="bi bi-x-lg"></i></button>
+          </div>
+        <?php endforeach; ?>
+      </div>
+      <button type="button" class="btn-add" onclick="pePlanAdd()" style="margin-top:2px"><i class="bi bi-plus-lg"></i> Add number</button>
+
+      <?php if (!Admin::isViewer()): ?>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:#5b6b82;display:flex;align-items:center;gap:6px">Preview plan for
+          <input class="inp" type="date" name="pe_plan_test_date" value="<?= Admin::e($peTestDate) ?>" style="width:170px">
+        </label>
+        <button class="btn btn-ghost" type="submit" formaction="<?= Admin::BASE ?>/pe_plan_test.php" formmethod="post">
+          <i class="bi bi-send"></i> Send test now
+        </button>
+      </div>
+      <p style="font-size:12px;color:#8190a5;margin:8px 0 0">
+        Sends <b>that day's</b> plan image to the test number now. Default = tomorrow (the real day-before reminder).
+        Pick a day that has planned work to see a populated card. Save first if you changed the test number.
+      </p>
+      <?php endif; ?>
     </div>
   </div>
 
@@ -332,5 +425,22 @@ Layout::head('Settings', 'settings');
     b.querySelector('.dev-name-in').focus();
   };
 })();
+
+// PE Plan reminder — recipient number add/remove
+window.pePlanRm = function (btn) {
+  const list = document.getElementById('pePlanNums');
+  btn.closest('.multi-row').remove();
+  if (!list.querySelector('.multi-row')) pePlanAdd();   // keep one blank input
+};
+window.pePlanAdd = function () {
+  const list = document.getElementById('pePlanNums');
+  const row = document.createElement('div');
+  row.className = 'multi-row';
+  row.innerHTML =
+    '<input class="inp" type="text" name="pe_plan_numbers[]" placeholder="9198XXXXXXXX">' +
+    '<button type="button" class="btn-x" onclick="pePlanRm(this)"><i class="bi bi-x-lg"></i></button>';
+  list.appendChild(row);
+  row.querySelector('input').focus();
+};
 </script>
 <?php Layout::foot();

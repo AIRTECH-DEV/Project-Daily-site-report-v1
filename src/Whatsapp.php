@@ -130,6 +130,31 @@ class Whatsapp
         return $this->postTemplate($toPhone, $tplName, $components);
     }
 
+    /**
+     * Sends a template whose HEADER format is IMAGE. The image is referenced by a
+     * media id (upload it first with uploadMedia). Optional body params are sent
+     * positionally. Used by the PE-plan reminder (the plan card is the header).
+     */
+    public function sendImageHeaderTemplate(string $toPhone, string $mediaId, string $templateName, array $bodyParams = []): array
+    {
+        $components = [[
+            'type'       => 'header',
+            'parameters' => [['type' => 'image', 'image' => ['id' => $mediaId]]],
+        ]];
+        if ($bodyParams) {
+            $params = [];
+            foreach ($bodyParams as $p) { $params[] = ['type' => 'text', 'text' => (string)$p]; }
+            $components[] = ['type' => 'body', 'parameters' => $params];
+        }
+        return $this->postTemplate($toPhone, $templateName, $components);
+    }
+
+    /** Public phone normalizer (91XXXXXXXXXX or '' if invalid) for callers. */
+    public function normalizePhone($raw): string
+    {
+        return $this->formatPhone($raw);
+    }
+
     /** POSTs a template message with the given components. */
     private function postTemplate(string $toPhone, string $templateName, array $components): array
     {

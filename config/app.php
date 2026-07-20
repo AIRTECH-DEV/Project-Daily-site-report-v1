@@ -130,6 +130,21 @@ $cfg = [
         'status_col_name'  => 'WhatsApp Status',
     ],
 
+    // ---- PE Plan reminder (WhatsApp image, sent one day before) ---------
+    // Sends an image of "tomorrow's site plan" (grouped by engineer) to the
+    // internal numbers below, at send_time the evening before. Reuses the
+    // whatsapp block's token / phone_number_id / graph_version / language_code.
+    // The image is the header of an approved IMAGE-header template (template_name).
+    // Runtime-tunable from admin/settings.php -> overrides.json ("pe_plan").
+    'pe_plan' => [
+        'mode'          => 'OFF',              // OFF | TEST | LIVE
+        'template_name' => 'pe_plan_reminder', // approved IMAGE-header template
+        'send_time'     => '20:00',            // HH:MM (24h) — fires this time, day before
+        'numbers'       => [],                 // LIVE recipient numbers (internal team)
+        'test_to'       => '8180942110',       // TEST + "Send test now" target
+        'fonts'         => [],                 // optional TTF overrides: regular/semibold/bold
+    ],
+
     // ---- App ------------------------------------------------------------
     'timezone'    => 'Asia/Kolkata',
     'uploads_dir' => __DIR__ . '/../storage/uploads', // local temp before Drive push
@@ -170,6 +185,22 @@ if (is_file($overridesFile)) {
         }
         if (isset($ov['notify_delay_seconds']) && is_numeric($ov['notify_delay_seconds'])) {
             $cfg['notify_delay_seconds'] = (int)$ov['notify_delay_seconds'];
+        }
+        // PE Plan reminder runtime settings (mode / send time / recipient numbers).
+        if (isset($ov['pe_plan']) && is_array($ov['pe_plan'])) {
+            $p = $ov['pe_plan'];
+            if (!empty($p['mode']) && in_array($p['mode'], ['OFF', 'TEST', 'LIVE'], true)) {
+                $cfg['pe_plan']['mode'] = $p['mode'];
+            }
+            if (!empty($p['send_time']) && preg_match('/^\d{1,2}:\d{2}$/', (string)$p['send_time'])) {
+                $cfg['pe_plan']['send_time'] = sprintf('%02d:%02d', ...array_map('intval', explode(':', $p['send_time'])));
+            }
+            if (isset($p['numbers']) && is_array($p['numbers'])) {
+                $cfg['pe_plan']['numbers'] = array_values(array_filter(array_map('strval', $p['numbers']), fn($v) => trim($v) !== ''));
+            }
+            if (!empty($p['test_to'])) {
+                $cfg['pe_plan']['test_to'] = (string)$p['test_to'];
+            }
         }
     }
 }
