@@ -315,6 +315,10 @@ server {
         try_files $uri $uri/ =404;
     }
 
+    # Convenience redirects: bare /admin -> /pms/admin/
+    location = /admin  { return 301 /pms/admin/; }
+    location = /admin/ { return 301 /pms/admin/; }
+
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.3-fpm.sock;
