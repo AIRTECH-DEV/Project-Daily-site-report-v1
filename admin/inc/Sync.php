@@ -56,6 +56,12 @@ class Sync
         return preg_replace('/\s+/', ' ', strtolower(trim($s)));
     }
 
+    /** Severity ordering for escalation checks: info < warning < critical. */
+    private static function sevRank(string $sev): int
+    {
+        return ['info' => 1, 'warning' => 2, 'critical' => 3][$sev] ?? 0;
+    }
+
     private static function rebuildWorkforce(PDO $db, array $subs): array
     {
         $db->exec("TRUNCATE TABLE visit_workers");
@@ -360,7 +366,7 @@ class Sync
     private static function reconcileAlerts(PDO $db, array $active): array
     {
         $new = 0;
-        $selById = $db->prepare("SELECT id, status FROM alerts WHERE dedupe_key=?");
+        $selById = $db->prepare("SELECT id, status, severity FROM alerts WHERE dedupe_key=?");
         $insA = $db->prepare(
             "INSERT INTO alerts (rule, dedupe_key, severity, project_key, project_label, submission_id, owner, title, detail, status)
              VALUES (?,?,?,?,?,?,?,?,?,'open')"
@@ -377,8 +383,14 @@ class Sync
                 $insEv->execute([$id, 'created', 'system', $a['title']]);
                 $new++;
             } elseif ($ex['status'] === 'resolved') {
-                $reopen->execute([$a['severity'],$a['title'],$a['detail'],$ex['id']]);
-                $insEv->execute([$ex['id'], 'reopened', 'system', 'condition returned']);
+                // Resolve = mute: stay resolved while the SAME condition persists.
+                // Only reopen if it materially worsened (severity escalated) since
+                // it was resolved — a still-true alert must not un-resolve itself.
+                if (self::sevRank($a['severity']) > self::sevRank($ex['severity'])) {
+                    $reopen->execute([$a['severity'],$a['title'],$a['detail'],$ex['id']]);
+                    $insEv->execute([$ex['id'], 'reopened', 'system', 'severity escalated']);
+                }
+                // else leave resolved (user muted it; condition unchanged/lower).
             } else {
                 $updA->execute([$a['severity'],$a['project_label'],$a['owner'],$a['title'],$a['detail'],$a['submission_id'],$ex['id']]);
             }
