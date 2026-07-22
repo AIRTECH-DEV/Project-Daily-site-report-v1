@@ -158,6 +158,14 @@ $cfg = [
     'worker_poll_seconds'  => 15,    // gap between worker passes while jobs pending
     // Full path to the PHP CLI binary (PHP_BINARY is unreliable under mod_php).
     'php_binary'           => 'C:\\xampp\\php\\php.exe',
+
+    // ---- HVAC commissioning app backend (separate service) --------------
+    // PMS pushes each newly-Commissioned project here; the mobile app reads it.
+    // Blank url = push disabled. Set url + api_key per machine in secrets.php.
+    'app_backend' => [
+        'url'     => '',   // e.g. http://localhost/hvac_backend  (no trailing slash)
+        'api_key' => '',   // must equal the backend API_KEY and the app's apiKey
+    ],
 ];
 
 // ---- Server-local settings (config/secrets.php) -------------------------
@@ -184,6 +192,10 @@ if (is_file($secretsFile)) {
         }
         if (isset($secrets['php_binary']) && $secrets['php_binary'] !== '') {
             $cfg['php_binary'] = (string)$secrets['php_binary'];
+        }
+        // HVAC app backend URL + key (per-machine).
+        if (isset($secrets['app_backend']) && is_array($secrets['app_backend'])) {
+            $cfg['app_backend'] = array_merge($cfg['app_backend'], $secrets['app_backend']);
         }
     }
 }
