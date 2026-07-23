@@ -26,6 +26,14 @@ class Perf
         'worker_pool'       => 0,    // ₹ pool split across eligible VAPL workers
     ];
 
+    /**
+     * Neutral percentage used when a component cannot be measured for someone
+     * (e.g. no project of theirs has finished yet). Applied only after the peer
+     * average is also unavailable, so an unmeasurable component never becomes a
+     * free 100% for one person and a punishing 0% for another.
+     */
+    const NEUTRAL = 50.0;
+
     /** Score weights (must total 100 within each group). */
     const W_PE     = ['ontime' => 35, 'discipline' => 25, 'throughput' => 25, 'holds' => 15];
     const W_WORKER = ['steps' => 40, 'attendance' => 30, 'productivity' => 20, 'speed' => 10];
@@ -450,12 +458,16 @@ class Perf
         $maxSteps   = self::maxOf($peRows, 'steps');
         $maxReports = self::maxOf($peRows, 'reports');
         $maxHold    = self::maxOf($peRows, 'hold_days');
+        $avgComply  = self::avgOf($peRows, 'comply_pct');
         foreach ($peRows as $k => $r) {
-            // no deliveries yet → judge on schedule health instead of a blank 0
+            // No deliveries yet → judge on schedule health (active projects not
+            // overdue). Nothing active either → neutral, so an unmeasurable
+            // component neither rewards nor punishes.
             $ontime = $r['ontime_pct'] !== null
-                ? $r['ontime_pct']
-                : ($r['active'] > 0 ? round((1 - $r['overdue'] / $r['active']) * 100) : 100);
-            $discipline = 0.6 * (float)($r['comply_pct'] ?? 100) + 0.4 * (100 * self::norm($r['reports'], $maxReports));
+                ? (float)$r['ontime_pct']
+                : ($r['active'] > 0 ? round((1 - $r['overdue'] / $r['active']) * 100) : self::NEUTRAL);
+            $comply = $r['comply_pct'] !== null ? (float)$r['comply_pct'] : self::neutral($avgComply);
+            $discipline = 0.6 * $comply + 0.4 * (100 * self::norm($r['reports'], $maxReports));
             $parts = [
                 'ontime'     => self::W_PE['ontime']     * $ontime / 100,
                 'discipline' => self::W_PE['discipline'] * $discipline / 100,
@@ -465,7 +477,8 @@ class Perf
             $peRows[$k]['parts']  = array_map(fn($v) => round($v, 1), $parts);
             $peRows[$k]['score']  = round(array_sum($parts), 1);
             $peRows[$k]['grade']  = self::grade($peRows[$k]['score']);
-            $peRows[$k]['ontime_used'] = $ontime;
+            $peRows[$k]['ontime_used'] = round($ontime, 1);
+            $peRows[$k]['comply_used'] = round($comply, 1);
         }
         $peRows = array_values($peRows);
         usort($peRows, fn($a, $b) => $b['score'] <=> $a['score']);
@@ -521,19 +534,28 @@ class Perf
                 'last'      => $s['last'],
             ];
         }
-        $maxCSteps = self::maxOf($cRows, 'steps');
-        $maxCPer   = self::maxOf($cRows, 'per_visit');
-        $maxCTurn  = self::maxOf($cRows, 'avg_turn');
+        $maxCSteps  = self::maxOf($cRows, 'steps');
+        $maxCPer    = self::maxOf($cRows, 'per_visit');
+        $maxCTurn   = self::maxOf($cRows, 'avg_turn');
+        $avgCOnTime = self::avgOf($cRows, 'ontime_pct');
+        $avgCTurn   = self::avgOf($cRows, 'avg_turn');
         foreach ($cRows as $i => $r) {
+            // Unmeasurable components (no finished project / no step dates) fall
+            // back to the peer average — never to a free 100%.
+            $ontime = $r['ontime_pct'] !== null ? (float)$r['ontime_pct'] : self::neutral($avgCOnTime);
+            $speedFrac = $r['avg_turn'] !== null
+                ? 1 - self::norm($r['avg_turn'], $maxCTurn)
+                : ($avgCTurn !== null ? 1 - self::norm($avgCTurn, $maxCTurn) : self::NEUTRAL / 100);
             $parts = [
                 'steps'        => self::W_CON['steps']        * self::norm($r['steps'], $maxCSteps),
                 'productivity' => self::W_CON['productivity'] * self::norm($r['per_visit'], $maxCPer),
-                'ontime'       => self::W_CON['ontime']       * (($r['ontime_pct'] ?? 100) / 100),
-                'speed'        => self::W_CON['speed']        * (1 - self::norm($r['avg_turn'], $maxCTurn)),
+                'ontime'       => self::W_CON['ontime']       * $ontime / 100,
+                'speed'        => self::W_CON['speed']        * $speedFrac,
             ];
             $cRows[$i]['parts'] = array_map(fn($v) => round($v, 1), $parts);
             $cRows[$i]['score'] = round(array_sum($parts), 1);
             $cRows[$i]['grade'] = self::grade($cRows[$i]['score']);
+            $cRows[$i]['ontime_used'] = round($ontime, 1);
         }
         usort($cRows, fn($a, $b) => $b['score'] <=> $a['score']);
 
@@ -578,16 +600,21 @@ class Perf
         $maxSteps = self::maxOf($rows, 'steps');
         $maxDays  = self::maxOf($rows, 'days');
         $maxPer   = self::maxOf($rows, 'per_visit');
+        $avgFast  = self::avgOf($rows, 'fast_pct');
         foreach ($rows as $i => $r) {
+            // No step had both a sheet start AND end date → speed is unmeasurable
+            // for this person; use the peer average rather than a punishing 0.
+            $fast = $r['fast_pct'] !== null ? (float)$r['fast_pct'] : self::neutral($avgFast);
             $parts = [
                 'steps'        => self::W_WORKER['steps']        * self::norm($r['steps'], $maxSteps),
                 'attendance'   => self::W_WORKER['attendance']   * self::norm($r['days'], $maxDays),
                 'productivity' => self::W_WORKER['productivity'] * self::norm($r['per_visit'], $maxPer),
-                'speed'        => self::W_WORKER['speed']        * (($r['fast_pct'] ?? 0) / 100),
+                'speed'        => self::W_WORKER['speed']        * $fast / 100,
             ];
             $rows[$i]['parts'] = array_map(fn($v) => round($v, 1), $parts);
             $rows[$i]['score'] = round(array_sum($parts), 1);
             $rows[$i]['grade'] = self::grade($rows[$i]['score']);
+            $rows[$i]['fast_used'] = round($fast, 1);
         }
         usort($rows, fn($a, $b) => $b['score'] <=> $a['score']);
     }
@@ -632,6 +659,25 @@ class Perf
             $m = max($m, (float)($r[$key] ?? 0));
         }
         return $m;
+    }
+
+    /** Mean of a column across the rows that HAVE it, or null when nobody does. */
+    private static function avgOf(array $rows, string $key): ?float
+    {
+        $sum = 0.0; $n = 0;
+        foreach ($rows as $r) {
+            if (isset($r[$key]) && $r[$key] !== null) {
+                $sum += (float)$r[$key];
+                $n++;
+            }
+        }
+        return $n > 0 ? $sum / $n : null;
+    }
+
+    /** Peer average when there is one, otherwise the neutral 50%. */
+    private static function neutral(?float $peerAvg): float
+    {
+        return $peerAvg !== null ? $peerAvg : self::NEUTRAL;
     }
 
     public static function grade(float $score): string

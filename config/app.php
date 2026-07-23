@@ -145,6 +145,16 @@ $cfg = [
         'fonts'         => [],                 // optional TTF overrides: regular/semibold/bold
     ],
 
+    // ---- Project Engineers (site-report "Assigned Engineer" dropdown) ----
+    // Seed roster. The admin panel (admin/users.php) writes the live roster to
+    // config/overrides.json ("engineers"), which replaces this list. Entries may
+    // be plain names or {"name": "...", "active": 0|1}; inactive names stay on
+    // record but drop out of the app dropdown.
+    'engineers' => [
+        'Dada', 'Nagraj', 'Pratik', 'Ranjeet', 'Paresh', 'Shubham', 'Ganesh',
+        'Vrundavan', 'Parikshit', 'Prathamesh Paigude', 'Raj Jthape',
+    ],
+
     // ---- App ------------------------------------------------------------
     'timezone'    => 'Asia/Kolkata',
     'uploads_dir' => __DIR__ . '/../storage/uploads', // local temp before Drive push
@@ -242,7 +252,29 @@ if (is_file($overridesFile)) {
                 $cfg['pe_plan']['test_to'] = (string)$p['test_to'];
             }
         }
+        // Project Engineer roster — admin panel owns it once it writes the key.
+        if (isset($ov['engineers']) && is_array($ov['engineers']) && $ov['engineers']) {
+            $cfg['engineers'] = $ov['engineers'];
+        }
     }
 }
+
+// ---- Normalize the engineer roster --------------------------------------
+// Accepts plain names (seed list) or {"name":..,"active":..} rows (admin panel)
+// and always returns rows: [['name' => 'Dada', 'active' => 1], ...].
+$engineers = [];
+$seen = [];
+foreach ((array)($cfg['engineers'] ?? []) as $e) {
+    $name = is_array($e) ? trim((string)($e['name'] ?? '')) : trim((string)$e);
+    if ($name === '') continue;
+    $key = mb_strtolower($name);
+    if (isset($seen[$key])) continue;
+    $seen[$key] = true;
+    $engineers[] = [
+        'name'   => $name,
+        'active' => (is_array($e) && array_key_exists('active', $e)) ? (int)!empty($e['active']) : 1,
+    ];
+}
+$cfg['engineers'] = $engineers;
 
 return $cfg;

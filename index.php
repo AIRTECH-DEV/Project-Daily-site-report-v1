@@ -21,8 +21,24 @@ $appJs = preg_replace(
     $appJs
 );
 
+// Project Engineer roster (admin panel -> config/overrides.json). Only active
+// names reach the dropdown; AppJs falls back to its own literal list if empty.
+// (config/app.php leaks its own locals into this scope — keep names distinct.)
+$peRoster = [];
+try {
+    $cfgApp = require $root . '/config/app.php';
+    foreach ((array)($cfgApp['engineers'] ?? []) as $peRow) {
+        if (!empty($peRow['active'])) $peRoster[] = (string)$peRow['name'];
+    }
+} catch (Throwable $peErr) { $peRoster = []; }
+$engJson = json_encode(
+    $peRoster,
+    JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+);
+
 $shim = <<<JS
 <script>
+window.PMS_ENGINEERS = $engJson;
 // --- google.script.run -> PHP api shim (keeps AppJs unmodified) -----------
 (function () {
   function Runner(s, f) { this._s = s || function(){}; this._f = f || function(){}; }

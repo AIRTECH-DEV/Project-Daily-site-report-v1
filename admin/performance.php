@@ -113,6 +113,14 @@ Layout::head('Performance & Incentive', 'performance');
 .pf-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:#5b6b82;margin-top:10px}
 .pf-legend b{color:#33415a}
 .table-wrap{overflow-x:auto}
+.pf-h3{font-size:14px;font-weight:700;color:#1f2b3d;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid #e8edf3}
+.pf-h3:first-child{margin-top:0}
+.pf-box{background:#f7f9fc;border:1px solid #e3eaf2;border-radius:10px;padding:14px 16px;margin-bottom:4px}
+.pf-box p{margin:0 0 10px;font-size:13.5px;line-height:1.65;color:#44546b}
+.pf-box p:last-child{margin-bottom:0}
+.pf-f{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px;background:#eef3f9;border:1px solid #dce5ef;border-radius:5px;padding:2px 6px;color:#1f3a5f;display:inline-block;white-space:nowrap}
+.pf-box .table-wrap{margin:10px 0}
+.pf-box .tbl{background:#fff}
 </style>
 
 <?php if ($flash): ?>
@@ -375,35 +383,217 @@ Layout::head('Performance & Incentive', 'performance');
 </div>
 
 <!-- ============ how it is scored ============ -->
+<?php
+// The live divisors, so the formulas below show the actual numbers in use.
+$topOf = function (array $rows, string $key) {
+    $m = 0.0;
+    foreach ($rows as $r) { $m = max($m, (float)($r[$key] ?? 0)); }
+    return $m;
+};
+$num = fn($v, $dp = 0) => $v > 0 ? number_format((float)$v, $dp) : '—';
+$N   = (int)$opt['on_time_step_days'];
+?>
 <div class="card2">
-  <div class="card2-head"><i class="bi bi-calculator text-primary"></i><h2>How the Score Is Calculated</h2></div>
+  <div class="card2-head"><i class="bi bi-calculator text-primary"></i><h2>How the Score Is Calculated</h2>
+    <span class="sub">exact formulas · every number traceable to a report or a sheet cell</span>
+  </div>
   <div class="card2-body">
+
+    <div class="pf-box">
+      <div class="pf-h3">The rule</div>
+      <p>Every score is <b>out of 100</b> and is the sum of <b>four components</b>. Each component is
+         <span class="pf-f">weight × how well you did on it (0 to 1)</span>. Nothing else enters the score —
+         no manual adjustment, no seniority, no opinion.</p>
+      <p><b>Two kinds of component.</b>
+         <span class="pill pill-info">Absolute</span> ones are a plain percentage of your own work
+         (e.g. "how many of your projects met the target date"). They do not depend on anybody else.
+         <span class="pill pill-type">Relative</span> ones are divided by <b>the best person in this
+         window</b> — so the top performer gets the full weight and everyone else gets a share of it.
+         Steps are counted relative because a big tower and a single flat do not have comparable step
+         counts; ranking against peers in the same period is the fair comparison.</p>
+      <p><b>When a component cannot be measured</b> for someone (for example none of their projects has
+         finished yet, so "on-time" has nothing to measure), the score uses the <b>average of the people
+         who could be measured</b>, or <b><?= (int)Perf::NEUTRAL ?>%</b> if nobody could. An unmeasurable
+         component therefore never hands out a free 100% and never punishes with a 0%.</p>
+    </div>
+
+    <div class="pf-h3">1 · Project Engineer — total 100 <span class="pf-why">(incentive)</span></div>
     <div class="table-wrap">
       <table class="tbl">
-        <thead><tr><th>Group</th><th>Component</th><th>Weight</th><th>Meaning</th></tr></thead>
+        <thead><tr><th>Component</th><th>Weight</th><th>Kind</th><th>Exact formula</th><th>Where the number comes from</th></tr></thead>
         <tbody>
-          <tr><td rowspan="4"><b>Project Engineer</b></td><td>On-time delivery</td><td><?= Perf::W_PE['ontime'] ?></td><td>Share of their finished projects that met the target end date. No deliveries yet → schedule health (active projects not overdue).</td></tr>
-          <tr><td>Reporting discipline</td><td><?= Perf::W_PE['discipline'] ?></td><td>60% = active projects with a report inside 48h · 40% = reports filed, relative to the top PE.</td></tr>
-          <tr><td>Step throughput</td><td><?= Perf::W_PE['throughput'] ?></td><td>Steps first completed on their visits, relative to the top PE.</td></tr>
-          <tr><td>Hold control</td><td><?= Perf::W_PE['holds'] ?></td><td>Inverse of days their projects sat on hold — fewer stuck days scores higher.</td></tr>
-
-          <tr><td rowspan="4"><b>VAPL worker</b></td><td>Steps completed</td><td><?= Perf::W_WORKER['steps'] ?></td><td>Steps they were named on that first went Done that visit, relative to the top worker.</td></tr>
-          <tr><td>Attendance</td><td><?= Perf::W_WORKER['attendance'] ?></td><td>Distinct days on site, relative to the top worker.</td></tr>
-          <tr><td>Productivity</td><td><?= Perf::W_WORKER['productivity'] ?></td><td>Steps per visit — output density, not just turning up.</td></tr>
-          <tr><td>Speed</td><td><?= Perf::W_WORKER['speed'] ?></td><td>Share of their steps closed within <?= (int)$opt['on_time_step_days'] ?> day(s) of the step's start date.</td></tr>
-
-          <tr><td rowspan="4"><b>Contractor</b></td><td>Steps completed</td><td><?= Perf::W_CON['steps'] ?></td><td>Total steps their labour closed, relative to the top contractor.</td></tr>
-          <tr><td>Work intensity</td><td><?= Perf::W_CON['productivity'] ?></td><td>Steps per visit — "who works harder".</td></tr>
-          <tr><td>On-time projects</td><td><?= Perf::W_CON['ontime'] ?></td><td>Share of the finished projects they worked on that met the target end date.</td></tr>
-          <tr><td>Speed</td><td><?= Perf::W_CON['speed'] ?></td><td>Inverse of average days from a step's start date to its end date.</td></tr>
+          <tr>
+            <td><b>On-time delivery</b></td><td><?= Perf::W_PE['ontime'] ?></td>
+            <td><span class="pill pill-info">Absolute</span></td>
+            <td><span class="pf-f"><?= Perf::W_PE['ontime'] ?> × OnTime% ÷ 100</span>
+              <div class="pf-why">OnTime% = 100 × (their finished projects that met the target) ÷ (their finished projects)</div>
+              <div class="pf-why">No project finished yet → 100 × (1 − overdue actives ÷ actives)</div>
+              <div class="pf-why">Nothing active either → peer average, else <?= (int)Perf::NEUTRAL ?></div></td>
+            <td>PMS sheet: Commissioning <b>End Date</b> vs <b>Tentitive Project End date</b><div class="pf-why">projects.actual_end_date · sheet_target_end</div></td>
+          </tr>
+          <tr>
+            <td><b>Reporting discipline</b></td><td><?= Perf::W_PE['discipline'] ?></td>
+            <td><span class="pill pill-info">Absolute</span> + <span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_PE['discipline'] ?> × (0.6 × Compliance% + 0.4 × 100 × reports ÷ <?= $num($topOf($A['pe'], 'reports')) ?>) ÷ 100</span>
+              <div class="pf-why">Compliance% = 100 × (their active projects reported inside 48 h) ÷ (their active projects)</div>
+              <div class="pf-why">Divisor <?= $num($topOf($A['pe'], 'reports')) ?> = reports filed by the top PE this window</div></td>
+            <td>submissions.engineer (count) · projects.last_report_at (48 h check)</td>
+          </tr>
+          <tr>
+            <td><b>Step throughput</b></td><td><?= Perf::W_PE['throughput'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_PE['throughput'] ?> × their steps ÷ <?= $num($topOf($A['pe'], 'steps')) ?></span>
+              <div class="pf-why">Divisor <?= $num($topOf($A['pe'], 'steps')) ?> = steps closed by the top PE this window</div></td>
+            <td>submissions.payload_json → stepStatuses with status <b>Done</b>, counted once per project+step</td>
+          </tr>
+          <tr>
+            <td><b>Hold control</b></td><td><?= Perf::W_PE['holds'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_PE['holds'] ?> × (1 − their hold-days ÷ <?= $num($topOf($A['pe'], 'hold_days')) ?>)</span>
+              <div class="pf-why">Hold-days = Σ over their On-Hold projects of (today − hold_since)</div>
+              <div class="pf-why">Fewest stuck days scores the full <?= Perf::W_PE['holds'] ?>; the worst scores 0</div></td>
+            <td>projects.lifecycle = On Hold · projects.hold_since</td>
+          </tr>
         </tbody>
       </table>
     </div>
-    <div class="pf-legend">
-      <span><b>Grades</b> A ≥ 85 · B ≥ 70 · C ≥ 55 · D &lt; 55</span>
-      <span><b>Steps done</b> counts a step once — on the first visit that marked it Done, so re-reporting cannot inflate it.</span>
-      <span><b>Dates</b> come from the PMS sheets; press <i>Refresh start dates</i> after updating a Marking start date.</span>
+
+    <div class="pf-h3">2 · VAPL Worker — total 100 <span class="pf-why">(incentive)</span></div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Component</th><th>Weight</th><th>Kind</th><th>Exact formula</th><th>Where the number comes from</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Steps completed</b></td><td><?= Perf::W_WORKER['steps'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_WORKER['steps'] ?> × their steps ÷ <?= $num($topOf($A['workers'], 'steps')) ?></span>
+              <div class="pf-why">Counts a step only if the worker was named on the visit <b>and</b> that visit is the first to mark it Done</div></td>
+            <td>Report form → People on Site (name + "what work done") ∩ that report's Done steps<div class="pf-why">visit_workers.steps ∩ submissions stepStatuses</div></td>
+          </tr>
+          <tr>
+            <td><b>Attendance</b></td><td><?= Perf::W_WORKER['attendance'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_WORKER['attendance'] ?> × their days on site ÷ <?= $num($topOf($A['workers'], 'days')) ?></span>
+              <div class="pf-why"><b>Days</b> = distinct dates, not visits — two reports on one day still count as one day</div></td>
+            <td>visit_workers.visit_date (distinct)</td>
+          </tr>
+          <tr>
+            <td><b>Productivity</b></td><td><?= Perf::W_WORKER['productivity'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_WORKER['productivity'] ?> × (their steps ÷ their visits) ÷ <?= $num($topOf($A['workers'], 'per_visit'), 2) ?></span>
+              <div class="pf-why">Output per trip, so someone who closes more per visit is not beaten by someone who simply attends more</div></td>
+            <td>Same two sources as above, divided</td>
+          </tr>
+          <tr>
+            <td><b>Speed</b></td><td><?= Perf::W_WORKER['speed'] ?></td>
+            <td><span class="pill pill-info">Absolute</span></td>
+            <td><span class="pf-f"><?= Perf::W_WORKER['speed'] ?> × Fast% ÷ 100</span>
+              <div class="pf-why">Fast% = 100 × (their steps closed within <b><?= $N ?> day<?= $N === 1 ? '' : 's' ?></b> of that step's Start Date) ÷ (their steps that have both a Start and End Date)</div>
+              <div class="pf-why">No step of theirs has both dates → peer average, else <?= (int)Perf::NEUTRAL ?></div></td>
+            <td>PMS sheet: each step's <b>Start Date</b> and <b>End Date</b><div class="pf-why">project_step_dates</div></td>
+          </tr>
+        </tbody>
+      </table>
     </div>
+
+    <div class="pf-h3">3 · Contractor — total 100 <span class="pf-why">(evaluation only — never paid from the pools)</span></div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Component</th><th>Weight</th><th>Kind</th><th>Exact formula</th><th>Where the number comes from</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Steps completed</b></td><td><?= Perf::W_CON['steps'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_CON['steps'] ?> × their steps ÷ <?= $num($topOf($A['contractors'], 'steps')) ?></span>
+              <div class="pf-why">Every step closed by any of that company's labour, added together</div></td>
+            <td>visit_workers where type = Contractor, grouped by contractor_name</td>
+          </tr>
+          <tr>
+            <td><b>Work intensity</b><div class="pf-why">"who works harder"</div></td><td><?= Perf::W_CON['productivity'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_CON['productivity'] ?> × (their steps ÷ their visits) ÷ <?= $num($topOf($A['contractors'], 'per_visit'), 2) ?></span>
+              <div class="pf-why">A company that sends many people who each do little scores lower than one that closes work per trip</div></td>
+            <td>Same source, divided by visit count</td>
+          </tr>
+          <tr>
+            <td><b>On-time projects</b></td><td><?= Perf::W_CON['ontime'] ?></td>
+            <td><span class="pill pill-info">Absolute</span></td>
+            <td><span class="pf-f"><?= Perf::W_CON['ontime'] ?> × OnTime% ÷ 100</span>
+              <div class="pf-why">OnTime% = 100 × (finished projects they worked on that met the target) ÷ (finished projects they worked on)</div>
+              <div class="pf-why">None of their projects finished yet → peer average, else <?= (int)Perf::NEUTRAL ?></div></td>
+            <td>projects.actual_end_date vs sheet_target_end, for every project they touched</td>
+          </tr>
+          <tr>
+            <td><b>Speed</b></td><td><?= Perf::W_CON['speed'] ?></td>
+            <td><span class="pill pill-type">Relative</span></td>
+            <td><span class="pf-f"><?= Perf::W_CON['speed'] ?> × (1 − their avg step-days ÷ <?= $num($topOf($A['contractors'], 'avg_turn'), 1) ?>)</span>
+              <div class="pf-why">Avg step-days = mean of (step End Date − step Start Date) over their steps</div>
+              <div class="pf-why">The slowest contractor scores 0 here; the fastest scores close to the full <?= Perf::W_CON['speed'] ?></div></td>
+            <td>PMS sheet step Start/End dates<div class="pf-why">project_step_dates</div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pf-h3">4 · Exact definitions</div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Term</th><th>Precise meaning</th></tr></thead>
+        <tbody>
+          <tr><td><b>Step done (credited)</b></td><td>A step counts <b>once per project</b> — on the <b>first</b> report that marked it <i>Done</i>. Re-reporting the same step later earns nobody anything, so the number cannot be inflated. Credit goes to the PE who filed that report and to every person named on that visit whose "what work done" list includes that step.</td></tr>
+          <tr><td><b>Visit</b></td><td>One person appearing on one report. Two people on one report = two visits.</td></tr>
+          <tr><td><b>Day on site</b></td><td>One distinct calendar date on which that person appeared on any report. Always ≤ visits.</td></tr>
+          <tr><td><b>Finished project</b></td><td>The PMS sheet's final <b>Commissining</b> step has an <b>End Date</b> (the earlier <i>Pre-Commissining</i> step is deliberately ignored), or the project was manually marked Commissioned/Closed.</td></tr>
+          <tr><td><b>On-time project</b></td><td>A finished project whose finish date is <b>on or before</b> its target end date. Same-day counts as on time.</td></tr>
+          <tr><td><b>Overdue project</b></td><td>Target end date has passed and the project is <b>not</b> finished. Counted for today, not for the window.</td></tr>
+          <tr><td><b>Active project</b></td><td>Lifecycle is Active, At Risk, On Hold, or Commissioning Pending.</td></tr>
+          <tr><td><b>48 h compliance</b></td><td>Share of that PE's <b>active</b> projects whose most recent report is under 48 hours old, measured right now.</td></tr>
+          <tr><td><b>Hold-days</b></td><td>For each of their projects sitting On Hold, the days since <i>hold_since</i>, added together. A project held 5 days and another held 3 contributes 8.</td></tr>
+          <tr><td><b>Fast step</b></td><td>A step whose <b>End Date − Start Date ≤ <?= $N ?> day<?= $N === 1 ? '' : 's' ?></b> in the PMS sheet. Change the limit in Incentive Settings.</td></tr>
+          <tr><td><b>Project start date</b></td><td>The <b>Marking</b> step's <b>Start Date</b> in the PMS sheet. If that cell is blank the tab falls back, in order, to Marking End Date → LS Material Delivery → the earliest step Start Date on the row, and prints which one it used under the date.</td></tr>
+          <tr><td><b>Window</b></td><td>Everything above is measured over the selected period only (<?= Admin::e(fmtDate($A['from'])) ?> → <?= Admin::e(fmtDate($A['to'])) ?>). Overdue and 48 h compliance are "as of now" by nature.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pf-h3">5 · Worked example — a VAPL worker</div>
+    <div class="pf-box">
+      <p>Ramesh closed <b>24 steps</b> over <b>18 visits</b> on <b>15 distinct days</b>, and <b>70%</b> of his
+         steps were closed within the fast limit. This window the best worker closed <b>30 steps</b>, the
+         best attendance was <b>20 days</b>, and the best steps-per-visit was <b>1.60</b>.
+         Ramesh's steps per visit = 24 ÷ 18 = <b>1.33</b>.</p>
+      <div class="table-wrap">
+        <table class="tbl">
+          <thead><tr><th>Component</th><th>Calculation</th><th>Points</th></tr></thead>
+          <tbody>
+            <tr><td>Steps completed</td><td><span class="pf-f">40 × 24 ÷ 30</span></td><td><b>32.0</b></td></tr>
+            <tr><td>Attendance</td><td><span class="pf-f">30 × 15 ÷ 20</span></td><td><b>22.5</b></td></tr>
+            <tr><td>Productivity</td><td><span class="pf-f">20 × 1.33 ÷ 1.60</span></td><td><b>16.6</b></td></tr>
+            <tr><td>Speed</td><td><span class="pf-f">10 × 70 ÷ 100</span></td><td><b>7.0</b></td></tr>
+            <tr><td><b>Total</b></td><td></td><td><b>78.1 → grade B</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>If the worker pool is <b>₹50,000</b> and the eligible workers score 78.1, 65.0 and 90.0
+         (total <b>233.1</b>), Ramesh receives
+         <span class="pf-f">50,000 × 78.1 ÷ 233.1 = <b>₹16,753</b></span>.</p>
+    </div>
+
+    <div class="pf-h3">6 · Grades, eligibility and the ₹ split</div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr><td><b>Grades</b></td><td><span class="pill pill-ok">A</span> 85 and above · <span class="pill pill-info">B</span> 70–84.9 · <span class="pill pill-warn">C</span> 55–69.9 · <span class="pill pill-bad">D</span> below 55</td></tr>
+          <tr><td><b>Who is eligible</b></td><td>Score ≥ <b><?= (int)$opt['min_score'] ?></b>. VAPL workers must also have at least <b><?= (int)$opt['min_visits'] ?></b> visit<?= (int)$opt['min_visits'] === 1 ? '' : 's' ?> in the window. Everyone excluded is listed under their table with the reason.</td></tr>
+          <tr><td><b>How ₹ is split</b></td><td><span class="pf-f">your ₹ = pool × your score ÷ (sum of all eligible scores)</span> — proportional to score, so the pool is always fully distributed and a higher score always pays more.</td></tr>
+          <tr><td><b>Two separate pools</b></td><td>The PE pool is split only between PEs; the VAPL worker pool only between VAPL workers. They never mix.</td></tr>
+          <tr><td><b>Contractors</b></td><td>Scored and graded for comparison, but <b>never</b> included in either pool.</td></tr>
+          <tr><td><b>Keeping it accurate</b></td><td>Press <b>Refresh start dates from PMS sheets</b> after editing any Marking start date, target end date, or step date — the scores are only as current as the last sheet read.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
   </div>
 </div>
 <?php Layout::foot();
