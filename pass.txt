@@ -1,0 +1,19 @@
+sudo mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS pms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'pms_user'@'127.0.0.1' IDENTIFIED BY 'Vapl@1234@@';
+GRANT ALL PRIVILEGES ON pms.* TO 'pms_user'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
+
+
+
+
+cd /var/www/html
+sudo git clone https://github.com/AIRTECH-DEV/Project-Daily-site-report-v1.git pms
+cd pms
+
+
+35.234.208.82
+http://35.234.208.82/pms/
+
+http://35.234.208.82/pms/admin/setup.php

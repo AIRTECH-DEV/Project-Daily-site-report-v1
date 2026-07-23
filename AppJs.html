@@ -1,0 +1,1337 @@
+
+    // Big banner/logo images are NOT inlined here (that bloats the served
+    // HTML past Apps Script's limit). They're fetched on demand from the
+    // server via getUiImages() in init(). Referenced before load = ''.
+    var LOGO_DATA_URI = '';
+    const ENGINEERS = ['Dada', 'Nagraj', 'Pratik', 'Ranjeet', 'Paresh', 'Shubham', 'Ganesh', 'Vrundavan', 'Parikshit','Prathamesh Paigude','Raj Jthape'];
+    // Building values MUST match the tab names in each developer's PMS sheet
+    // (whitespace/case are normalized server-side).
+    const DEVELOPER_BUILDINGS = {
+      'Suyog Navkar': ['Agam', 'Shruta', 'Kalpa'],
+      'Kasturi': [
+        'Balmoral River side D-wing',
+        'Balmoral River side C-wing',
+        'Balmoral TowerD-wing',
+        'Balmoral TowerC-wing'
+      ]
+    };
+
+    // Project-progress steps offered in the "Current Status" dropdown, per
+    // site type. Each string is matched (name-based) to a step group column
+    // in the PMS sheet on submit.
+    const STATUS_STEPS = {
+      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining']
+    };
+    // Ventilation / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
+    STATUS_STEPS['Ventilation'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
+    // Site type cards (label + emoji logo + note). VRV/Non-VRV keep their old look.
+    const SITE_TYPES = [
+      { value: 'VRV',          icon: '🏢', name: 'VRV Site',      note: 'Variable Refrigerant Volume' },
+      { value: 'Non-VRV',      icon: '❄️',  name: 'Non-VRV Site',  note: 'Conventional / Other Systems' },
+      { value: 'Ventilation',  icon: '🌀',  name: 'Ventilation',   note: 'Fresh Air / Exhaust System' },
+      { value: 'Cold Storage', icon: '🏬',  name: 'Cold Storage/ Rooms',  note: 'Warehouse Cold Storage' },
+      { value: 'PAC/CRAC',     icon: '🖥️', name: 'PACs / CRACs', note: 'Precision / Computer Room AC' }
+    ];
+    const HOLD_REASONS = ['Stuck BY Client', 'Stuck BY VAPL', 'Other'];
+    const TECH_TYPES = ['VAPL-Technician', 'VAPL-Helper', 'Contractor'];
+    // Per-person "what work done" dropdown options (independent of the status steps).
+    const WORK_DONE_OPTIONS = [
+      'Marking','Civil Opening','Support',
+      'Underdake Insulation','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct',
+      'Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
+    ];
+
+    let answers = {};
+    let currentPage = 0;
+    let projectList = [];
+    let projectListLoading = false;
+    let flatList = [];
+    let flatListLoading = false;
+    let progressLoading = false;
+    let submitting = false;
+
+    function iconCalendar() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 11h18"></path></svg>`; }
+    function iconUser() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="4"></circle></svg>`; }
+    function iconNotes() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16l4-3h10a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`; }
+    function iconPhoto() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`; }
+    function iconProject() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"></path><path d="M5 21V7l8-4 6 3v15"></path><path d="M9 9h.01M9 13h.01M9 17h.01M13 9h.01M13 13h.01M13 17h.01"></path></svg>`; }
+    function iconAc() { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="6" rx="2"></rect><path d="M6 15c1 1 1 2 0 3M11 15c1 1 1 2 0 3M16 15c1 1 1 2 0 3"></path></svg>`; }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Loose key for matching step labels to sheet header text (case/space/punct-insensitive).
+    function compact(str) {
+      return String(str == null ? '' : str).toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    // 'YYYY-MM-DD' -> local-midnight Date. Plain new Date(str) parses ISO as UTC,
+    // which shifts the day for anyone behind GMT. null when not an ISO date.
+    function parseISODate(str) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(str == null ? '' : str).trim());
+      return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+    }
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    // '2026-07-30' -> '30th July 2026'. Anything not ISO passes through as-is.
+    function fmtLongDate(str) {
+      const d = parseISODate(str);
+      if (!d) return String(str == null ? '' : str);
+      const n = d.getDate();
+      const suffix = (n % 100 >= 11 && n % 100 <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+      return n + suffix + ' ' + MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear();
+    }
+    // Whole days from today until `str` (negative = overdue). null when not an ISO date.
+    function daysUntil(str) {
+      const d = parseISODate(str);
+      if (!d) return null;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return Math.round((d - today) / 86400000);
+    }
+    // Countdown chip pieces: colour class, the number, and its unit label. null when
+    // there's no usable date. Overdue counts up; the due day itself has no number.
+    function daysLeftParts(str) {
+      const n = daysUntil(str);
+      if (n === null) return null;
+      const abs = Math.abs(n);
+      return {
+        cls: n < 0 ? 'over' : (n <= 7 ? 'warn' : 'ok'),
+        num: n === 0 ? '' : String(abs),
+        label: n === 0 ? 'due today' : (abs === 1 ? 'day' : 'days') + (n < 0 ? ' overdue' : ' remaining')
+      };
+    }
+    function daysLeftText(str) {
+      const p = daysLeftParts(str);
+      if (!p) return '';
+      return p.num ? p.num + ' ' + p.label : p.label;
+    }
+    function daysLeftHtml(str) {
+      const p = daysLeftParts(str);
+      if (!p) return '';
+      return `<div class="days-left ${p.cls}">
+        <span class="days-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+        <span class="days-sep"></span>
+        <span class="days-txt">
+          ${p.num ? `<span class="days-num">${p.num}</span>` : ''}
+          <span class="days-lbl">${p.label}</span>
+        </span>
+      </div>`;
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function loadProjectList(siteType) {
+      projectListLoading = true;
+      renderCurrentPage();
+
+      if (!window.google || !google.script || !google.script.run) {
+        projectList = [];
+        projectListLoading = false;
+        renderCurrentPage();
+        return;
+      }
+
+      google.script.run
+        .withSuccessHandler(function (list) {
+          projectList = list || [];
+          projectListLoading = false;
+          renderCurrentPage();
+        })
+        .withFailureHandler(function (err) {
+          projectListLoading = false;
+          console.error(err);
+          renderCurrentPage();
+        })
+        .getProjectNames(siteType);
+    }
+
+    // Clears any previously loaded "already done" steps + generated Order ID.
+    // Keeps the user's fresh ticks (doneSteps) so switching only site type mid-entry
+    // doesn't wipe their selections.
+    function resetProgressState() {
+      answers.lockedSteps = [];
+      answers.generatedOrderId = '';
+    }
+
+    // Reads the PMS/developer sheet for steps already marked Done and locks them.
+    // `params` = { clientType, siteType, project } OR { clientType, siteType, developer, building, flatNo, floor }.
+    function loadProgressState(params) {
+      resetProgressState();
+      if (!window.google || !google.script || !google.script.run) return;
+      progressLoading = true;
+      renderCurrentPage();
+      google.script.run
+        .withSuccessHandler(function (res) {
+          progressLoading = false;
+          res = res || {};
+          answers.lockedSteps = Array.isArray(res.doneSteps) ? res.doneSteps : [];
+          answers.generatedOrderId = res.orderId || '';
+          // Drop any fresh tick / assignment that is now locked (already done in the sheet).
+          const locked = new Set(answers.lockedSteps.map(compact));
+          answers.doneSteps = (answers.doneSteps || []).filter(s => !locked.has(compact(s)));
+          answers.stepStatuses = (answers.stepStatuses || []).filter(e => !locked.has(compact(e.step)));
+          // Tentative end date already in the sheet -> lock it read-only.
+          if (res.tentativeEndDate && String(res.tentativeEndDate).trim() !== '') {
+            answers.tentativeEndDate = String(res.tentativeEndDate).trim();
+            answers.tentativeLocked = true;
+          } else {
+            answers.tentativeLocked = false;
+          }
+          // Amendment / Drawing / Measurement are asked fresh on every visit — never
+          // adopted from the last response-sheet row.
+          renderCurrentPage();
+        })
+        .withFailureHandler(function (err) {
+          progressLoading = false;
+          console.error(err);
+          renderCurrentPage();
+        })
+        .getProgressState(params);
+    }
+
+    // Developer path: only fetch once building + flat are both known.
+    function maybeLoadDeveloperProgress() {
+      if (answers.clientType !== 'Developer') return;
+      if (!answers.building || String(answers.flatNo || '').trim() === '') return;
+      loadProgressState({
+        clientType: 'Developer',
+        siteType: answers.siteType || '',
+        developer: answers.developer || '',
+        building: answers.building || '',
+        flatNo: answers.flatNo || '',
+        floor: answers.floor || ''
+      });
+    }
+
+    function isDeveloperPathValid() {
+      if (answers.clientType !== 'Developer') return true;
+      // Floor is auto-filled from the flat picker, so it's not separately required.
+      return !!answers.developer && !!answers.building && String(answers.flatNo||'').trim() !== '';
+    }
+
+    function isStatusPathValid() {
+      // At least one step must be assigned a status (Done/Pending/Hold) this visit.
+      if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) return false;
+      if (String(answers.tentativeEndDate||'').trim() === '') return false;
+      return true;
+    }
+
+    function isStep1Valid() {
+      return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && peopleRowsValid() && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
+    }
+    function isStep2Valid() {
+      const amendOk = answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true;
+      // Plan satisfied by picking pending steps OR typing notes.
+      const planOk = effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '';
+      return planOk && !!answers.drawingChange && amendOk;
+    }
+    function isStep3Valid() {
+      const drawingOk = answers.drawingChange === 'Yes' ? !!answers.drawingPhoto : true;
+      const measurementOk = answers.measurement === 'Yes' ? !!answers.measurementFile : true;
+      return drawingOk && !!answers.measurement && measurementOk;
+    }
+    function isCurrentPageValid() {
+      if (currentPage === 0) return isStep1Valid();
+      if (currentPage === 1) return isStep2Valid();
+      if (currentPage === 2) return isStep3Valid();
+      return true;
+    }
+
+    // Human-readable list of what's still blocking "Save & Next" on the current step.
+    function missingFields() {
+      const m = [];
+      if (currentPage === 0) {
+        if (!answers.siteType) m.push('Site Type');
+        if (!answers.clientType) m.push('Client Type');
+        if (answers.clientType === 'Developer') {
+          if (!answers.developer) m.push('Developer');
+          if (!answers.building) m.push('Building');
+          if (String(answers.flatNo || '').trim() === '') m.push('Flat No (select from list)');
+        } else if (String(answers.project || '').trim() === '') {
+          m.push('Project / Client');
+        }
+        if (!answers.engineer) m.push('Assigned Engineer');
+        if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) m.push('Current Status — tick steps, pick a status, hit Apply');
+        if (String(answers.tentativeEndDate || '').trim() === '') m.push('Tentative Project End Date');
+        const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
+        if (n < 1) m.push('People on Site — set the count');
+        // If every work option is already locked (done in the sheet), the dropdown is empty —
+        // nothing to select — so don't require "work done" for that visit.
+        const workSelectable = availableWorkOptions().length > 0;
+        for (let i = 0; i < n; i++) {
+          const r = (answers.peopleRows || [])[i] || {};
+          const probs = [];
+          if (String(r.name || '').trim() === '') probs.push('name');
+          if (!r.techType) probs.push('type');
+          if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor company name');
+          if (workSelectable && personWorks(r).length === 0) probs.push('work done');
+          if (probs.length) m.push('Person ' + (i + 1) + ' — ' + probs.join(', '));
+        }
+        if (String(answers.activity || '').trim() === '') m.push('Activity Notes');
+        if (!(Array.isArray(answers.photo) && answers.photo.length > 0)) m.push('Site Photos');
+        if (!answers.amendment) m.push('Amendment Required?');
+      } else if (currentPage === 1) {
+        if (!(effectiveTomorrowSteps().length > 0 || String(answers.nextPlan || '').trim() !== '')) m.push('Plan for Tomorrow — pick steps or add notes');
+        if (!answers.drawingChange) m.push('Drawing Change');
+        if (answers.amendment === 'Yes' && String(answers.amendmentWhy || '').trim() === '') m.push('Amendment Notes');
+      } else if (currentPage === 2) {
+        if (!answers.measurement) m.push('Measurement Report Created Today?');
+        if (answers.drawingChange === 'Yes' && !answers.drawingPhoto) m.push('Drawing Change Photo');
+        if (answers.measurement === 'Yes' && !answers.measurementFile) m.push('Measurement Report File');
+      }
+      return m;
+    }
+    function missingBoxHtml() {
+      const m = missingFields();
+      if (!m.length) return '';
+      return `<div class="missing-box">
+        <div class="missing-title">⚠ Fill these to continue:</div>
+        <ul>${m.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+      </div>`;
+    }
+
+    function updateStepper() {
+      const track = document.getElementById('stepTrack');
+      if (!track) return;
+      // Fill = number of completed segments. CSS width already divides the track
+      // by 3 (per-segment), so --progress must be currentPage (0..3), not /3.
+      track.style.setProperty('--progress', currentPage);
+      for (let i = 0; i < 4; i++) {
+        const el = document.getElementById('step-bubble-' + i);
+        if (el) el.className = 'step' + (i === currentPage ? ' active' : i < currentPage ? ' done' : '');
+      }
+    }
+
+    function setSubmittedMode(enabled) {
+      const shell = document.querySelector('.shell');
+      if (shell) shell.classList.toggle('submitted', !!enabled);
+    }
+
+    function renderCurrentPage() {
+      setSubmittedMode(false);
+      updateStepper();
+      const mount = document.getElementById('pageMount');
+      if (currentPage === 0) mount.innerHTML = renderStep1();
+      else if (currentPage === 1) mount.innerHTML = renderStep2();
+      else if (currentPage === 2) mount.innerHTML = renderStep3();
+      else mount.innerHTML = renderReview();
+      bindCommonEvents();
+      updatePrimaryButton();
+      if (currentPage === 0) { bindProjectSearch(); bindFlatSearch(); }
+    }
+
+    function renderStep1() {
+      const siteType = answers.siteType || '';
+      const clientType = answers.clientType || '';
+      const developer = answers.developer || '';
+      const building = answers.building || '';
+      const floor = answers.floor || '';
+      const flatNo = answers.flatNo || '';
+      const project = answers.project || '';
+      const people = answers.people || '';
+      const engineer = answers.engineer || '';
+      const activity = answers.activity || '';
+      const amend = answers.amendment || '';
+      const photoCount = (answers.photo || []).length;
+      const currentStatus = answers.currentStatus || '';
+      const statusVal = answers.status || '';
+      const holdReason = answers.holdReason || '';
+      const holdReasonDetail = answers.holdReasonDetail || '';
+      const tentativeEndDate = answers.tentativeEndDate || '';
+      const workDoneBy = answers.workDoneBy || '';
+      const contractorName = answers.contractorName || '';
+      const statusSteps = STATUS_STEPS[siteType] || [];
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      const doneSet = new Set((answers.doneSteps || []).map(compact));       // pending ticks
+      const assignedMap = new Map((answers.stepStatuses || []).map(e => [compact(e.step), e]));
+      const peopleCount = Math.max(0, parseInt(answers.people || 0, 10) || 0);
+      const peopleRows = answers.peopleRows || [];
+      const tentativeLocked = !!answers.tentativeLocked;
+      // "What work done" hides steps already done (locked from the sheet).
+      const availableWork = availableWorkOptions();
+      // Activity Notes suggestions: skip steps held up by VAPL itself (internal hold) — only
+      // offer ready-made lines for Done/Pending and client-side holds.
+      const activitySuggestions = (answers.stepStatuses || []).filter(e => !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Site Type</div><div class="section-sub">Select the type of site visited.</div></div>
+                </div>
+                <div class="option-grid wrap">
+                  ${SITE_TYPES.map(t => `
+                  <div class="card-option ${siteType === t.value ? 'selected' : ''}" onclick="selectSiteType('${escapeHtml(t.value)}')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">${t.icon}</div>
+                    <div class="option-name">${escapeHtml(t.name)}</div>
+                    <div class="option-note">${escapeHtml(t.note)}</div>
+                  </div>`).join('')}
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Client Type</div><div class="section-sub">Select whether this is a general client or a developer project.</div></div>
+                </div>
+                <div class="option-grid two">
+                  <div class="card-option ${clientType === 'General' ? 'selected' : ''}" onclick="selectClientType('General')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">🙍</div>
+                    <div class="option-name">General</div>
+                  </div>
+                  <div class="card-option ${clientType === 'Developer' ? 'selected' : ''}" onclick="selectClientType('Developer')">
+                    <div class="mini-radio"></div>
+                    <div class="option-icon">🏗️</div>
+                    <div class="option-name">Developer</div>
+                  </div>
+                </div>
+
+                ${clientType === 'Developer' ? `
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${developer ? '' : 'placeholder'}" id="developerSelect" onchange="selectDeveloper(this.value)">
+                    <option value="">Select developer</option>
+                    ${DEVELOPERS.map(name => `<option value="${escapeHtml(name)}" ${developer === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+
+                ${clientType === 'Developer' && developer ? `
+                <div style="margin-top:12px;">
+                  <select class="dropdown-field ${building ? '' : 'placeholder'}" id="buildingSelect" onchange="selectBuilding(this.value)">
+                    <option value="">Select building</option>
+                    ${(DEVELOPER_BUILDINGS[developer] || []).map(name => `<option value="${escapeHtml(name)}" ${building === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                  </select>
+                </div>` : ''}
+
+                ${clientType === 'Developer' && building ? `
+                <div style="margin-top:12px;">
+                  <div class="search-wrap">
+                    <input type="text" class="field" id="field-flat" placeholder="${flatListLoading ? 'Loading flats...' : 'Search & select flat (e.g. ' + escapeHtml((flatList[0] && flatList[0].flat) || 'A-102') + ')'}" value="${escapeHtml(String(flatNo))}" autocomplete="off">
+                    <div class="search-results" id="flatResults"></div>
+                  </div>
+                  ${(floor || answers.generatedOrderId) ? `<div class="hint-note">
+                    ${floor ? `Floor: <b style="color:#333;margin:0 4px;">${escapeHtml(String(floor))}</b>` : ''}
+                    ${floor && answers.generatedOrderId ? '·' : ''}
+                    ${answers.generatedOrderId ? `&nbsp;Order ID: <b style="color:#333;margin-left:4px;">${escapeHtml(answers.generatedOrderId)}</b>` : ''}
+                  </div>` : ''}
+                </div>` : ''}
+              </div>
+
+              ${clientType === 'Developer' ? '' : `
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Project / Client</div><div class="section-sub">Search and select the project or client.</div></div>
+                </div>
+                <div class="search-wrap">
+                  <input type="text" class="field" id="field-project" placeholder="Search by project / client name, code, or location..." value="${escapeHtml(project)}" autocomplete="off">
+                  <div class="search-results" id="searchResults"></div>
+                </div>
+              </div>`}
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconAc()}
+                  <div><div class="section-title">People on Site</div><div class="section-sub">Set the count, then fill each person's name, type, and work done.</div></div>
+                </div>
+                <div class="number-box">
+                  <button type="button" class="num-btn" aria-label="Decrease people on site" onclick="adjustPeople(-1)">-</button>
+                  <input class="num-input" id="peopleInput" type="number" min="0" value="${escapeHtml(String(people))}" oninput="setPeople(this.value)">
+                  <button type="button" class="num-btn" aria-label="Increase people on site" onclick="adjustPeople(1)">+</button>
+                </div>
+
+                ${peopleCount > 0 ? `<div class="people-rows">
+                  ${Array.from({length: peopleCount}).map((_, i) => {
+                    const r = peopleRows[i] || {};
+                    const type = r.techType || '';
+                    const works = Array.isArray(r.workDone) ? r.workDone : (r.workDone ? [r.workDone] : []);
+                    const rowOpts = availableWork.filter(w => !works.some(x => compact(x) === compact(w)));
+                    return `<div class="person-block">
+                      <div class="person-top ${type === 'Contractor' ? 'has-contractor' : ''}">
+                        <div class="person-idx">${i + 1}</div>
+                        <input type="text" class="field" placeholder="Name" value="${escapeHtml(r.name || '')}" oninput="setPersonField(${i}, 'name', this.value)" autocomplete="off">
+                        <select class="dropdown-field ${type ? '' : 'placeholder'}" onchange="setPersonField(${i}, 'techType', this.value)">
+                          <option value="">Type</option>
+                          ${TECH_TYPES.map(t => `<option value="${escapeHtml(t)}" ${type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+                        </select>
+                        ${type === 'Contractor' ? `<input type="text" class="field contractor-name" placeholder="Contractor company name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
+                      </div>
+                      <div class="person-work">
+                        <select class="dropdown-field placeholder work-add" onchange="addPersonWork(${i}, this.value)">
+                          <option value="">${works.length ? '+ Add another work' : 'What work done'}</option>
+                          ${rowOpts.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('')}
+                        </select>
+                        ${works.length ? `<div class="chip-row work-chips">
+                          ${works.map(w => `<span class="work-chip">${escapeHtml(w)}<button type="button" title="Remove" onclick="removePersonWork(${i}, '${escapeHtml(w)}')">&times;</button></span>`).join('')}
+                        </div>` : ''}
+                      </div>
+                    </div>`;
+                  }).join('')}
+                </div>` : ''}
+              </div>
+
+              <div class="hint-note">🛡️ All fields marked with * are mandatory.</div>
+            </div>
+
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconUser()}
+                  <div><div class="section-title">Assigned Engineer</div><div class="section-sub">Select the engineer who visited the site.</div></div>
+                </div>
+                <select class="dropdown-field ${engineer ? '' : 'placeholder'}" id="engineerSelect" onchange="selectEngineer(this.value)">
+                  <option value="">Select project engineer</option>
+                  ${ENGINEERS.map(name => `<option value="${escapeHtml(name)}" ${engineer === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                </select>
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Current Status</div><div class="section-sub">Tick the steps, pick a status, hit Apply. Repeat for steps with a different status. Already-done steps are locked.</div></div>
+                </div>
+                ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
+                ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
+                <div class="step-check-list">
+                  ${statusSteps.map(s => {
+                    const key = compact(s);
+                    const locked = lockedSet.has(key);
+                    const assigned = assignedMap.get(key);
+                    if (locked) {
+                      return `<label class="step-check locked on">
+                        <input type="checkbox" checked disabled>
+                        <span class="step-check-name">${escapeHtml(s)}</span>
+                        <span class="step-done-tag">done</span>
+                      </label>`;
+                    }
+                    if (assigned) {
+                      return `<div class="step-check assigned ${statusTagClass(assigned.status)}">
+                        <span class="step-check-name">${escapeHtml(s)}</span>
+                        <span class="step-stat-tag ${statusTagClass(assigned.status)}">${escapeHtml(assigned.status)}</span>
+                        <button type="button" class="step-remove" title="Remove" onclick="removeStepStatus('${escapeHtml(s)}')">&times;</button>
+                      </div>`;
+                    }
+                    const checked = doneSet.has(key);
+                    return `<label class="step-check ${checked ? 'on' : ''}">
+                      <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleStep('${escapeHtml(s)}')">
+                      <span class="step-check-name">${escapeHtml(s)}</span>
+                    </label>`;
+                  }).join('')}
+                </div>
+
+                <div class="status-apply">
+                  <select class="dropdown-field ${statusVal ? '' : 'placeholder'}" id="statusSelect" onchange="setStatusValue(this.value)">
+                    <option value="">Select status for ticked steps</option>
+                    <option value="Done" ${statusVal === 'Done' ? 'selected' : ''}>Done</option>
+                    <option value="Pending" ${statusVal === 'Pending' ? 'selected' : ''}>Pending</option>
+                    <option value="Hold" ${statusVal === 'Hold' ? 'selected' : ''}>Hold</option>
+                  </select>
+
+                  ${statusVal === 'Hold' ? `
+                  <select class="dropdown-field ${holdReason ? '' : 'placeholder'}" id="holdReasonSelect" onchange="setHoldReason(this.value)">
+                    <option value="">Why project on hold?</option>
+                    ${HOLD_REASONS.map(r => `<option value="${escapeHtml(r)}" ${holdReason === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+                  </select>` : ''}
+
+                  ${statusVal === 'Hold' ? `
+                  <textarea class="textarea" id="holdReasonDetailInput" placeholder="Explain why the project is on hold..." oninput="setHoldReasonDetail(this.value)">${escapeHtml(holdReasonDetail)}</textarea>` : ''}
+
+                  <button type="button" class="btn primary apply-btn" onclick="applyStepStatus()" ${canApplyStatus() ? '' : 'disabled'}>Apply status to ticked steps</button>
+                </div>`}
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Tentative Project End Date</div><div class="section-sub">${tentativeLocked ? 'Already set in the progress sheet (read-only).' : 'Select the tentative completion date.'}</div></div>
+                </div>
+                <div class="tent-row">
+                  ${tentativeLocked
+                    ? `<input type="text" class="field locked" value="${escapeHtml(fmtLongDate(tentativeEndDate))}" disabled>`
+                    : `<input type="date" class="field" id="tentativeEndDateInput" value="${escapeHtml(tentativeEndDate)}" onchange="setTentativeEndDate(this.value)">`}
+                  <div id="daysLeftBox">${daysLeftHtml(tentativeEndDate)}</div>
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Activity Notes</div><div class="section-sub">Tap a step below to add a ready-made line, and/or write your own.</div></div>
+                </div>
+                ${activitySuggestions.length ? `<div class="plan-suggest" style="margin-bottom:10px;">
+                  <div class="plan-suggest-label">From today's status — tap to add a line:</div>
+                  <div class="chip-row">
+                    ${activitySuggestions.map(e => `<button type="button" class="plan-chip ${statusTagClass(e.status)}" onclick="addActivityStatement('${escapeHtml(e.step)}')">${escapeHtml(e.step)} · ${escapeHtml(e.status)}</button>`).join('')}
+                  </div>
+                </div>` : ''}
+                <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
+              </div>
+
+              <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:18px; align-items:start;">
+                <div class="section" style="margin-bottom:0;">
+                  <div class="section-head">
+                    ${iconPhoto()}
+                    <div><div class="section-title">Site Photos</div><div class="section-sub">Upload clear photos of the site, installation, and equipment.</div></div>
+                  </div>
+                  <div class="dropzone ${photoCount ? 'has-files' : ''}" onclick="document.getElementById('photoInput').click()">
+                    <div class="drop-icon">☁</div>
+                    <div class="drop-main">Drag &amp; drop files here or <b>click to browse</b></div>
+                    <div class="drop-sub">JPG, PNG, PDF up to 10MB each</div>
+                  </div>
+                  <input type="file" id="photoInput" accept="image/*,.pdf" multiple style="display:none;" onchange="handleFiles('photo', this.files, true)">
+                  <div class="file-list" id="fileList-photo"></div>
+                </div>
+
+                <div class="section" style="margin-bottom:0;">
+                  <div class="section-head">
+                    ${iconNotes()}
+                    <div><div class="section-title">Amendment Required?</div><div class="section-sub">Is any amendment or change required?</div></div>
+                  </div>
+                  <div class="yesno-row">
+                    <button class="yesno-btn ${amend === 'Yes' ? 'selected' : ''}" onclick="setYesNo('amendment','Yes')">Yes</button>
+                    <button class="yesno-btn ${amend === 'No' ? 'selected' : ''}" onclick="setYesNo('amendment','No')">No</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+
+    function renderStep2() {
+      const nextPlan = answers.nextPlan || '';
+      const drawingChange = answers.drawingChange || '';
+      const amendmentWhy = answers.amendmentWhy || '';
+      const remaining = remainingSteps();
+      const tomorrowSet = new Set((answers.tomorrowSteps || []).map(compact));
+      const nextStepStartDate = answers.nextStepStartDate || '';
+      const pickedTomorrow = effectiveTomorrowSteps();
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Plan for Tomorrow</div><div class="section-sub">Tap the steps planned for tomorrow (steps not done yet), and/or add notes.</div></div>
+                </div>
+                ${remaining.length ? `<div class="plan-suggest">
+                  <div class="plan-suggest-label">Upcoming steps (not done — includes today's pending/hold) — tap to add:</div>
+                  <div class="chip-row">
+                    ${remaining.map(s => `<button type="button" class="plan-chip ${tomorrowSet.has(compact(s)) ? 'on' : ''}" onclick="toggleTomorrowStep('${escapeHtml(s)}')">${escapeHtml(s)}</button>`).join('')}
+                  </div>
+                </div>` : `<div class="hint-note">All steps are done — add any notes below.</div>`}
+                ${pickedTomorrow.length ? `<div class="plan-startdate" style="margin-top:12px;">
+                  <div class="plan-suggest-label">Next Step Start Date — the planned steps above will start on this date:</div>
+                  <input type="date" class="field" id="nextStepStartDateInput" value="${escapeHtml(nextStepStartDate)}" onchange="setNextStepStartDate(this.value)" style="margin-top:6px;max-width:220px;">
+                </div>` : ''}
+                <textarea class="textarea" id="nextPlanInput" placeholder="Any extra notes for tomorrow (optional if steps picked above)..." style="margin-top:12px;">${escapeHtml(nextPlan)}</textarea>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  ${iconProject()}
+                  <div><div class="section-title">Drawing Change</div><div class="section-sub">Any changes in drawing as per project condition?</div></div>
+                </div>
+                <div class="yesno-row">
+                  <button class="yesno-btn ${drawingChange === 'Yes' ? 'selected' : ''}" onclick="setYesNo('drawingChange','Yes')">Yes</button>
+                  <button class="yesno-btn ${drawingChange === 'No' ? 'selected' : ''}" onclick="setYesNo('drawingChange','No')">No</button>
+                </div>
+              </div>
+            </div>
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconNotes()}
+                  <div><div class="section-title">Amendment Notes</div><div class="section-sub">If amendment / PO / approval is required, explain the reason.</div></div>
+                </div>
+                <textarea class="textarea" id="amendmentWhyInput" placeholder="If yes — mention why..." ${answers.amendment === 'Yes' ? '' : 'disabled style="background:#fafafa;color:#999;"'}>${escapeHtml(amendmentWhy)}</textarea>
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+
+    function renderStep3() {
+      const drawingPhoto = answers.drawingPhoto ? [answers.drawingPhoto] : [];
+      const measurement = answers.measurement || '';
+      const measurementFile = answers.measurementFile ? [answers.measurementFile] : [];
+      const drawingPhotoBlock = answers.drawingChange === 'Yes'
+        ? `
+                <div class="dropzone ${drawingPhoto.length ? 'has-files' : ''}" onclick="document.getElementById('drawingPhotoInput').click()">
+                  <div class="drop-icon">+</div>
+                  <div class="drop-main">Upload drawing photo</div>
+                  <div class="drop-sub">Image or PDF accepted</div>
+                </div>
+                <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('drawingPhoto', this.files, false)">
+                <div class="file-list" id="fileList-drawingPhoto"></div>`
+        : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>';
+      const measurementFileBlock = measurement === 'Yes'
+        ? `
+                <div class="dropzone ${measurementFile.length ? 'has-files' : ''}" onclick="document.getElementById('measurementFileInput').click()">
+                  <div class="drop-icon">+</div>
+                  <div class="drop-main">Upload measurement report</div>
+                  <div class="drop-sub">PDF / Image accepted</div>
+                </div>
+                <input type="file" id="measurementFileInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('measurementFile', this.files, false)">
+                <div class="file-list" id="fileList-measurementFile"></div>`
+        : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
+      return `
+        <div class="panel">
+          <div class="twocol">
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconPhoto()}
+                  <div><div class="section-title">Drawing Change Photo</div><div class="section-sub">Upload the drawing change photo if changes were reported.</div></div>
+                </div>
+                ${drawingPhotoBlock}
+              </div>
+            </div>
+            <div class="col">
+              <div class="section">
+                <div class="section-head">
+                  ${iconCalendar()}
+                  <div><div class="section-title">Measurement Report Created Today?</div><div class="section-sub">Tell us if the measurement report was created today.</div></div>
+                </div>
+                <div class="yesno-row">
+                  <button class="yesno-btn ${measurement === 'Yes' ? 'selected' : ''}" onclick="setYesNo('measurement','Yes')">Yes</button>
+                  <button class="yesno-btn ${measurement === 'No' ? 'selected' : ''}" onclick="setYesNo('measurement','No')">No</button>
+                </div>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  ${iconPhoto()}
+                  <div><div class="section-title">Measurement Report File</div><div class="section-sub">Upload the measurement report if available.</div></div>
+                </div>
+                ${measurementFileBlock}
+              </div>
+            </div>
+          </div>
+          ${renderActionBar()}
+        </div>
+      `;
+    }
+    function renderReview() {
+      const photoNames = (answers.photo || []).map(f => f.name).join(', ');
+      const stepStatuses = answers.stepStatuses || [];
+      const statusSummary = stepStatuses.map(e => e.step + ' (' + e.status + ')').join(', ');
+      const lockedList = (answers.lockedSteps || []).join(', ');
+      const holdEntry = stepStatuses.find(e => e.status === 'Hold');
+      const workSummary = peopleWorkSummary();
+      return `
+        <div class="panel">
+          <div class="review-grid">
+            <div class="review-card">
+              <h4>Basic Details</h4>
+              ${reviewRow('Site Type', answers.siteType || '-')}
+              ${reviewRow('Client Type', answers.clientType || '-')}
+              ${answers.clientType === 'Developer' ? reviewRow('Developer', answers.developer || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Building', answers.building || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Floor', answers.floor || '-') : ''}
+              ${answers.clientType === 'Developer' ? reviewRow('Flat No', answers.flatNo || '-') : ''}
+              ${reviewRow('Project', answers.project || '-')}
+              ${reviewRow('People on Site', answers.people || '-')}
+              ${reviewRow('Engineer', answers.engineer || '-')}
+              ${reviewRow('Steps & Status', statusSummary || '-')}
+              ${lockedList ? reviewRow('Already Done', lockedList) : ''}
+              ${reviewRow('Amendment', answers.amendment || '-')}
+            </div>
+            <div class="review-card">
+              <h4>Notes & Files</h4>
+              ${reviewRow('Activity', answers.activity || '-')}
+              ${reviewRow('Next Plan', tomorrowPlanText() || '-')}
+              ${reviewRow('Amendment Why', answers.amendmentWhy || '-')}
+              ${reviewRow('Site Photos', photoNames || '-')}
+              ${reviewRow('Drawing Change', answers.drawingChange || '-')}
+            </div>
+            <div class="review-card">
+              <h4>Additional</h4>
+              ${reviewRow('Work Done By', workSummary || '-')}
+              ${reviewRow('Tentative End Date', answers.tentativeEndDate ? (fmtLongDate(answers.tentativeEndDate) + (daysLeftText(answers.tentativeEndDate) ? ' · ' + daysLeftText(answers.tentativeEndDate) : '')) : '-')}
+              ${holdEntry ? reviewRow('Hold Reason', holdEntry.holdReason || '-') : ''}
+              ${holdEntry ? reviewRow('Hold Detail', holdEntry.holdReasonDetail || '-') : ''}
+              ${reviewRow('Drawing Photo', answers.drawingPhoto ? answers.drawingPhoto.name : '-')}
+              ${reviewRow('Measurement Created', answers.measurement || '-')}
+              ${reviewRow('Measurement File', answers.measurementFile ? answers.measurementFile.name : '-')}
+            </div>
+            <div class="review-card">
+              <h4>Ready to Submit</h4>
+              <div style="font-size:13px;color:#666;line-height:1.6;">Please review all details carefully. Once you click submit, your site visit report will be saved and the PDF will be generated.</div>
+            </div>
+          </div>
+          ${renderActionBar(true)}
+        </div>
+      `;
+    }
+
+    function reviewRow(label, value) {
+      return `<div class="review-row"><span>${escapeHtml(label)}</span><span>${escapeHtml(String(value))}</span></div>`;
+    }
+
+    function renderActionBar(isSubmit = false) {
+      return `
+        <div id="missingBox">${(!isSubmit && currentPage < 3) ? missingBoxHtml() : ''}</div>
+        <div class="actionbar">
+          <div class="actions-left">
+            <button class="btn ghost" onclick="goBack()">Back</button>
+            <button class="btn ghost" onclick="saveDraft()">Save Draft</button>
+          </div>
+          <div class="actions-right">
+            <button class="btn ghost" onclick="clearCurrentPage()">Clear</button>
+            <button class="btn primary" id="primaryBtn" onclick="${isSubmit ? 'submitForm()' : 'goNext()'}">${isSubmit ? 'Submit Report' : 'Save & Next'} →</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function bindCommonEvents() {
+      const activity = document.getElementById('activityInput');
+      if (activity) activity.addEventListener('input', e => { answers.activity = e.target.value; updatePrimaryButton(); });
+      const nextPlan = document.getElementById('nextPlanInput');
+      if (nextPlan) nextPlan.addEventListener('input', e => { answers.nextPlan = e.target.value; updatePrimaryButton(); });
+      const amendmentWhy = document.getElementById('amendmentWhyInput');
+      if (amendmentWhy) amendmentWhy.addEventListener('input', e => { answers.amendmentWhy = e.target.value; updatePrimaryButton(); });
+      renderFileLists();
+    }
+
+    function bindProjectSearch() {
+      const input = document.getElementById('field-project');
+      if (!input) return;
+      input.addEventListener('input', function(e) { answers.project = e.target.value; onProjectSearch(e); updatePrimaryButton(); });
+      input.addEventListener('focus', function(e) { onProjectSearch(e); });
+    }
+
+    // Closes any open search dropdown (project OR flat) on an outside click.
+    // Registered once in init().
+    function onDocProjectClick(e) {
+      document.querySelectorAll('.search-wrap').forEach(function (wrap) {
+        const res = wrap.querySelector('.search-results');
+        if (res && !wrap.contains(e.target)) res.style.display = 'none';
+      });
+    }
+
+    function onProjectSearch(e) {
+      const q = (e.target.value || '').trim().toLowerCase();
+      const resultsEl = document.getElementById('searchResults');
+      if (!resultsEl) return;
+      if (projectListLoading) {
+        resultsEl.innerHTML = '<div class="search-loading">Loading ' + (answers.siteType || 'site') + ' project list...</div>';
+        resultsEl.style.display = 'block';
+        return;
+      }
+      if (!q) { resultsEl.style.display = 'none'; return; }
+      const matches = projectList.filter(p => p.toLowerCase().includes(q)).slice(0, 8);
+      if (!matches.length) {
+        resultsEl.innerHTML = '<div class="search-empty">No matching project - check spelling</div>';
+      } else {
+        resultsEl.innerHTML = matches.map(m => '<button class="search-item" type="button">' + escapeHtml(m) + '</button>').join('');
+        resultsEl.querySelectorAll('.search-item').forEach(function (item, index) {
+          item.addEventListener('mousedown', function (event) {
+            event.preventDefault();
+            selectProject(matches[index]);
+          });
+        });
+      }
+      resultsEl.style.display = 'block';
+    }
+
+    // ---- Developer flat picker (searchable, from the building sheet) ----
+    function loadFlatList(developer, building) {
+      flatList = [];
+      flatListLoading = true;
+      renderCurrentPage();
+      if (!window.google || !google.script || !google.script.run) { flatListLoading = false; renderCurrentPage(); return; }
+      google.script.run
+        .withSuccessHandler(function (list) { flatList = Array.isArray(list) ? list : []; flatListLoading = false; renderCurrentPage(); })
+        .withFailureHandler(function (err) { flatListLoading = false; console.error(err); renderCurrentPage(); })
+        .getFlats({ developer: developer, building: building });
+    }
+    function bindFlatSearch() {
+      const input = document.getElementById('field-flat');
+      if (!input) return;
+      input.addEventListener('input', function (e) { answers.flatNo = e.target.value; onFlatSearch(e); updatePrimaryButton(); });
+      input.addEventListener('focus', function (e) { onFlatSearch(e); });
+    }
+    function onFlatSearch(e) {
+      const q = (e.target.value || '').trim().toLowerCase();
+      const el = document.getElementById('flatResults');
+      if (!el) return;
+      if (flatListLoading) { el.innerHTML = '<div class="search-loading">Loading flats...</div>'; el.style.display = 'block'; return; }
+      if (!flatList.length) { el.innerHTML = '<div class="search-empty">No flats found for this building</div>'; el.style.display = 'block'; return; }
+      let list = flatList;
+      if (q) list = flatList.filter(f => String(f.flat).toLowerCase().includes(q) || String(f.floor || '').toLowerCase().includes(q));
+      list = list.slice(0, 15);
+      if (!list.length) { el.innerHTML = '<div class="search-empty">No matching flat</div>'; el.style.display = 'block'; return; }
+      el.innerHTML = list.map(f => `<button class="search-item" type="button">${escapeHtml(f.flat)}${f.floor ? ` <span style="color:#999;">— ${escapeHtml(f.floor)}</span>` : ''}</button>`).join('');
+      el.querySelectorAll('.search-item').forEach(function (item, index) {
+        item.addEventListener('mousedown', function (ev) { ev.preventDefault(); selectFlat(list[index].flat, list[index].floor); });
+      });
+      el.style.display = 'block';
+    }
+    function selectFlat(flat, floor) {
+      answers.flatNo = flat;
+      answers.floor = floor || '';
+      renderCurrentPage();
+      maybeLoadDeveloperProgress();
+    }
+
+    function selectProject(name) {
+      answers.project = name;
+      const input = document.getElementById('field-project');
+      if (input) input.value = name;
+      const resultsEl = document.getElementById('searchResults');
+      if (resultsEl) resultsEl.style.display = 'none';
+      updatePrimaryButton();
+      // Pull already-done steps for this general project (matched by Order ID / name).
+      if (answers.clientType !== 'Developer' && name) {
+        loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: name });
+      }
+    }
+
+    function selectSiteType(value) {
+      answers.siteType = value;
+      answers.project = '';
+      answers.currentStatus = '';
+      answers.doneSteps = [];
+      resetProgressState();
+      loadProjectList(value);
+      // For an already-picked developer flat, re-pull progress for the new site type.
+      if (answers.clientType === 'Developer') maybeLoadDeveloperProgress();
+    }
+    function selectClientType(value) {
+      answers.clientType = value;
+      answers.developer = '';
+      answers.building = '';
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = '';
+      answers.doneSteps = [];
+      resetProgressState();
+      renderCurrentPage();
+    }
+    function selectDeveloper(value) {
+      answers.developer = value;
+      answers.building = '';
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = '';
+      answers.doneSteps = [];
+      resetProgressState();
+      renderCurrentPage();
+    }
+    function selectBuilding(value) {
+      answers.building = value;
+      answers.floor = '';
+      answers.flatNo = '';
+      answers.project = value;
+      answers.doneSteps = [];
+      resetProgressState();
+      loadFlatList(answers.developer, value);   // re-renders
+    }
+    function setFloor(val) { answers.floor = val; updatePrimaryButton(); }
+    function setFlatNo(val) { answers.flatNo = val; updatePrimaryButton(); }
+
+    // ----- Per-step status: tick steps, pick a status, Apply. Repeat for a different status. -----
+    function statusTagClass(status) {
+      return status === 'Done' ? 'st-done' : status === 'Pending' ? 'st-pending' : status === 'Hold' ? 'st-hold' : '';
+    }
+    // Steps still assignable = not locked (prev-done) and not already assigned this visit.
+    function toggleStep(step) {
+      const key = compact(step);
+      if ((answers.lockedSteps || []).some(s => compact(s) === key)) return;
+      if ((answers.stepStatuses || []).some(e => compact(e.step) === key)) return;
+      const list = answers.doneSteps || (answers.doneSteps = []);
+      const at = list.findIndex(s => compact(s) === key);
+      if (at > -1) list.splice(at, 1); else list.push(step);
+      renderCurrentPage();
+    }
+    function canApplyStatus() {
+      if (!(answers.doneSteps || []).length || !answers.status) return false;
+      if (answers.status === 'Hold') {
+        if (!answers.holdReason) return false;
+        if (String(answers.holdReasonDetail || '').trim() === '') return false;
+      }
+      return true;
+    }
+    function refreshApplyBtn() {
+      const b = document.querySelector('.apply-btn');
+      if (b) b.disabled = !canApplyStatus();
+    }
+    // Move every ticked step into stepStatuses with the chosen status, then reset the picker.
+    function applyStepStatus() {
+      if (!canApplyStatus()) return;
+      const st = answers.status;
+      const hr = st === 'Hold' ? (answers.holdReason || '') : '';
+      const hd = st === 'Hold' ? (answers.holdReasonDetail || '') : '';
+      answers.stepStatuses = answers.stepStatuses || [];
+      (answers.doneSteps || []).forEach(step => {
+        const key = compact(step);
+        const entry = { step: step, status: st, holdReason: hr, holdReasonDetail: hd };
+        const at = answers.stepStatuses.findIndex(e => compact(e.step) === key);
+        if (at > -1) answers.stepStatuses[at] = entry; else answers.stepStatuses.push(entry);
+      });
+      answers.doneSteps = [];
+      answers.status = '';
+      answers.holdReason = '';
+      answers.holdReasonDetail = '';
+      renderCurrentPage();
+    }
+    function removeStepStatus(step) {
+      const key = compact(step);
+      answers.stepStatuses = (answers.stepStatuses || []).filter(e => compact(e.step) !== key);
+      renderCurrentPage();
+    }
+
+    // Upcoming steps for "Plan for Tomorrow": everything not DONE — i.e. untouched
+    // steps PLUS ones marked Pending/Hold today (still upcoming work). Only Done
+    // (locked from sheet, or assigned Done this visit) is excluded.
+    // First process step (LS Material Delivery) is never a "plan for tomorrow" item.
+    const NEVER_TOMORROW = new Set(['LS Material Delivery'].map(compact));
+    function remainingSteps() {
+      const statusSteps = STATUS_STEPS[answers.siteType || ''] || [];
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      const doneSet = new Set((answers.stepStatuses || []).filter(e => e.status === 'Done').map(e => compact(e.step)));
+      return statusSteps.filter(s => !NEVER_TOMORROW.has(compact(s)) && !lockedSet.has(compact(s)) && !doneSet.has(compact(s)));
+    }
+    // Picked tomorrow steps, minus any that became done/locked since picking.
+    function effectiveTomorrowSteps() {
+      const rem = new Set(remainingSteps().map(compact));
+      return (answers.tomorrowSteps || []).filter(s => rem.has(compact(s)));
+    }
+    // Professional next-plan text: picked steps as a sentence + any free-text notes.
+    function tomorrowPlanText() {
+      const t = effectiveTomorrowSteps();
+      const parts = [];
+      if (t.length) parts.push('Planned for tomorrow: ' + t.join(', ') + '.');
+      const notes = String(answers.nextPlan || '').trim();
+      if (notes) parts.push(notes);
+      return parts.join(' ');
+    }
+    function toggleTomorrowStep(step) {
+      const key = compact(step);
+      const list = answers.tomorrowSteps || (answers.tomorrowSteps = []);
+      const at = list.findIndex(s => compact(s) === key);
+      if (at > -1) list.splice(at, 1); else list.push(step);
+      renderCurrentPage();
+    }
+
+    // Turns one applied step-status into a professional sentence for Activity Notes.
+    function stepStatement(entry) {
+      const step = entry.step;
+      if (entry.status === 'Done') return step + ' completed today.';
+      if (entry.status === 'Pending') return step + ' is currently pending.';
+      if (entry.status === 'Hold') {
+        const m = /by\s+(.+)$/i.exec(entry.holdReason || '');
+        const who = m ? m[1].trim() : '';
+        const detail = String(entry.holdReasonDetail || '').trim();
+        if (who) return step + ' is on hold — stuck by ' + who + (detail ? ' (' + detail + ')' : '') + '.';
+        return step + ' is on hold' + (detail ? ' — ' + detail : '') + '.';
+      }
+      return '';
+    }
+    // Appends the sentence for a step to Activity Notes (no duplicates).
+    function addActivityStatement(step) {
+      const key = compact(step);
+      const entry = (answers.stepStatuses || []).find(e => compact(e.step) === key);
+      if (!entry) return;
+      const s = stepStatement(entry);
+      if (!s) return;
+      const cur = String(answers.activity || '');
+      if (cur.indexOf(s) !== -1) return;
+      answers.activity = cur.trim() === '' ? s : (cur.replace(/\s*$/, '') + ' ' + s);
+      renderCurrentPage();
+    }
+    function setStatusValue(val) {
+      answers.status = val;
+      if (val !== 'Hold') { answers.holdReason = ''; answers.holdReasonDetail = ''; }
+      renderCurrentPage();
+    }
+    function setHoldReason(val) { answers.holdReason = val; renderCurrentPage(); }
+    function setHoldReasonDetail(val) { answers.holdReasonDetail = val; refreshApplyBtn(); }
+    function setTentativeEndDate(val) {
+      answers.tentativeEndDate = val;
+      // Refresh only the counter — a full re-render would tear down the open date picker.
+      const box = document.getElementById('daysLeftBox');
+      if (box) box.innerHTML = daysLeftHtml(val);
+      updatePrimaryButton();
+    }
+    function setNextStepStartDate(val) { answers.nextStepStartDate = val; }
+    function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
+
+    // ----- People on Site: count drives one detail row per person -----
+    function syncPeopleRows() {
+      const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
+      const rows = answers.peopleRows || [];
+      while (rows.length < n) rows.push({ name: '', techType: '', contractorName: '', workDone: [] });
+      if (rows.length > n) rows.length = n;
+      // Normalise workDone to an array (one person can log several works).
+      rows.forEach(r => { if (!Array.isArray(r.workDone)) r.workDone = r.workDone ? [r.workDone] : []; });
+      answers.peopleRows = rows;
+    }
+    function addPersonWork(i, val) {
+      if (!val) return;
+      syncPeopleRows();
+      const r = answers.peopleRows[i] || (answers.peopleRows[i] = { name: '', techType: '', contractorName: '', workDone: [] });
+      if (!Array.isArray(r.workDone)) r.workDone = r.workDone ? [r.workDone] : [];
+      if (!r.workDone.some(x => compact(x) === compact(val))) r.workDone.push(val);
+      renderCurrentPage();
+    }
+    function removePersonWork(i, work) {
+      syncPeopleRows();
+      const r = answers.peopleRows[i];
+      if (!r) return;
+      r.workDone = (Array.isArray(r.workDone) ? r.workDone : []).filter(x => compact(x) !== compact(work));
+      renderCurrentPage();
+    }
+    function setPeople(val) { answers.people = val; syncPeopleRows(); renderCurrentPage(); }
+    function adjustPeople(delta) {
+      let cur = parseInt(answers.people || 0, 10);
+      if (isNaN(cur)) cur = 0;
+      cur = Math.max(0, cur + delta);
+      answers.people = cur;
+      syncPeopleRows();
+      renderCurrentPage();
+    }
+    function setPersonField(i, field, val) {
+      syncPeopleRows();
+      if (!answers.peopleRows[i]) answers.peopleRows[i] = { name: '', techType: '', contractorName: '', workDone: '' };
+      answers.peopleRows[i][field] = val;
+      if (field === 'techType') {
+        if (val !== 'Contractor') answers.peopleRows[i].contractorName = '';
+        renderCurrentPage();      // toggle the contractor-name field
+      } else {
+        updatePrimaryButton();    // keep focus while typing name/contractor
+      }
+    }
+    function personWorks(r) {
+      return Array.isArray(r.workDone) ? r.workDone : (r.workDone ? [r.workDone] : []);
+    }
+    // "What work done" options minus steps already done (locked from the sheet). When this
+    // is empty there is nothing left for a person to pick, so "work done" can't be required.
+    function availableWorkOptions() {
+      const lockedSet = new Set((answers.lockedSteps || []).map(compact));
+      return WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
+    }
+    function peopleRowsValid() {
+      const n = Math.max(0, parseInt(answers.people || 0, 10) || 0);
+      if (n < 1) return false;
+      const rows = answers.peopleRows || [];
+      // Empty dropdown (all work options locked/done) → "work done" can't be required.
+      const workSelectable = availableWorkOptions().length > 0;
+      for (let i = 0; i < n; i++) {
+        const r = rows[i] || {};
+        if (String(r.name || '').trim() === '' || !r.techType) return false;
+        if (workSelectable && personWorks(r).length === 0) return false;
+        if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') return false;
+      }
+      return true;
+    }
+    // Short "who did the work" summary for the sheet's existing Work Done BY cell.
+    function peopleWorkSummary() {
+      return (answers.peopleRows || []).map(r => {
+        const who = r.techType === 'Contractor' ? ('Contractor-' + String(r.contractorName || '').trim()) : (r.techType || '');
+        const works = personWorks(r);
+        return String(r.name || '').trim() + ' [' + who + ']' + (works.length ? ' - ' + works.join(', ') : '');
+      }).filter(s => s.trim() !== '[]' && s.trim() !== '').join(', ');
+    }
+    function setYesNo(key, val) { answers[key] = val; renderCurrentPage(); }
+
+    async function handleFiles(stepId, fileListRaw, multiple) {
+      const newFiles = await Promise.all(Array.from(fileListRaw).map(async f => ({
+        name: f.name,
+        mimeType: f.type || 'application/octet-stream',
+        base64: await fileToBase64(f)
+      })));
+      if (multiple) answers[stepId] = (answers[stepId] || []).concat(newFiles);
+      else answers[stepId] = newFiles[0] || null;
+      renderCurrentPage();
+    }
+
+    function renderFileLists() {
+      renderFileList('photo', true);
+      renderFileList('drawingPhoto', false);
+      renderFileList('measurementFile', false);
+    }
+    function renderFileList(stepId, multiple) {
+      const el = document.getElementById('fileList-' + stepId);
+      if (!el) return;
+      const files = multiple ? (answers[stepId] || []) : (answers[stepId] ? [answers[stepId]] : []);
+      el.innerHTML = files.map((f, i) => `<div class="file-chip"><span>${escapeHtml(f.name)}</span><button onclick="removeFile('${stepId}',${i},${multiple})">Remove</button></div>`).join('');
+    }
+    function removeFile(stepId, index, multiple) {
+      if (multiple) answers[stepId].splice(index, 1);
+      else answers[stepId] = null;
+      renderCurrentPage();
+    }
+
+    function goNext() {
+      if (!isCurrentPageValid()) return;
+      if (currentPage < 3) {
+        currentPage++;
+        renderCurrentPage();
+      }
+    }
+    function goBack() {
+      if (currentPage > 0) {
+        currentPage--;
+        renderCurrentPage();
+      }
+    }
+    function updatePrimaryButton() {
+      const btn = document.getElementById('primaryBtn');
+      if (btn && currentPage < 3) btn.disabled = !isCurrentPageValid();
+      // Keep the "what's missing" list live as fields are filled (without a full re-render).
+      const box = document.getElementById('missingBox');
+      if (box && currentPage < 3) box.innerHTML = missingBoxHtml();
+    }
+
+    function clearCurrentPage() {
+      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; }
+      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.nextStepStartDate=''; answers.drawingChange=''; answers.amendmentWhy=''; }
+      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
+      renderCurrentPage();
+    }
+
+    function saveDraft() {
+      try { localStorage.setItem('vakhariaSiteVisitDraft', JSON.stringify(answers)); alert('Draft saved locally in this browser.'); }
+      catch(e) { console.error(e); alert('Unable to save draft in this browser.'); }
+    }
+
+    function submitForm() {
+      if (submitting) return;
+      submitting = true;
+      setSubmittedMode(true);
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><div class="spinner"></div><h2>Submitting report</h2><p>Uploading photos and saving your entry using the same Apps Script submit function.</p></div>';
+
+      if (!window.google || !google.script || !google.script.run) {
+        onSubmitError({ message: 'This form must be opened from the Apps Script web app URL.' });
+        return;
+      }
+
+      // Per-step statuses -> summary + a representative status for the single-column
+      // sheet/DB fields (Hold > Pending > Done). Hold reason/detail from the first Hold step.
+      const stepStatuses = answers.stepStatuses || [];
+      const statusSummary = stepStatuses.map(e => e.step + ' (' + e.status + ')').join(', ');
+      const holdEntry = stepStatuses.find(e => e.status === 'Hold');
+      const repStatus = stepStatuses.some(e => e.status === 'Hold') ? 'Hold'
+        : stepStatuses.some(e => e.status === 'Pending') ? 'Pending'
+        : (stepStatuses.length ? 'Done' : '');
+
+      const payload = {
+        siteType: answers.siteType,
+        clientType: answers.clientType,
+        developer: answers.developer,
+        building: answers.building,
+        floor: answers.floor,
+        flatNo: answers.flatNo,
+        stepStatuses: stepStatuses,
+        currentStatus: statusSummary,
+        status: repStatus,
+        holdReason: holdEntry ? holdEntry.holdReason : '',
+        holdReasonDetail: holdEntry ? holdEntry.holdReasonDetail : '',
+        tentativeEndDate: answers.tentativeEndDate,
+        workDoneBy: peopleWorkSummary(),
+        contractorName: '',
+        peopleRows: answers.peopleRows || [],
+        project: answers.project,
+        people: answers.people,
+        engineer: answers.engineer,
+        activity: answers.activity,
+        nextPlan: tomorrowPlanText(),
+        tomorrowSteps: effectiveTomorrowSteps(),
+        nextStepStartDate: effectiveTomorrowSteps().length ? (answers.nextStepStartDate || '') : '',
+        photos: answers.photo || [],
+        amendment: answers.amendment,
+        amendmentWhy: answers.amendmentWhy,
+        drawingChange: answers.drawingChange,
+        drawingPhoto: answers.drawingPhoto || null,
+        measurement: answers.measurement,
+        measurementFile: answers.measurementFile || null
+      };
+
+      google.script.run
+        .withSuccessHandler(onSubmitSuccess)
+        .withFailureHandler(onSubmitError)
+        .submitSiteReport(payload);
+    }
+
+    function onSubmitSuccess(result) {
+      submitting = false;
+      if (!result || !result.success) {
+        onSubmitError({ message: (result && result.error) || 'Unknown error' });
+        return;
+      }
+      setSubmittedMode(true);
+      try { localStorage.removeItem('vakhariaSiteVisitDraft'); } catch (e) {}
+      var pdfButton = result.pdfUrl
+        ? '<a class="btn primary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;margin-bottom:10px;" target="_blank" href="' + escapeHtml(result.pdfUrl) + '">Open PDF</a>'
+        : '';
+      var pmsWarn = result.pmsWarning
+        ? '<p style="margin:10px auto;max-width:420px;padding:10px 14px;border-radius:8px;background:#FFF4E5;border:1px solid #E0A800;color:#8A5A00;font-size:13px;">⚠ Progress sheet not updated: ' + escapeHtml(result.pmsWarning) + '</p>'
+        : '';
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><img src="' + LOGO_DATA_URI + '" style="width:180px;height:auto;margin-bottom:12px;"><h2>Report submitted</h2><p>Your ' + escapeHtml(answers.siteType || '') + ' site visit report has been submitted. The PDF and updates are being prepared and sent shortly.</p>' + pmsWarn + pdfButton + '<a class="btn primary" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;" href="https://script.google.com/a/macros/vakhariaairtech.com/s/AKfycbzYkN8TslXnwz8j8YAc-C1nNiBjznn5HjixT1IquZyuz2UTZ-AniHrkCQTB_8svDP3C/exec">Submit another report</a></div>';
+    }
+    function onSubmitError(err) {
+      submitting = false;
+      setSubmittedMode(true);
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><h2>Something went wrong</h2><p>' + escapeHtml(err && err.message ? err.message : 'Please try again.') + '</p><button class="btn primary" onclick="location.reload()">Start over</button></div>';
+    }
+
+    function loadUiImages() {
+      if (!window.google || !google.script || !google.script.run) return;
+      google.script.run
+        .withSuccessHandler(function (imgs) {
+          if (!imgs) return;
+          if (imgs.logo) LOGO_DATA_URI = imgs.logo;
+          const h = document.getElementById('heroImg');
+          if (h && imgs.hero) h.src = imgs.hero;
+        })
+        .withFailureHandler(function (e) { console.error(e); })
+        .getUiImages();
+    }
+
+    (function init() {
+      try {
+        const draft = localStorage.getItem('vakhariaSiteVisitDraft');
+        if (draft) answers = JSON.parse(draft) || {};
+      } catch(e) {}
+      if (!Array.isArray(answers.doneSteps)) answers.doneSteps = [];
+      if (!Array.isArray(answers.lockedSteps)) answers.lockedSteps = [];
+      if (!Array.isArray(answers.stepStatuses)) answers.stepStatuses = [];
+      if (!Array.isArray(answers.peopleRows)) answers.peopleRows = [];
+      if (!Array.isArray(answers.tomorrowSteps)) answers.tomorrowSteps = [];
+      syncPeopleRows();
+      document.addEventListener('click', onDocProjectClick, true);   // close search dropdowns on outside click
+      renderCurrentPage();
+      if (answers.siteType) loadProjectList(answers.siteType);
+      // Refresh "already done" steps for a restored draft that already has an identity.
+      if (answers.clientType === 'Developer') {
+        if (answers.developer && answers.building) loadFlatList(answers.developer, answers.building);
+        maybeLoadDeveloperProgress();
+      } else if (answers.project) {
+        loadProgressState({ clientType: 'General', siteType: answers.siteType || '', project: answers.project });
+      }
+      loadUiImages();
+    })();
+  
