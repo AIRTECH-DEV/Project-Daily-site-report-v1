@@ -240,6 +240,18 @@
     .plan-chip.st-pending { border-color:#f0dcae; color:#8a5a00; }
     .plan-chip.st-hold { border-color:#f2b8bb; color:#b60f17; }
 
+    /* Next Step Start Date picker + its highlight chip */
+    .startdate-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:6px; }
+    .date-chip { display:inline-flex; align-items:center; gap:12px; padding:8px 16px; border-radius:12px; white-space:nowrap;
+                 --dc-tint:#f6e7c4; border:1.5px solid #f0dcae; background:#fffbf2; color:#8a5a00; }
+    .date-chip.over { --dc-tint:#f8d5d7; border-color:#f2b8bb; background:#fff5f5; color:#b60f17; }
+    .dc-ico { width:30px; height:30px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--dc-tint); }
+    .dc-ico svg { width:16px; height:16px; }
+    .dc-sep { width:1px; align-self:stretch; margin:2px 0; background:var(--dc-tint); }
+    .dc-txt { display:flex; flex-direction:column; gap:3px; }
+    .dc-date { font-size:18px; font-weight:800; line-height:1; letter-spacing:-.01em; }
+    .dc-lbl { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; opacity:.85; }
+
     .yesno-row { display:flex; gap: 10px; }
     .yesno-btn { flex:1; height: 34px; border:1px solid #ddd; border-radius:6px; background:#fff; font-weight: 600; cursor:pointer; color:#666; }
     .yesno-btn.selected { border-color:#e68489; color:#b60f17; background:#fff8f8; }

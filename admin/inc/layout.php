@@ -316,23 +316,23 @@ class Layout
             ],
         ],
         'performance' => [
-            'intro' => 'Scorecards for paying incentive. Ranks every Project Engineer and VAPL worker on what they actually delivered in the chosen period, splits a ₹ incentive pool between them, and separately rates contractors on how hard they work and whether their sites finish on time. Project start dates are read from the PMS sheets — the <b>Marking</b> step\'s <b>Start Date</b>.',
+            'intro' => 'Scorecards for paying incentive. Ranks every Project Engineer and VAPL worker on what they actually delivered in the chosen period, divides the incentive budget you allocated between them, and separately rates contractors on how hard they work and whether their sites finish on time. Project start dates are read from the PMS sheets — the <b>Marking</b> step\'s <b>Start Date</b>.',
             'does'  => [
                 'Pick the scoring period (30 days / 90 days / 6 months / 1 year / all).',
-                'Enter a ₹ pool for PEs and a ₹ pool for VAPL workers — each is split in proportion to score.',
+                'Allocate a total monthly budget for PEs and one for VAPL workers — each is divided in proportion to score.',
                 'See who is eligible, who is not, and exactly why.',
-                'Compare contractors on steps completed, steps per visit, and on-time delivery (they are rated, never paid from the pools).',
+                'Compare contractors on steps completed, steps per visit, and on-time delivery (they are rated, never paid from the budgets).',
                 'Check every project\'s start date, target end date, actual finish, and how many days early or late it was.',
             ],
             'steps' => [
                 'In the PMS sheet, fill the <b>Marking</b> step\'s <b>Start Date</b> for each project — that is the project start date.',
                 'Come back here and press <b>Refresh start dates from PMS sheets</b>.',
-                'Set the two ₹ pools in <b>Incentive Settings</b> and press <b>Save settings</b>.',
+                'Set the two <b>Total Budget Allocated</b> amounts in <b>Incentive Settings</b> and press <b>Save settings</b>.',
                 'Read the <b>Incentive</b> column in the PE and VAPL Worker tables — that is each person\'s payout.',
             ],
             'buttons' => [
                 ['bi-arrow-repeat', 'Refresh start dates from PMS sheets', 'Re-reads every PMS progress sheet and updates each project\'s start date, target end and actual finish. Read-only — it never writes to the sheets.'],
-                ['bi-sliders',      'Incentive Settings', 'Scoring period, the two ₹ pools, the eligibility floor, minimum visits, and how many days counts as a "fast" step.'],
+                ['bi-sliders',      'Incentive Settings', 'The two Total Budget Allocated amounts, the eligibility floor, minimum visits, and how many days counts as a "fast" step.'],
                 ['bi-trophy',       'Score bar & grade',  'Score out of 100. A = 85+, B = 70+, C = 55+, D below 55. The breakdown is in "How the Score Is Calculated".'],
                 ['bi-calendar-range', 'Verdict column',   'On time = finished on or before target · Late = finished after · Overdue = target passed, still not finished · Running = in progress.'],
             ],

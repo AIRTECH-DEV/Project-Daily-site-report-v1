@@ -130,6 +130,30 @@
       </div>`;
     }
 
+    // 'YYYY-MM-DD' -> '17 Aug 2026'. Empty string when the date isn't usable.
+    function fmtNiceDate(str) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(str || '').trim());
+      if (!m) return '';
+      const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const mon = MON[Number(m[2]) - 1];
+      if (!mon) return '';
+      return Number(m[3]) + ' ' + mon + ' ' + m[1];
+    }
+    // Highlight chip shown next to the Next Step Start Date picker, same visual
+    // language as the days-remaining counter.
+    function startDateChipHtml(str) {
+      const txt = fmtNiceDate(str);
+      if (!txt) return '';
+      const n = daysUntil(str);
+      const label = n === null ? 'starts on'
+        : (n < 0 ? 'start date passed' : (n === 0 ? 'starts today' : (n === 1 ? 'starts tomorrow' : 'starts in ' + n + ' days')));
+      return `<span class="date-chip ${n !== null && n < 0 ? 'over' : ''}">
+        <span class="dc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+        <span class="dc-sep"></span>
+        <span class="dc-txt"><span class="dc-date">${escapeHtml(txt)}</span><span class="dc-lbl">${escapeHtml(label)}</span></span>
+      </span>`;
+    }
+
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -647,7 +671,10 @@
                 </div>` : `<div class="hint-note">All steps are done — add any notes below.</div>`}
                 ${pickedTomorrow.length ? `<div class="plan-startdate" style="margin-top:12px;">
                   <div class="plan-suggest-label">Next Step Start Date — the planned steps above will start on this date:</div>
-                  <input type="date" class="field" id="nextStepStartDateInput" value="${escapeHtml(nextStepStartDate)}" onchange="setNextStepStartDate(this.value)" style="margin-top:6px;max-width:220px;">
+                  <div class="startdate-row">
+                    <input type="date" class="field" id="nextStepStartDateInput" value="${escapeHtml(nextStepStartDate)}" onchange="setNextStepStartDate(this.value)" style="max-width:220px;">
+                    <span id="nextStepStartChip">${startDateChipHtml(nextStepStartDate)}</span>
+                  </div>
                 </div>` : ''}
                 <textarea class="textarea" id="nextPlanInput" placeholder="Any extra notes for tomorrow (optional if steps picked above)..." style="margin-top:12px;">${escapeHtml(nextPlan)}</textarea>
               </div>
@@ -803,7 +830,6 @@
             <button class="btn ghost" onclick="saveDraft()">Save Draft</button>
           </div>
           <div class="actions-right">
-            <button class="btn ghost" onclick="clearCurrentPage()">Clear</button>
             <button class="btn primary" id="primaryBtn" onclick="${isSubmit ? 'submitForm()' : 'goNext()'}">${isSubmit ? 'Submit Report' : 'Save & Next'} →</button>
           </div>
         </div>
@@ -1081,7 +1107,11 @@
       if (box) box.innerHTML = daysLeftHtml(val);
       updatePrimaryButton();
     }
-    function setNextStepStartDate(val) { answers.nextStepStartDate = val; }
+    function setNextStepStartDate(val) {
+      answers.nextStepStartDate = val;
+      const chip = document.getElementById('nextStepStartChip');
+      if (chip) chip.innerHTML = startDateChipHtml(val);
+    }
     function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
 
     // ----- People on Site: count drives one detail row per person -----
@@ -1209,13 +1239,6 @@
       // Keep the "what's missing" list live as fields are filled (without a full re-render).
       const box = document.getElementById('missingBox');
       if (box && currentPage < 3) box.innerHTML = missingBoxHtml();
-    }
-
-    function clearCurrentPage() {
-      if (currentPage === 0) { answers.clientType=''; answers.developer=''; answers.building=''; answers.floor=''; answers.flatNo=''; answers.project=''; answers.people=''; answers.peopleRows=[]; answers.engineer=''; answers.activity=''; answers.photo=[]; answers.amendment=''; answers.currentStatus=''; answers.doneSteps=[]; answers.stepStatuses=[]; answers.lockedSteps=[]; answers.generatedOrderId=''; answers.status=''; answers.holdReason=''; answers.holdReasonDetail=''; answers.tentativeEndDate=''; answers.tentativeLocked=false; }
-      else if (currentPage === 1) { answers.nextPlan=''; answers.tomorrowSteps=[]; answers.nextStepStartDate=''; answers.drawingChange=''; answers.amendmentWhy=''; }
-      else if (currentPage === 2) { answers.drawingPhoto=null; answers.measurement=''; answers.measurementFile=null; }
-      renderCurrentPage();
     }
 
     function saveDraft() {

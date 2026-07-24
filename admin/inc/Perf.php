@@ -18,12 +18,11 @@ class Perf
 {
     /** Tunables — overridable from the page's Settings box (overrides.json → 'perf'). */
     const DEFAULTS = [
-        'window_days'       => 90,   // scoring period
         'on_time_step_days' => 2,    // a step done within N days of its start = "fast"
         'min_score'         => 55,   // incentive eligibility floor (grade C)
         'min_visits'        => 3,    // worker must have at least this many visits
-        'pe_pool'           => 0,    // ₹ pool split across eligible PEs
-        'worker_pool'       => 0,    // ₹ pool split across eligible VAPL workers
+        'pe_pool'           => 0,    // ₹ total budget allocated, split across eligible PEs
+        'worker_pool'       => 0,    // ₹ total budget allocated, split across eligible VAPL workers
     ];
 
     /**
@@ -212,9 +211,13 @@ class Perf
      */
     public static function analyse(PDO $db, array $o): array
     {
-        $days = max(1, (int)$o['window_days']);
-        $from = date('Y-m-d', strtotime('-' . ($days - 1) . ' days'));
+        // The incentive period is one CALENDAR MONTH. A closed month is scored
+        // on what happened inside it; the running month is scored up to today.
+        $month = preg_match('/^\d{4}-\d{2}$/', (string)($o['month'] ?? '')) ? $o['month'] : date('Y-m');
+        $from  = $month . '-01';
+        $to    = date('Y-m-t', strtotime($from));
         $today = date('Y-m-d');
+        $asOf  = min($to, $today);                 // "state of play" date for this month
         $fastDays = max(0, (int)$o['on_time_step_days']);
 
         /* --- projects + their sheet dates --- */
@@ -233,7 +236,9 @@ class Perf
 
         /* --- delivery verdict per project --- */
         $delivery = [];
-        $onTimeByKey = [];        // pkey => true|false (only for finished projects)
+        $onTimeByKey   = [];   // pkey => true|false — every finished project (table view)
+        $onTimeInMonth = [];   // pkey => true|false — finished INSIDE this month (scoring)
+        $overdueAsOf   = [];   // pkey => true    — target passed, unfinished, as of $asOf
         foreach ($projects as $p) {
             $start  = self::d($p['start_date'] ?? null);
             $target = self::d($p['sheet_target_end'] ?? null) ?: self::d($p['target_end'] ?? null);
@@ -249,6 +254,12 @@ class Perf
                 $variance = self::dayDiff($target, $end);         // +ve = late
                 $verdict  = $variance <= 0 ? 'On time' : 'Late';
                 $onTimeByKey[$p['project_key']] = ($variance <= 0);
+                // Only a project that FINISHED inside this month counts towards
+                // this month's incentive — otherwise one old success would keep
+                // paying out every month forever.
+                if ($end >= $from && $end <= $asOf) {
+                    $onTimeInMonth[$p['project_key']] = ($variance <= 0);
+                }
             } elseif ($end) {
                 $verdict = 'Done (no target)';
             } elseif ($target) {
@@ -256,6 +267,11 @@ class Perf
                 $verdict  = $variance > 0 ? 'Overdue' : 'Running';
             } elseif ($start) {
                 $verdict = 'Running';
+            }
+            // Overdue as of this month's cut-off (not "today") so a closed month
+            // is judged on the state it was actually in.
+            if ($target && $target < $asOf && (!$end || $end > $asOf)) {
+                $overdueAsOf[$p['project_key']] = true;
             }
 
             $delivery[] = [
@@ -290,14 +306,15 @@ class Perf
 
         $seen = [];            // pkey|stepKey => 1 (first completion wins the credit)
         $creditSteps = [];     // submission id => [stepKey => stepName]
-        $subMeta = [];         // submission id => ['pkey','date','engineer']
         $pe = [];              // engineer => stats
+        $reportDays = [];      // pkey => [Y-m-d => 1] — every report date, all time
+        $pendingByPe = [];     // engineer => pkey => [stepKey => 1] left Pending/Hold
 
         foreach ($subs as $s) {
             $pkey = projectKey($s);
             $date = date('Y-m-d', strtotime((string)$s['created_at']));
-            $inWindow = ($date >= $from);
-            $subMeta[$s['id']] = ['pkey' => $pkey, 'date' => $date, 'engineer' => trim((string)$s['engineer'])];
+            $inMonth = ($date >= $from && $date <= $asOf);
+            $reportDays[$pkey][$date] = 1;
 
             $pl = json_decode((string)$s['payload_json'], true) ?: [];
             $ps = parseSteps($pl);
@@ -313,7 +330,7 @@ class Perf
             }
             $creditSteps[$s['id']] = $fresh;
 
-            if (!$inWindow) {
+            if (!$inMonth) {
                 continue;
             }
             $eng = trim((string)$s['engineer']);
@@ -332,6 +349,20 @@ class Perf
             if ($date > $pe[$eng]['last']) {
                 $pe[$eng]['last'] = $date;
             }
+            // Steps the PE reported as Pending or Hold and never closed by $asOf:
+            // they carry no throughput credit, so they only pay off once finished.
+            foreach ($ps['pending'] as $st) {
+                $k = stepKey($st);
+                if ($k !== '' && !isset($seen[$pkey . '|' . $k])) {
+                    $pendingByPe[$eng][$pkey][$k] = 1;
+                }
+            }
+            foreach ($ps['hold'] as $h) {
+                $k = stepKey((string)$h['step']);
+                if ($k !== '' && !isset($seen[$pkey . '|' . $k])) {
+                    $pendingByPe[$eng][$pkey][$k] = 1;
+                }
+            }
         }
 
         /* --- pass 2: visit_workers → per-person / per-contractor credit --- */
@@ -348,7 +379,7 @@ class Perf
 
         foreach ($vw as $r) {
             $date = (string)$r['visit_date'];
-            if ($date === '' || $date < $from) {
+            if ($date === '' || $date < $from || $date > $asOf) {
                 continue;
             }
             $sid  = (int)$r['submission_id'];
@@ -418,26 +449,40 @@ class Perf
 
         /* --- PE scores --- */
         $peRows = [];
+        $gapLimit = 2;   // days — "kept the site reported" threshold
         foreach ($pe as $eng => $s) {
             $keys = array_keys($s['projects']);
             $delivered = 0; $onTime = 0; $active = 0; $overdue = 0; $compliant = 0; $holdDays = 0;
+            $pendingOpen = 0;
             foreach ($keys as $k) {
                 $p = $pByKey[$k] ?? null;
                 if (!$p) continue;
-                if (isset($onTimeByKey[$k])) {
+
+                // delivered = finished INSIDE this month
+                if (isset($onTimeInMonth[$k])) {
                     $delivered++;
-                    if ($onTimeByKey[$k]) $onTime++;
+                    if ($onTimeInMonth[$k]) $onTime++;
                 }
+                $pendingOpen += count($pendingByPe[$eng][$k] ?? []);
+
                 if (in_array($p['lifecycle'], ['Active', 'At Risk', 'On Hold', 'Commissioning Pending'], true)) {
                     $active++;
-                    $t = self::d($p['sheet_target_end'] ?? null) ?: self::d($p['target_end'] ?? null);
-                    if ($t && $t < $today) $overdue++;
-                    if (!empty($p['last_report_at']) && (time() - strtotime((string)$p['last_report_at'])) / 3600 <= 48) $compliant++;
+                    if (isset($overdueAsOf[$k])) $overdue++;
                     if ($p['lifecycle'] === 'On Hold' && !empty($p['hold_since'])) {
-                        $holdDays += max(0, self::dayDiff((string)$p['hold_since'], $today));
+                        // days this project spent on hold WITHIN the month
+                        $hs = max((string)self::d($p['hold_since']), $from);
+                        if ($hs <= $asOf) {
+                            $holdDays += max(0, self::dayDiff($hs, $asOf));
+                        }
                     }
                 }
+                // Reporting coverage: did they keep this site reported at least
+                // every $gapLimit days from their first report of the month?
+                if (self::gapOk($reportDays[$k] ?? [], $from, $asOf, $gapLimit)) {
+                    $compliant++;
+                }
             }
+            $covered = count($keys);   // every project they touched this month
             $peRows[$eng] = [
                 'name'      => $eng,
                 'reports'   => $s['reports'],
@@ -450,9 +495,10 @@ class Perf
                 'overdue'   => $overdue,
                 'holds'     => $s['holds'],
                 'hold_days' => $holdDays,
+                'pending'   => $pendingOpen,
                 'last'      => $s['last'],
                 'ontime_pct'=> $delivered > 0 ? round($onTime * 100 / $delivered) : null,
-                'comply_pct'=> $active > 0 ? round($compliant * 100 / $active) : null,
+                'comply_pct'=> $covered > 0 ? round($compliant * 100 / $covered) : null,
             ];
         }
         $maxSteps   = self::maxOf($peRows, 'steps');
@@ -569,8 +615,12 @@ class Perf
         $withStart = count(array_filter($delivery, fn($d) => (bool)$d['start']));
 
         return [
+            'month'       => $month,
             'from'        => $from,
-            'to'          => $today,
+            'to'          => $asOf,
+            'month_end'   => $to,
+            'running'     => ($asOf < $to),      // month still in progress
+            'gap_limit'   => $gapLimit,
             'delivery'    => $delivery,
             'pe'          => $peRows,
             'workers'     => $vapl,
@@ -619,7 +669,7 @@ class Perf
         usort($rows, fn($a, $b) => $b['score'] <=> $a['score']);
     }
 
-    /** Splits a ₹ pool across eligible rows, proportional to score. */
+    /** Divides the allocated ₹ budget across eligible rows, proportional to score. */
     private static function split(array $rows, float $pool, float $minScore, int $minVisits): array
     {
         $out = ['pool' => $pool, 'eligible' => [], 'excluded' => [], 'total_score' => 0.0];
@@ -678,6 +728,34 @@ class Perf
     private static function neutral(?float $peerAvg): float
     {
         return $peerAvg !== null ? $peerAvg : self::NEUTRAL;
+    }
+
+    /**
+     * True when a site was kept reported: from its FIRST report inside the month
+     * to the month's cut-off, no gap between consecutive reports exceeds $limit
+     * days. Judged only from the first report onwards, so a site that started
+     * mid-month is not punished for the days before it existed.
+     */
+    private static function gapOk(array $dayMap, string $from, string $asOf, int $limit): bool
+    {
+        $days = [];
+        foreach (array_keys($dayMap) as $d) {
+            if ($d >= $from && $d <= $asOf) {
+                $days[] = $d;
+            }
+        }
+        if (!$days) {
+            return false;
+        }
+        sort($days);
+        $prev = $days[0];
+        foreach ($days as $d) {
+            if (self::dayDiff($prev, $d) > $limit) {
+                return false;
+            }
+            $prev = $d;
+        }
+        return self::dayDiff($prev, $asOf) <= $limit;
     }
 
     public static function grade(float $score): string
