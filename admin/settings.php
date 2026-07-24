@@ -146,6 +146,7 @@ $alertsMode   = $ov['alerts_mode'] ?? 'OFF';
 $alertsEmail  = !empty($ov['alerts_email']);
 $managerEmail = (string)($ov['alert_manager_email'] ?? '');
 $peNames = array_keys($teamContacts);
+foreach (($cfg['engineers'] ?? []) as $e) { if (!empty($e['active'])) $peNames[] = $e['name']; }   // roster from admin/users.php
 try { foreach (Admin::db()->query("SELECT DISTINCT primary_pe FROM projects WHERE primary_pe<>''") as $r) $peNames[] = $r['primary_pe']; } catch (Throwable $e) {}
 $peNames = array_values(array_unique($peNames));
 sort($peNames);
