@@ -122,10 +122,35 @@ class Sync
         ];
     }
 
-    /** Structured per-visit workers from payload peopleRows (fallback: workDoneBy text). */
+    /** Structured per-visit workers from payload teams[] / legacy peopleRows[] (fallback: workDoneBy text). */
     private static function peopleRows(array $pl): array
     {
         $out = [];
+        // Current shape: teams[] = [{ people:[{name,techType,contractorName}], workDone:[...] }].
+        // Each member inherits the team's shared workDone as their steps.
+        $teams = $pl['teams'] ?? null;
+        if (is_array($teams) && $teams) {
+            foreach ($teams as $team) {
+                if (!is_array($team)) continue;
+                $steps = $team['workDone'] ?? [];
+                if (!is_array($steps)) $steps = explode(',', (string)$steps);
+                $steps = array_values(array_filter(array_map(fn($x) => trim((string)$x), $steps), fn($x) => $x !== ''));
+                foreach (($team['people'] ?? []) as $r) {
+                    if (!is_array($r)) continue;
+                    $name = trim((string)($r['name'] ?? ''));
+                    if ($name === '') continue;
+                    $type = (stripos((string)($r['techType'] ?? ''), 'contract') !== false) ? 'Contractor' : 'VAPL';
+                    $out[] = [
+                        'name'       => $name,
+                        'type'       => $type,
+                        'contractor' => $type === 'Contractor' ? trim((string)($r['contractorName'] ?? '')) : '',
+                        'steps'      => $steps,
+                    ];
+                }
+            }
+            return $out;
+        }
+        // Legacy shape: peopleRows[] (each person carried their own workDone).
         $rows = $pl['peopleRows'] ?? null;
         if (is_array($rows) && $rows) {
             foreach ($rows as $r) {

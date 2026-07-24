@@ -111,6 +111,7 @@
     .step-check.assigned.st-done    { border-color:#cfe6d0; background:#f2faf3; }
     .step-check.assigned.st-pending { border-color:#f0dcae; background:#fff9ef; }
     .step-check.assigned.st-hold    { border-color:#f2b8bb; background:#fff6f6; }
+    .step-check.assigned.st-notreq  { border-color:#dcdce2; background:#f6f6f8; }
     .step-stat-tag {
       margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
       border-radius:4px; padding:1px 6px; border:1px solid transparent;
@@ -118,6 +119,7 @@
     .step-stat-tag.st-done    { color:#2f7d32; background:#e7f4e8; border-color:#cfe6d0; }
     .step-stat-tag.st-pending { color:#8a5a00; background:#fff4e5; border-color:#f0dcae; }
     .step-stat-tag.st-hold    { color:#b60f17; background:#fdECEC; border-color:#f2b8bb; }
+    .step-stat-tag.st-notreq  { color:#5a5f6a; background:#eef0f3; border-color:#dcdce2; }
     .step-remove { border:0; background:none; color:#b0555a; cursor:pointer; font-size:16px; line-height:1; padding:0 2px; flex:0 0 auto; }
     .step-remove:hover { color:var(--red); }
     .status-apply { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
@@ -125,15 +127,25 @@
     .status-apply .apply-btn:disabled { opacity:.45; cursor:not-allowed; }
     @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
 
-    /* People-on-site detail rows (one block per person; multiple works each) */
-    .people-rows { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+    /* Team-on-site: N teams (number-box), each team = members + ONE shared "work done" */
+    .teams { display:flex; flex-direction:column; gap:14px; margin-top:12px; }
+    .team-block { border:1px solid #e6e6e6; border-radius:10px; padding:12px; background:#fbfbfc; }
+    .team-head { margin-bottom:8px; }
+    .team-badge { display:inline-block; background:#fbeceb; color:var(--red); font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; padding:4px 10px; border-radius:12px; }
+    .person-remove-spacer { display:inline-block; }
+    .people-rows { display:flex; flex-direction:column; gap:10px; }
     .person-block { border:1px solid #ececec; border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#fcfcfc; }
-    .person-top { display:grid; grid-template-columns: 22px 1fr 176px; gap:8px; align-items:center; }
+    .person-top { display:grid; grid-template-columns: 22px 1fr 176px 30px; gap:8px; align-items:center; }
     /* Contractor company name drops to its own full-width line — it never fits beside name + type. */
     .person-top .contractor-name { grid-column: 2 / -1; }
     .person-idx { width:22px; height:22px; border-radius:50%; background:#fbeceb; color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
-    .person-top .field, .person-top .dropdown-field, .person-work .dropdown-field { height:40px; }
-    .person-work { display:flex; flex-direction:column; gap:8px; }
+    .person-top .field, .person-top .dropdown-field, .team-work .dropdown-field { height:40px; }
+    .person-remove { border:0; background:none; color:#b0555a; cursor:pointer; font-size:20px; line-height:1; padding:0 2px; justify-self:end; }
+    .person-remove:hover { color:var(--red); }
+    .add-person-btn { margin-top:12px; height:38px; border-style:dashed; color:var(--red); border-color:#f2c0c3; }
+    .team-work { margin-top:14px; display:flex; flex-direction:column; gap:8px; }
+    .team-work-label { font-size:12px; font-weight:700; color:#555; }
+    .team-work-label span { font-weight:500; color:#999; }
     .work-add { max-width:260px; }
     .work-chips { }
     .work-chip { display:inline-flex; align-items:center; gap:7px; background:#fff5f5; border:1px solid #f2c0c3; color:#b60f17; border-radius:14px; padding:4px 6px 4px 11px; font-size:12px; font-weight:600; }
@@ -239,6 +251,7 @@
     .plan-chip.st-done { border-color:#cfe6d0; color:#2f7d32; }
     .plan-chip.st-pending { border-color:#f0dcae; color:#8a5a00; }
     .plan-chip.st-hold { border-color:#f2b8bb; color:#b60f17; }
+    .plan-chip.st-notreq { border-color:#dcdce2; color:#5a5f6a; }
 
     /* Next Step Start Date picker + its highlight chip */
     .startdate-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:6px; }

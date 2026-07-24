@@ -200,13 +200,13 @@ class Layout
         'pipeline' => [
             'intro' => 'Delivery health for the report pipeline — the chain that turns a submitted report into a PDF and sends it to the client by email and WhatsApp. A traffic light shows whether each report completed that chain.',
             'does'  => [
-                'See Green / Amber / Red health per report.',
+                'See each report\'s health: <b>Delivered</b> (green), <b>Processing</b> (amber), or <b>Failed</b> (red).',
                 'Identify which processing step failed (PDF, email, or WhatsApp).',
             ],
             'steps' => [
-                'On a Red item, note the failed step and its error message.',
+                'On a <b>Failed</b> item, note the failed step and its error message.',
                 'Confirm the cause in <b>Notifications</b>, then correct it (often a mode or contact in <b>Settings</b>).',
-                'Re-process; the item returns to Green once the chain completes.',
+                'Re-process; the item returns to <b>Delivered</b> once the chain completes.',
             ],
             'legend' => 'health',
         ],
@@ -561,12 +561,23 @@ class Layout
         return '<span class="pill pill-' . $tone . '">' . Admin::e($lc ?: '—') . '</span>';
     }
 
-    /** Traffic-light pipeline health from overall_status: Green / Amber / Red. */
+    /** Pipeline health from overall_status. Keeps the traffic-light colour, but the
+     *  label is a plain-English status (not the raw colour name "Green/Amber/Red"). */
     public static function pipelinePill(string $overall): string
     {
         $k = strtolower(trim($overall));
-        if ($k === 'done')            { return '<span class="pill pill-ok"><span class="dot"></span>Green</span>'; }
-        if ($k === 'failed')          { return '<span class="pill pill-bad"><span class="dot"></span>Red</span>'; }
-        return '<span class="pill pill-warn"><span class="dot"></span>Amber</span>';
+        // [tone, label]  tone drives the RAG colour (ok=green, warn=amber, bad=red).
+        $map = [
+            'done'            => ['ok',   'Delivered'],
+            'failed'          => ['bad',  'Failed'],
+            'partial'         => ['warn', 'Partial'],
+            'processing'      => ['warn', 'Processing'],
+            'running'         => ['warn', 'Processing'],
+            'awaiting_notify' => ['warn', 'Sending'],
+            'queued'          => ['warn', 'Queued'],
+            'received'        => ['warn', 'Queued'],
+        ];
+        [$tone, $label] = $map[$k] ?? ['warn', 'Processing'];
+        return '<span class="pill pill-' . $tone . '"><span class="dot"></span>' . $label . '</span>';
     }
 }

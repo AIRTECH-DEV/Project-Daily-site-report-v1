@@ -20,11 +20,11 @@ CREATE TABLE IF NOT EXISTS `submissions` (
   `order_id`        VARCHAR(120)    DEFAULT NULL,           -- resolved from Orders sheet
   `people`          VARCHAR(60)     DEFAULT NULL,
   `engineer`        VARCHAR(190)    DEFAULT NULL,
-  `current_status`  VARCHAR(190)    DEFAULT NULL,           -- the project step (e.g. Copper Piping)
-  `status`          VARCHAR(30)     DEFAULT NULL,           -- Done | Pending | Hold
+  `current_status`  TEXT            DEFAULT NULL,           -- per-step status summary (grows with step count)
+  `status`          VARCHAR(30)     DEFAULT NULL,           -- Done | Pending | Hold | Not Required
   `hold_reason`     VARCHAR(255)    DEFAULT NULL,
   `hold_reason_detail` TEXT         DEFAULT NULL,
-  `work_done_by`    VARCHAR(190)    DEFAULT NULL,
+  `work_done_by`    TEXT            DEFAULT NULL,           -- team members + shared work (grows with team size)
   `contractor_name` VARCHAR(190)    DEFAULT NULL,
   `tentative_end`   VARCHAR(60)     DEFAULT NULL,
   `activity`        TEXT            DEFAULT NULL,
