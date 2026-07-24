@@ -54,7 +54,7 @@ class Pms
                 ? $this->progressDeveloper($p)
                 : $this->progressGeneral($p);
         } catch (Throwable $e) {
-            $base = ['found' => false, 'doneSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
+            $base = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
         }
         // Amendment / Drawing / Measurement are asked fresh on every visit — the form
         // never adopts the previous response-sheet answers.
@@ -111,7 +111,7 @@ class Pms
     private function progressDeveloper(array $p): array
     {
         $orderId = $this->makeDeveloperOrderId((string)($p['building'] ?? ''), (string)($p['flatNo'] ?? ''));
-        $empty = ['found' => false, 'doneSteps' => [], 'orderId' => $orderId];
+        $empty = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => $orderId];
 
         $dev = $this->cfg['developer_building_sheets'][$p['developer'] ?? ''] ?? null;
         if (!$dev || empty($dev['spreadsheetId'])) {
@@ -148,6 +148,7 @@ class Pms
         return [
             'found'            => true,
             'doneSteps'        => $this->readDoneSteps($rows, $devRow, $info),
+            'notRequiredSteps' => $this->readHiddenSteps($rows, $devRow, $info),
             'orderId'          => $orderId,
             'tentativeEndDate' => $this->readTentative($rows, $devRow, $info),
         ];
@@ -155,7 +156,7 @@ class Pms
 
     private function progressGeneral(array $p): array
     {
-        $empty = ['found' => false, 'doneSteps' => [], 'orderId' => ''];
+        $empty = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => ''];
 
         $ssId = $this->cfg['general_pms_sheet_id'];
         $tabName = ($p['siteType'] ?? '') === 'VRV'
@@ -181,11 +182,12 @@ class Pms
             $pmsRow = $this->findRowByColValue($rows, $info, $projCol, (string)($p['project'] ?? ''));
         }
         if ($pmsRow < 0) {
-            return ['found' => false, 'doneSteps' => [], 'orderId' => $orderId];
+            return ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => $orderId];
         }
         return [
             'found'            => true,
             'doneSteps'        => $this->readDoneSteps($rows, $pmsRow, $info),
+            'notRequiredSteps' => $this->readHiddenSteps($rows, $pmsRow, $info),
             'orderId'          => $orderId,
             'tentativeEndDate' => $this->readTentative($rows, $pmsRow, $info),
         ];
@@ -194,10 +196,7 @@ class Pms
     /** Reads the "Tentitive Project End date" cell, converting a Sheets serial to Y-m-d. */
     private function readTentative(array $rows, int $row, array $info): string
     {
-        $col = $this->findColContains($info, 'tentative');
-        if ($col < 1) {
-            $col = $this->findColContains($info, 'tentitive'); // the sheet's actual spelling
-        }
+        $col = $this->findTentativeEndCol($info);
         if ($col < 1) {
             return '';
         }
@@ -210,6 +209,31 @@ class Pms
             }
         }
         return trim((string)$v);
+    }
+
+    /**
+     * The tentative-PROJECT-END-date column. The sheet also carries a "Tentitive Project
+     * START date" column, so a plain "tent" substring match would grab the wrong one
+     * (whichever comes first). Require "end" and reject "start". Spelling-tolerant
+     * ("tentative"/"tentitive"). 1-based, or -1.
+     */
+    private function findTentativeEndCol(array $info): int
+    {
+        $fallback = -1;
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $h = trim(Sheets::normalizeKey($info['groupVals'][$i] ?? '') . ' ' . Sheets::normalizeKey($info['subVals'][$i] ?? ''));
+            $isTent = (strpos($h, 'tentative') !== false || strpos($h, 'tentitive') !== false);
+            if (!$isTent || strpos($h, 'start') !== false) {
+                continue;                                  // never the START-date column
+            }
+            if (strpos($h, 'end') !== false) {
+                return $i + 1;                             // exact: the END-date column
+            }
+            if ($fallback < 1) {
+                $fallback = $i + 1;                        // a lone tentative col (no start/end wording)
+            }
+        }
+        return $fallback;
     }
 
     /** First column whose group/sub header contains a substring (normalized). 1-based, or -1. */
@@ -269,7 +293,46 @@ class Pms
             if ($sub !== '' || $name === '' || in_array(Sheets::normalizeKey($name), self::NON_STEP_COLS, true)) {
                 continue;
             }
-            if (trim((string)$this->cell($rows, $row, $i + 1)) !== '') {
+            // A "Not Required" date step is hidden, not done — don't count it here.
+            $val = trim((string)$this->cell($rows, $row, $i + 1));
+            if ($val !== '' && Sheets::normalizeKey($val) !== 'not required') {
+                $add($name);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Step names marked "Not Required" on a row (grouped Status sub-cell == "Not Required",
+     * or a single-column date step holding the literal "Not Required"). The front-end HIDES
+     * these steps entirely on the next visit. Mirror of readDoneSteps.
+     */
+    private function readHiddenSteps(array $rows, int $row, array $info): array
+    {
+        $out = [];
+        $seen = [];
+        $add = function (string $name) use (&$out, &$seen) {
+            $key = Sheets::compactKey($name);
+            if ($name === '' || isset($seen[$key])) {
+                return;
+            }
+            $seen[$key] = true;
+            $out[] = $name;
+        };
+
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            $name = trim((string)($info['groupVals'][$i] ?? ''));
+            if ($sub === 'status') {
+                if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
+                    $add($name);
+                }
+                continue;
+            }
+            if ($sub !== '' || $name === '' || in_array(Sheets::normalizeKey($name), self::NON_STEP_COLS, true)) {
+                continue;
+            }
+            if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
                 $add($name);
             }
         }
@@ -466,6 +529,12 @@ class Pms
                     if ($cur === '' || $cur === null) {
                         $this->sheets->setCell($ssId, $title, $row, $statusCol, $this->today());
                     }
+                } elseif ($stat === 'Not Required') {
+                    // Stamp the literal so readHiddenSteps hides this date step next visit.
+                    $cur = $this->cell($rows, $row, $statusCol);
+                    if ($cur === '' || $cur === null) {
+                        $this->sheets->setCell($ssId, $title, $row, $statusCol, 'Not Required');
+                    }
                 }
                 continue;
             }
@@ -540,7 +609,12 @@ class Pms
         }
 
         if (!empty($p['tentativeEndDate'])) {
-            $setByName('Tentitive Project End date', $p['tentativeEndDate']);
+            // Write to the SAME column readTentative() reads (the END date col, never the
+            // adjacent "Tentitive Project START date"), so it round-trips on the next visit.
+            $tentCol = $this->findTentativeEndCol($info);
+            if ($tentCol > 0) {
+                $this->sheets->setCell($ssId, $title, $row, $tentCol, (string)$p['tentativeEndDate']);
+            }
         }
     }
 

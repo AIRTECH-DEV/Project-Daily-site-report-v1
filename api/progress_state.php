@@ -25,5 +25,5 @@ try {
     json_out($res);
 } catch (Throwable $e) {
     error_log('progress_state: ' . $e->getMessage());
-    json_out(['found' => false, 'doneSteps' => [], 'orderId' => '']);
+    json_out(['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => '']);
 }
