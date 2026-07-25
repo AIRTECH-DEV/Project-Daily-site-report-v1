@@ -72,42 +72,62 @@ class SubmitService
             : ($p['project'] ?: 'General_Reports')));
         $warnings = [];
 
-        // 1) Photos -> Drive
-        $urls = ['site' => [], 'drawing' => null, 'measurement' => null];
+        // Multi-flat developer visit -> treat each flat as its own report (own photos,
+        // response row, PDF section), then consolidate into ONE PDF + ONE notification.
+        // General / single-flat submissions run with a single "report".
+        $isMulti = $isDeveloper && !empty($p['flats']) && is_array($p['flats']);
+        $reports = $isMulti ? array_values(array_filter($p['flats'], 'is_array')) : [$p];
+        if (!$reports) { $reports = [$p]; $isMulti = false; }
+
+        $driveReady = $this->isDriveReady();
         $folderId = null;
+
+        // 1) Photos -> Drive (per flat)
         $log = $tracker->stepStart('photo_save', $projectName);
+        $totalPhotos = 0;
         try {
-            if ($this->isDriveReady()) {
+            if ($driveReady) {
                 $folderId = $this->drive->getOrCreateProjectFolder($projectName);
-                foreach (($p['photos'] ?? []) as $i => $f) {
-                    $saved = $this->drive->saveBase64File($f, $folderId, 'SitePhoto_' . ($i + 1));
-                    if ($saved) { $urls['site'][] = $saved['url']; $tracker->addAttachment('site_photo', $saved); }
+                foreach ($reports as $ri => $rep) {
+                    $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
+                    $urls = ['site' => [], 'drawing' => null, 'measurement' => null];
+                    foreach (($rep['photos'] ?? []) as $i => $f) {
+                        $saved = $this->drive->saveBase64File($f, $folderId, $tag . 'SitePhoto_' . ($i + 1));
+                        if ($saved) { $urls['site'][] = $saved['url']; $tracker->addAttachment('site_photo', $saved); $totalPhotos++; }
+                    }
+                    if (($rep['drawingChange'] ?? '') === 'Yes' && !empty($rep['drawingPhoto'])) {
+                        $saved = $this->drive->saveBase64File($rep['drawingPhoto'], $folderId, $tag . 'DrawingChange');
+                        if ($saved) { $urls['drawing'] = $saved['url']; $tracker->addAttachment('drawing', $saved); }
+                    }
+                    if (($rep['measurement'] ?? '') === 'Yes' && !empty($rep['measurementFile'])) {
+                        $saved = $this->drive->saveBase64File($rep['measurementFile'], $folderId, $tag . 'MeasurementReport');
+                        if ($saved) { $urls['measurement'] = $saved['url']; $tracker->addAttachment('measurement', $saved); }
+                    }
+                    $reports[$ri]['_urls'] = $urls;
                 }
-                if (($p['drawingChange'] ?? '') === 'Yes' && !empty($p['drawingPhoto'])) {
-                    $saved = $this->drive->saveBase64File($p['drawingPhoto'], $folderId, 'DrawingChange');
-                    if ($saved) { $urls['drawing'] = $saved['url']; $tracker->addAttachment('drawing', $saved); }
-                }
-                if (($p['measurement'] ?? '') === 'Yes' && !empty($p['measurementFile'])) {
-                    $saved = $this->drive->saveBase64File($p['measurementFile'], $folderId, 'MeasurementReport');
-                    if ($saved) { $urls['measurement'] = $saved['url']; $tracker->addAttachment('measurement', $saved); }
-                }
-                $tracker->stepDone($log, count($urls['site']) . ' photo(s) uploaded', 'folder ' . $folderId);
+                $tracker->stepDone($log, $totalPhotos . ' photo(s) uploaded' . ($isMulti ? (' across ' . count($reports) . ' flat(s)') : ''), 'folder ' . $folderId);
             } else {
+                foreach ($reports as $ri => $rep) { $reports[$ri]['_urls'] = ['site' => [], 'drawing' => null, 'measurement' => null]; }
                 $tracker->stepSkipped($log, 'Shared Drive not configured — photos not uploaded.');
                 $warnings[] = 'Photos not uploaded (Shared Drive not configured).';
             }
         } catch (Throwable $e) {
+            foreach ($reports as $ri => $rep) { if (!isset($reports[$ri]['_urls'])) { $reports[$ri]['_urls'] = ['site' => [], 'drawing' => null, 'measurement' => null]; } }
             $tracker->stepFailed($log, $e->getMessage());
             $warnings[] = 'Photo upload failed: ' . $e->getMessage();
         }
 
-        // 2) Response row
+        // 2) Response rows (one per flat)
+        $writer = new ResponseSheet($this->sheets, $this->cfg);
+        $rowsInfo = [];
         $log = $tracker->stepStart('sheet_write');
         try {
-            $writer = new ResponseSheet($this->sheets, $this->cfg);
-            [$tab, $rowNum, $headers, $rowValues] =
-                $writer->writeRow($p, $projectName, $urls, $meta['email'] ?? 'unknown');
-            $tracker->stepDone($log, 'row written', "$tab!$rowNum");
+            foreach ($reports as $ri => $rep) {
+                [$rt, $rn, $rh, $rv] = $writer->writeRow($rep, $projectName, $rep['_urls'], $meta['email'] ?? 'unknown');
+                $rowsInfo[$ri] = ['tab' => $rt, 'row' => $rn, 'headers' => $rh, 'rowValues' => $rv];
+            }
+            $tab = $rowsInfo[0]['tab']; $rowNum = $rowsInfo[0]['row']; $headers = $rowsInfo[0]['headers'];
+            $tracker->stepDone($log, count($rowsInfo) . ' row(s) written', "$tab!$rowNum" . ($isMulti ? ' (+' . (count($rowsInfo) - 1) . ' more)' : ''));
             $tracker->updateSubmission(['response_tab' => $tab, 'response_row' => $rowNum]);
         } catch (Throwable $e) {
             $tracker->stepFailed($log, $e->getMessage());
@@ -115,14 +135,12 @@ class SubmitService
             return ['warnings' => $warnings, 'fatal' => 'Failed writing response row: ' . $e->getMessage()];
         }
 
-        // 3) PMS
+        // 3) PMS (updateProgressSheets stamps EVERY flat's row internally)
         $log = $tracker->stepStart('pms_update');
         try {
             $res = (new Pms($this->sheets, $this->cfg))->updateProgressSheets($p);
             if (!empty($res['order_id'])) {
                 $tracker->updateSubmission(['order_id' => $res['order_id']]);
-                // Stamp Order ID back into the response row so the sheet shows which
-                // project/flat each row belongs to (blank before — writeRow can't know it yet).
                 try { $writer->stampCell($tab, $rowNum, $headers, 'order id', $res['order_id']); } catch (Throwable $x) {}
             }
             if ($res['updated']) { $tracker->stepDone($log, 'PMS row stamped'); }
@@ -132,22 +150,23 @@ class SubmitService
             $warnings[] = 'PMS update failed: ' . $e->getMessage();
         }
 
-        // 4) PDF (+ Drive upload)
+        // 4) PDF — consolidated for multi-flat, single otherwise (+ Drive upload)
         $pdfUrl = ''; $pdfPath = ''; $pdfDriveId = '';
         $log = $tracker->stepStart('pdf');
         try {
-            $pdfPath = $this->buildPdf($projectName, $job['public_id'], $headers, $rowValues, $p);
+            $pdfPath = $isMulti
+                ? $this->buildMultiPdf($projectName, $job['public_id'], $reports, $rowsInfo)
+                : $this->buildPdf($projectName, $job['public_id'], $headers, $rowsInfo[0]['rowValues'], $p);
             $pdfMeta = ['file_name' => basename($pdfPath), 'mime_type' => 'application/pdf', 'bytes' => filesize($pdfPath)];
-            if ($this->isDriveReady() && $folderId) {
+            if ($driveReady && $folderId) {
                 $up = $this->drive->uploadBytes($folderId, basename($pdfPath), 'application/pdf', file_get_contents($pdfPath));
                 $pdfUrl = $up['url']; $pdfDriveId = $up['id'];
                 $pdfMeta['drive_file_id'] = $up['id']; $pdfMeta['url'] = $up['url'];
-                $writer->stampCell($tab, $rowNum, $headers, 'pdf id', $up['id']);
-                $writer->stampCell($tab, $rowNum, $headers, 'mail status', 'PDF GENERATED');
+                foreach ($rowsInfo as $ri) { try { $writer->stampCell($ri['tab'], $ri['row'], $ri['headers'], 'pdf id', $up['id']); $writer->stampCell($ri['tab'], $ri['row'], $ri['headers'], 'mail status', 'PDF GENERATED'); } catch (Throwable $x) {} }
             } else {
                 $pdfUrl = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/reports/' . basename($pdfPath);
                 $pdfMeta['url'] = $pdfUrl;
-                $writer->stampCell($tab, $rowNum, $headers, 'mail status', 'PDF GENERATED (local)');
+                foreach ($rowsInfo as $ri) { try { $writer->stampCell($ri['tab'], $ri['row'], $ri['headers'], 'mail status', 'PDF GENERATED (local)'); } catch (Throwable $x) {} }
             }
             $tracker->addAttachment('pdf', $pdfMeta);
             $tracker->stepDone($log, 'PDF built', $pdfUrl);
@@ -277,6 +296,66 @@ class SubmitService
             'out_path'         => $out,
         ]);
         return $out;
+    }
+
+    /** Consolidated multi-flat PDF: one section per flat, reusing each flat's response row. */
+    private function buildMultiPdf(string $projectName, string $publicId, array $reports, array $rowsInfo): string
+    {
+        $flatsCtx = [];
+        foreach ($reports as $ri => $rep) {
+            $photos = [];
+            foreach (($rep['photos'] ?? []) as $f) {
+                $bytes = $this->decode($f);
+                if ($bytes !== null) { $photos[] = ['bytes' => $bytes, 'mime' => $f['mimeType'] ?? 'image/jpeg']; }
+            }
+            $drawing = null;
+            if (($rep['drawingChange'] ?? '') === 'Yes' && !empty($rep['drawingPhoto'])) {
+                $b = $this->decode($rep['drawingPhoto']);
+                if ($b !== null) { $drawing = ['bytes' => $b, 'mime' => $rep['drawingPhoto']['mimeType'] ?? 'image/jpeg']; }
+            }
+            $flatsCtx[] = [
+                'label'            => $this->flatLabel($rep),
+                'headers'          => $rowsInfo[$ri]['headers'],
+                'rowValues'        => $rowsInfo[$ri]['rowValues'],
+                'activity'         => (string)($rep['activity'] ?? ''),
+                'photos'           => $photos,
+                'drawing'          => $drawing,
+                'client_hold'      => $this->clientHoldText($rep),
+                'project_location' => $this->developerLocation($rep),
+            ];
+        }
+
+        $dir = __DIR__ . '/../storage/reports';
+        if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
+        $safe = preg_replace('/[^A-Za-z0-9_-]+/', '_', $projectName) ?: 'report';
+        $out = $dir . '/' . date('d_M_Y') . '_' . $safe . '_visit_' . substr($publicId, 0, 8) . '.pdf';
+
+        $h0 = $rowsInfo[0]['headers']; $v0 = $rowsInfo[0]['rowValues'];
+        $tsIdx = Sheets::findColIndex($h0, 'timestamp');
+        $ts = $tsIdx > -1 ? (string)($v0[$tsIdx] ?? '') : date('d-M-Y H:i:s');
+
+        return (new Pdf(__DIR__ . '/../assets'))->buildMulti([
+            'project_name' => $projectName,
+            'timestamp'    => $ts,
+            'flats'        => $flatsCtx,
+            'out_path'     => $out,
+        ]);
+    }
+
+    /** "Flat A-101 - 21st Floor" (floor dropped when empty). */
+    private function flatLabel(array $rep): string
+    {
+        $flat  = trim((string)($rep['flatNo'] ?? ''));
+        $floor = trim((string)($rep['floor'] ?? ''));
+        $label = 'Flat ' . ($flat !== '' ? $flat : '?');
+        return $floor !== '' ? ($label . ' - ' . $floor) : $label;
+    }
+
+    /** Filename-safe token for per-flat Drive photo names. */
+    private function safeTag($v): string
+    {
+        $t = preg_replace('/[^A-Za-z0-9]+/', '', (string)$v);
+        return $t !== '' ? $t : 'x';
     }
 
     /**

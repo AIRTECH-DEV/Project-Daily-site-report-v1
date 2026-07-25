@@ -90,7 +90,84 @@ class Pdf
         return $ctx['out_path'];
     }
 
+    /**
+     * ONE consolidated PDF for a multi-flat developer visit. Shared title once, then a
+     * per-flat section (banner + activity + details + drawing + photos), page-broken.
+     * @param array $ctx [ project_name, timestamp, out_path,
+     *   flats => [ ['label','headers','rowValues','activity','photos','drawing',
+     *               'client_hold','project_location'], ... ] ]
+     */
+    public function buildMulti(array $ctx): string
+    {
+        $pdf = new PmsFpdf('P', 'pt', 'A4');
+        $pdf->headerImg = $this->assetsDir . '/letterhead_header.png';
+        $pdf->footerImg = $this->assetsDir . '/footer_daikin.png';
+        $pdf->SetMargins(42, 140, 42);
+        $pdf->SetAutoPageBreak(true, 82);
+        $pdf->AliasNbPages();
+        $pdf->AddPage();
+
+        $flats = $ctx['flats'] ?? [];
+        $this->titleBlock($pdf, $ctx['project_name'] ?? '', $ctx['timestamp'] ?? '');
+        $this->redRule($pdf);
+
+        // Visit summary: N flats + the list.
+        $labels = array_map(fn($f) => (string)($f['label'] ?? ''), $flats);
+        $pdf->Ln(8);
+        $pdf->SetFont('Arial', 'B', 9);
+        $this->setText($pdf, $this->GRAY);
+        $pdf->MultiCell(511, 13, $this->ascii(count($flats) . ' flat(s) in this visit:  ' . implode('   |   ', $labels)), 0, 'L');
+
+        foreach ($flats as $i => $f) {
+            if ($i > 0) { $pdf->AddPage(); }
+            $this->flatBanner($pdf, (string)($f['label'] ?? ('Flat ' . ($i + 1))));
+
+            $this->sectionHeader($pdf, "TODAY'S ACTIVITY");
+            $this->activityBox($pdf, $this->fmt($f['activity'] ?? ''));
+
+            $pdf->Ln(8);
+            $this->sectionHeader($pdf, 'PROJECT DETAILS');
+            $this->detailTable($pdf, $f['headers'] ?? [], $f['rowValues'] ?? [], $f['client_hold'] ?? null, (string)($f['project_location'] ?? ''));
+
+            if (!empty($f['drawing']['bytes'])) {
+                $this->sectionHeader($pdf, 'DRAWING CHANGE PHOTO');
+                $this->imageFit($pdf, $f['drawing'], 320, 220);
+                $pdf->Ln(10);
+            }
+
+            $this->sectionHeader($pdf, 'SITE PHOTOS');
+            $photos = $f['photos'] ?? [];
+            if ($photos) {
+                $this->photoGrid($pdf, $photos);
+            } else {
+                $pdf->SetFont('Arial', '', 11);
+                $this->setText($pdf, $this->LGRAY);
+                $pdf->Cell(0, 16, 'No photos attached.', 0, 1);
+            }
+        }
+
+        $pdf->Output('F', $ctx['out_path']);
+        $this->cleanupTmp();
+        return $ctx['out_path'];
+    }
+
     /* ---------------- sections ---------------- */
+
+    private function flatBanner(PmsFpdf $pdf, string $label): void
+    {
+        $pdf->Ln(10);
+        $y = $pdf->GetY();
+        if ($y + 24 > $pdf->GetPageHeight() - 82) { $pdf->AddPage(); $y = $pdf->GetY(); }
+        $pdf->SetFillColor(...$this->SOFT);
+        $pdf->Rect(42, $y, 511, 22, 'F');
+        $pdf->SetFillColor(...$this->RED);
+        $pdf->Rect(42, $y, 3, 22, 'F');
+        $pdf->SetXY(54, $y + 5);
+        $pdf->SetFont('Arial', 'B', 11);
+        $this->setText($pdf, $this->RED);
+        $pdf->Cell(0, 12, $this->ascii($label), 0, 1);
+        $pdf->SetY($y + 26);
+    }
 
     private function titleBlock(PmsFpdf $pdf, string $projectName, string $timestamp): void
     {
