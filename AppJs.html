@@ -25,8 +25,8 @@
     // site type. Each string is matched (name-based) to a step group column
     // in the PMS sheet on submit.
     const STATUS_STEPS = {
-      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'],
-      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining']
+      'VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Copper Piping Dismental','Cable','Drain','Drain Dismental','Pressure Testing','Main Ducting','Main Ducting Dismental','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','IDU Dismental','odu unit installation','ODU Dismental','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'],
+      'Non-VRV': ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Copper Piping Dismental','Cable','Drain','Drain Dismental','Pressure Testing','Main Ducting','Main Ducting Dismental','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','IDU Dismental','odu unit installation','ODU Dismental','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining']
     };
     // Ventilation / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
     STATUS_STEPS['Ventilation'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
@@ -43,9 +43,44 @@
     // Per-person "what work done" dropdown options (independent of the status steps).
     const WORK_DONE_OPTIONS = [
       'Marking','Civil Opening','Support',
-      'Underdake Insulation','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct',
-      'Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
+      'Underdake Insulation','Copper Piping','Copper Piping Dismental','Cable','Drain','Drain Dismental','Pressure Testing','Main Ducting','Main Ducting Dismental','Collar','Fresh Air - PVC PIPE / Duct',
+      'Indoor Installation','IDU Dismental','odu unit installation','ODU Dismental','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
     ];
+
+    // Dismantle ("Dismental") steps share their base step's End Date column, so only
+    // ONE of a base/dismental pair may reach "Done". Map keeps the two mutually
+    // exclusive in the Current Status checklist. display dismental name => base step.
+    const DISMENTAL_BASE = {
+      'Copper Piping Dismental': 'Copper Piping',
+      'Drain Dismental': 'Drain',
+      'Main Ducting Dismental': 'Main Ducting',
+      'IDU Dismental': 'Indoor Installation',
+      'ODU Dismental': 'odu unit installation'
+    };
+    // The paired step (base <-> its dismantle), or '' when the step isn't in a pair.
+    function pairedStep(step) {
+      const key = compact(step);
+      for (const d in DISMENTAL_BASE) {
+        if (compact(d) === key) return DISMENTAL_BASE[d];          // dismental -> base
+        if (compact(DISMENTAL_BASE[d]) === key) return d;          // base -> dismental
+      }
+      return '';
+    }
+    // A step is "engaged" the moment it's touched this visit: locked Done from the
+    // sheet, ticked, or assigned ANY status (Done / Pending / Hold / Not Required).
+    // Touching either side of a base/dismantle pair hides the other — only one at final.
+    function stepEngaged(step) {
+      const key = compact(step);
+      if ((answers.lockedSteps || []).some(s => compact(s) === key)) return true;
+      if ((answers.doneSteps || []).some(s => compact(s) === key)) return true;
+      return (answers.stepStatuses || []).some(e => compact(e.step) === key);
+    }
+    // True when a step's pair is engaged — the step must then be hidden (mutually
+    // exclusive: once you touch the base OR its dismantle, the other disappears).
+    function pairEngaged(step) {
+      const p = pairedStep(step);
+      return p ? stepEngaged(p) : false;
+    }
 
     let answers = {};
     let currentPage = 0;
@@ -556,7 +591,7 @@
                 ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
                 ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
                 <div class="step-check-list">
-                  ${statusSteps.filter(s => !hiddenSet.has(compact(s))).map(s => {
+                  ${statusSteps.filter(s => !hiddenSet.has(compact(s)) && !pairEngaged(s)).map(s => {
                     const key = compact(s);
                     const locked = lockedSet.has(key);
                     const assigned = assignedMap.get(key);
@@ -1034,7 +1069,12 @@
       if ((answers.stepStatuses || []).some(e => compact(e.step) === key)) return;
       const list = answers.doneSteps || (answers.doneSteps = []);
       const at = list.findIndex(s => compact(s) === key);
-      if (at > -1) list.splice(at, 1); else list.push(step);
+      if (at > -1) {
+        list.splice(at, 1);                             // untick always allowed
+      } else {
+        if (pairEngaged(step)) return;                  // pair being worked on — mutually exclusive
+        list.push(step);
+      }
       renderCurrentPage();
     }
     function canApplyStatus() {

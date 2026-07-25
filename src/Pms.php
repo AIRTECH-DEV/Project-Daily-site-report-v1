@@ -316,6 +316,36 @@ class Pms
     ];
 
     /**
+     * Dismantle ("Dismental") pseudo-steps. Each shares its base step's column
+     * GROUP and is stamped into that group's "Dismental Status" sub-column (not
+     * the normal "Status"). Base + dismental are MUTUALLY EXCLUSIVE in the form
+     * (only one of a pair ever reaches Done), so the group's shared Start/End date
+     * columns never collide.
+     *   display step name (compact) => base group header text.
+     */
+    private const DISMENTAL_MAP = [
+        'copperpipingdismental' => 'Copper Piping',
+        'draindismental'        => 'Drain',
+        'mainductingdismental'  => 'Main Ducting',
+        'idudismental'          => 'Indoor Installation',
+        'odudismental'          => 'odu unit installation',
+    ];
+    /** base group (compact) => dismantle step display name (reverse of DISMENTAL_MAP). */
+    private const DISMENTAL_BY_GROUP = [
+        'copperpiping'        => 'Copper Piping Dismental',
+        'drain'               => 'Drain Dismental',
+        'mainducting'         => 'Main Ducting Dismental',
+        'indoorinstallation'  => 'IDU Dismental',
+        'oduunitinstallation' => 'ODU Dismental',
+    ];
+
+    /** Base group header for a dismantle step name, or '' when it isn't one. */
+    private function dismentalGroupFor(string $stepName): string
+    {
+        return self::DISMENTAL_MAP[Sheets::compactKey($stepName)] ?? '';
+    }
+
+    /**
      * Step names counted as done on a row:
      *   - grouped steps whose "Status" sub-cell reads "Done", plus
      *   - single-column DATE steps (e.g. "LS Material Delivery") that hold any value.
@@ -337,6 +367,17 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
             $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // "Dismental Status" sub-col -> report the dismantle step (own name), Done-only.
+            if (strpos($sub, 'dismental') !== false) {
+                if (strpos($sub, 'status') !== false
+                    && Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
+                    $d = self::DISMENTAL_BY_GROUP[Sheets::compactKey($name)] ?? '';
+                    if ($d !== '') {
+                        $add($d);
+                    }
+                }
+                continue;
+            }
             if ($sub === 'status') {
                 if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
                     $add($name);
@@ -377,6 +418,17 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
             $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // "Dismental Status" == "Not Required" -> hide the dismantle step next visit.
+            if (strpos($sub, 'dismental') !== false) {
+                if (strpos($sub, 'status') !== false
+                    && Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
+                    $d = self::DISMENTAL_BY_GROUP[Sheets::compactKey($name)] ?? '';
+                    if ($d !== '') {
+                        $add($d);
+                    }
+                }
+                continue;
+            }
             if ($sub === 'status') {
                 if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
                     $add($name);
@@ -570,6 +622,28 @@ class Pms
             if ($step === '' || $stat === '') {
                 continue;
             }
+            // Dismantle steps -> the group's "Dismental Status" sub-col. The Done date
+            // reuses the group's shared "End Date" (base + dismental never both hit Done).
+            $dgroup = $this->dismentalGroupFor($step);
+            if ($dgroup !== '') {
+                $dcol = $this->findDismentalStatusCol($info, $dgroup);
+                if ($dcol < 1) {
+                    continue;
+                }
+                $this->sheets->setCell($ssId, $title, $row, $dcol, ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat);
+                if ($stat === 'Done') {
+                    $endCol = $this->findStepSubCol($info, $dgroup, 'End Date');
+                    if ($endCol > 0) {
+                        $cur = $this->cell($rows, $row, $endCol);
+                        if ($cur === '' || $cur === null) {
+                            $this->sheets->setCell($ssId, $title, $row, $endCol, $this->now());
+                        }
+                    }
+                } elseif ($stat === 'Hold') {
+                    $holdEntries[] = $e;
+                }
+                continue;
+            }
             $statusCol = $this->findStepStatusCol($info, $step);
             if ($statusCol < 1) {
                 continue;
@@ -621,7 +695,10 @@ class Pms
                 if ($tStep === '') {
                     continue;
                 }
-                $startCol = $this->findStepSubCol($info, $tStep, 'Start Date');
+                $tGroup = $this->dismentalGroupFor($tStep);
+                $startCol = $tGroup !== ''
+                    ? $this->findStepSubCol($info, $tGroup, 'Start Date')
+                    : $this->findStepSubCol($info, $tStep, 'Start Date');
                 if ($startCol < 1) {
                     continue;
                 }
@@ -710,7 +787,9 @@ class Pms
                 $lastGroup = $groupVals[$c];
             } else {
                 $s = Sheets::normalizeKey($subVals[$c]);
-                if (($s === 'status' || $s === 'start date' || $s === 'end date') && $lastGroup !== '') {
+                // Forward-fill the step name over its Status/Start/End AND the merged
+                // "Dismental Status" sub-cell (the latter is otherwise blank on read).
+                if (($s === 'status' || $s === 'start date' || $s === 'end date' || strpos($s, 'dismental') !== false) && $lastGroup !== '') {
                     $groupVals[$c] = $lastGroup;
                 }
             }
@@ -760,6 +839,24 @@ class Pms
             if (Sheets::compactKey($info['groupVals'][$i]) === $step
                 && Sheets::normalizeKey($info['subVals'][$i]) === $sub) {
                 return $i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /** The "Dismental Status" sub-col under a step group (group name forward-filled). 1-based, or -1. */
+    private function findDismentalStatusCol(array $info, string $groupName): int
+    {
+        $g = Sheets::compactKey($groupName);
+        if ($g === '') {
+            return -1;
+        }
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            if (Sheets::compactKey($info['groupVals'][$i]) === $g) {
+                $s = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+                if (strpos($s, 'dismental') !== false && strpos($s, 'status') !== false) {
+                    return $i + 1;
+                }
             }
         }
         return -1;
