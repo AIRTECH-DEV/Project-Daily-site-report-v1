@@ -34,12 +34,66 @@ class Pms
     {
         try {
             if (($p['clientType'] ?? '') === 'Developer') {
+                $flats = $p['flats'] ?? null;
+                if (is_array($flats) && $flats) {
+                    return $this->updateDeveloperFlats($p, $flats);
+                }
                 return $this->updateDeveloper($p);
             }
             return $this->updateGeneral($p);
         } catch (Throwable $e) {
             return ['updated' => false, 'warning' => 'Progress sheet update error: ' . $e->getMessage()];
         }
+    }
+
+    /**
+     * Multi-flat developer visit: stamp EACH flat's OWN row with its OWN step statuses.
+     * Developer/building/engineer are shared; flatNo/floor/siteType/stepStatuses/tentative
+     * are per flat. Reuses updateDeveloper() once per flat, aggregates the outcome so one
+     * bad flat never blocks the rest.
+     */
+    private function updateDeveloperFlats(array $p, array $flats): array
+    {
+        $anyUpdated = false;
+        $warnings = [];
+        $orderIds = [];
+        foreach ($flats as $idx => $flat) {
+            if (!is_array($flat)) {
+                continue;
+            }
+            $sub = $p;                                   // shared developer / building / engineer
+            unset($sub['flats']);
+            foreach (['flatNo', 'floor', 'siteType', 'stepStatuses', 'tentativeEndDate', 'tomorrowSteps', 'nextStepStartDate'] as $k) {
+                if (array_key_exists($k, $flat)) {
+                    $sub[$k] = $flat[$k];
+                }
+            }
+            $flatNo = trim((string)($sub['flatNo'] ?? ''));
+            if ($flatNo === '') {
+                continue;
+            }
+            try {
+                $r = $this->updateDeveloper($sub);
+            } catch (Throwable $e) {
+                $warnings[] = 'Flat ' . $flatNo . ': ' . $e->getMessage();
+                continue;
+            }
+            if (!empty($r['updated'])) {
+                $anyUpdated = true;
+            }
+            if (!empty($r['warning'])) {
+                $warnings[] = 'Flat ' . $flatNo . ': ' . $r['warning'];
+            }
+            if (!empty($r['order_id'])) {
+                $orderIds[$flatNo] = $r['order_id'];
+            }
+        }
+        return [
+            'updated'   => $anyUpdated,
+            'warning'   => implode(' | ', array_values(array_filter($warnings))),
+            'order_id'  => $orderIds ? (string)reset($orderIds) : '',
+            'order_ids' => $orderIds,
+        ];
     }
 
     /**

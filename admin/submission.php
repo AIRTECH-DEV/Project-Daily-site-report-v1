@@ -175,6 +175,43 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
   </div>
 </div>
 
+<?php
+// Multi-flat developer visit: one submission covers several flats (each its own steps).
+// The top row above shows the first flat; this card lists them all from the payload.
+$visitFlats = is_array($payload['flats'] ?? null) ? array_values(array_filter($payload['flats'], 'is_array')) : [];
+if (count($visitFlats) > 1):
+?>
+<div class="card2">
+  <div class="card2-head"><i class="bi bi-building text-primary"></i><h2>Flats in this visit</h2>
+    <span class="sub"><?= count($visitFlats) ?> flats · one consolidated report</span></div>
+  <div class="card2-body">
+    <div class="info-grid">
+      <?php foreach ($visitFlats as $fi => $f):
+        $fno = trim((string)($f['flatNo'] ?? ''));
+        $ffl = trim((string)($f['floor'] ?? ''));
+        $steps = [];
+        foreach ((is_array($f['stepStatuses'] ?? null) ? $f['stepStatuses'] : []) as $eSt) {
+            if (!is_array($eSt)) continue;
+            $st = trim((string)($eSt['step'] ?? ''));
+            if ($st !== '') $steps[] = $st . ' (' . trim((string)($eSt['status'] ?? '')) . ')';
+        }
+        $tent = trim((string)($f['tentativeEndDate'] ?? ''));
+        $work = trim((string)($f['workDoneBy'] ?? ''));
+      ?>
+      <div class="info-col">
+        <div class="info-row"><div class="info-key"><i class="bi bi-door-open"></i>Flat <?= $fi + 1 ?></div>
+          <div class="info-val"><b><?= Admin::e($fno !== '' ? $fno : '—') ?></b><?= $ffl !== '' ? ' <span class="info-val soft">· ' . Admin::e($ffl) . '</span>' : '' ?></div></div>
+        <div class="info-row"><div class="info-key"><i class="bi bi-list-check"></i>Steps</div>
+          <div class="info-val"><?= $steps ? Admin::e(implode(', ', $steps)) : '<span class="info-val soft">—</span>' ?></div></div>
+        <?php if ($work !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-hammer"></i>Work by</div><div class="info-val soft"><?= Admin::e($work) ?></div></div><?php endif; ?>
+        <?php if ($tent !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-calendar-event"></i>Tentative</div><div class="info-val"><?= Admin::e(fmtDate($tent) ?: $tent) ?></div></div><?php endif; ?>
+      </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
+
 <?php if ($wpTotal > 0): ?>
 <div class="card2">
   <div class="card2-head"><i class="bi bi-bar-chart-steps text-primary"></i><h2>Work Progress</h2>

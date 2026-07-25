@@ -466,6 +466,7 @@
                     ${floor && answers.generatedOrderId ? '·' : ''}
                     ${answers.generatedOrderId ? `&nbsp;Order ID: <b style="color:#333;margin-left:4px;">${escapeHtml(answers.generatedOrderId)}</b>` : ''}
                   </div>` : ''}
+                  ${flatBarHtml()}
                 </div>` : ''}
               </div>
 
@@ -630,7 +631,7 @@
                 <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
               </div>
 
-              <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:18px; align-items:start;">
+              <div class="photo-amend-grid">
                 <div class="section" style="margin-bottom:0;">
                   <div class="section-head">
                     ${iconPhoto()}
@@ -672,6 +673,7 @@
       const nextStepStartDate = answers.nextStepStartDate || '';
       const pickedTomorrow = effectiveTomorrowSteps();
       return `
+        ${flatBarHtml()}
         <div class="panel">
           <div class="twocol">
             <div class="col">
@@ -746,6 +748,7 @@
                 <div class="file-list" id="fileList-measurementFile"></div>`
         : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
       return `
+        ${flatBarHtml()}
         <div class="panel">
           <div class="twocol">
             <div class="col">
@@ -788,9 +791,27 @@
       const lockedList = (answers.lockedSteps || []).join(', ');
       const holdEntry = stepStatuses.find(e => e.status === 'Hold');
       const workSummary = peopleWorkSummary();
+      // Multi-flat: one card summarising every flat; the cards below detail the ACTIVE
+      // flat (switch flats via the bar above to review each in full).
+      let flatsCard = '';
+      if (isMultiFlat()) {
+        ensureFlats(); saveActiveFlat();
+        const flats = answers.flats || [];
+        flatsCard = `<div class="review-card" style="grid-column:1 / -1;">
+            <h4>Flats in this visit (${flats.length})</h4>
+            ${flats.map((f, i) => {
+              const ss = Array.isArray(f.stepStatuses) ? f.stepStatuses : [];
+              const steps = ss.map(e => e.step + ' (' + e.status + ')').join(', ') || '—';
+              const label = String(f.flatNo || '').trim() || ('Flat ' + (i + 1));
+              return reviewRow((i === answers.activeFlat ? '▸ ' : '') + 'Flat ' + (i + 1) + ' · ' + label + (f.floor ? ' (' + f.floor + ')' : ''), steps);
+            }).join('')}
+          </div>`;
+      }
       return `
+        ${flatBarHtml()}
         <div class="panel">
           <div class="review-grid">
+            ${flatsCard}
             <div class="review-card">
               <h4>Basic Details</h4>
               ${reviewRow('Site Type', answers.siteType || '-')}
@@ -975,6 +996,8 @@
       answers.flatNo = '';
       answers.project = '';
       answers.doneSteps = [];
+      answers.flats = [];                 // fresh flat set for the developer path
+      answers.activeFlat = 0;
       resetProgressState();
       renderCurrentPage();
     }
@@ -1310,28 +1333,98 @@
       catch(e) { console.error(e); alert('Unable to save draft in this browser.'); }
     }
 
-    function submitForm() {
-      if (submitting) return;
-      submitting = true;
-      setSubmittedMode(true);
-      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><div class="spinner"></div><h2>Submitting report</h2><p>Uploading photos and saving your entry using the same Apps Script submit function.</p></div>';
+    // ===== Developer multi-flat: each flat is a full, INDEPENDENT report; one visit
+    // submits them together as payload.flats[]. General path stays single-report. Every
+    // per-flat field lives top-level (so the whole existing form keeps working on the
+    // "active" flat); switching flats just snapshots/restores these keys. =====
+    const PERFLAT_KEYS = ['flatNo','floor','teams','stepStatuses','doneSteps','status','holdReason','holdReasonDetail','lockedSteps','hiddenSteps','tentativeEndDate','tentativeLocked','activity','photo','tomorrowSteps','nextPlan','nextStepStartDate','amendment','amendmentWhy','drawingChange','drawingPhoto','measurement','measurementFile','generatedOrderId'];
+    function isMultiFlat() { return answers.clientType === 'Developer'; }
+    function snapshotPerFlat() { const s = {}; PERFLAT_KEYS.forEach(k => { s[k] = answers[k]; }); return s; }
+    function blankFlat() {
+      return { flatNo:'', floor:'', teams:[], stepStatuses:[], doneSteps:[], status:'', holdReason:'', holdReasonDetail:'',
+        lockedSteps:[], hiddenSteps:[], tentativeEndDate:'', tentativeLocked:false, activity:'', photo:[], tomorrowSteps:[],
+        nextPlan:'', nextStepStartDate:'', amendment:'', amendmentWhy:'', drawingChange:'', drawingPhoto:null,
+        measurement:'', measurementFile:null, generatedOrderId:'' };
+    }
+    function ensureFlats() {
+      if (!Array.isArray(answers.flats)) answers.flats = [];
+      if (typeof answers.activeFlat !== 'number' || answers.activeFlat < 0) answers.activeFlat = 0;
+      if (answers.flats.length === 0) { answers.flats.push(snapshotPerFlat()); answers.activeFlat = 0; }
+      if (answers.activeFlat >= answers.flats.length) answers.activeFlat = answers.flats.length - 1;
+    }
+    function saveActiveFlat() {
+      if (!Array.isArray(answers.flats) || !answers.flats.length) return;
+      answers.flats[answers.activeFlat] = snapshotPerFlat();
+    }
+    function loadFlat(i) {
+      const f = answers.flats[i] || blankFlat();
+      PERFLAT_KEYS.forEach(k => { answers[k] = f[k]; });
+      answers.activeFlat = i;
+      ['teams','stepStatuses','doneSteps','lockedSteps','hiddenSteps','tomorrowSteps','photo'].forEach(k => { if (!Array.isArray(answers[k])) answers[k] = []; });
+      syncTeams();
+    }
+    function switchFlat(i) { if (i === answers.activeFlat) return; saveActiveFlat(); loadFlat(i); renderCurrentPage(); }
+    function addFlatEntry() {
+      saveActiveFlat();
+      answers.flats.push(blankFlat());
+      loadFlat(answers.flats.length - 1);
+      resetProgressState();
+      currentPage = 0;                       // new flat starts at its first page
+      renderCurrentPage();
+    }
+    function removeFlatEntry(i) {
+      ensureFlats();
+      if (answers.flats.length <= 1) return;
+      answers.flats.splice(i, 1);
+      if (answers.activeFlat > i) answers.activeFlat--;
+      if (answers.activeFlat >= answers.flats.length) answers.activeFlat = answers.flats.length - 1;
+      loadFlat(answers.activeFlat);
+      renderCurrentPage();
+    }
+    // Flat switcher shown on the developer path once a building is picked.
+    function flatBarHtml() {
+      if (!isMultiFlat() || !answers.building) return '';
+      ensureFlats();
+      const flats = answers.flats || [];
+      return `<div class="flat-bar">
+        <div class="flat-bar-head"><span class="flat-bar-title">Flats this visit</span><span class="flat-bar-sub">Each flat is its own report — add one per flat you worked on.</span></div>
+        <div class="flat-chips">
+          ${flats.map((f, i) => {
+            const active = i === answers.activeFlat;
+            const label = String((active ? answers.flatNo : f.flatNo) || '').trim() || ('Flat ' + (i + 1));
+            return `<span class="flat-chip ${active ? 'active' : ''}" onclick="switchFlat(${i})">
+              <span class="flat-chip-name">${escapeHtml(label)}</span>
+              ${flats.length > 1 ? `<button type="button" class="flat-chip-x" title="Remove flat" onclick="event.stopPropagation(); removeFlatEntry(${i})">&times;</button>` : ''}
+            </span>`;
+          }).join('')}
+          <button type="button" class="flat-chip add" onclick="addFlatEntry()">+ Add flat</button>
+        </div>
+      </div>`;
+    }
+    // Flats still missing required details (checks all three input pages per flat).
+    function invalidFlatIndexes() {
+      const complete = () => isStep1Valid() && isStep2Valid() && isStep3Valid();
+      if (!isMultiFlat()) return complete() ? [] : [0];
+      ensureFlats();
+      saveActiveFlat();
+      const cur = answers.activeFlat;
+      const bad = [];
+      (answers.flats || []).forEach((_, i) => { loadFlat(i); if (!complete()) bad.push(i); });
+      loadFlat(cur);
+      return bad;
+    }
 
-      if (!window.google || !google.script || !google.script.run) {
-        onSubmitError({ message: 'This form must be opened from the Apps Script web app URL.' });
-        return;
-      }
-
-      // Per-step statuses -> summary + a representative status for the single-column
-      // sheet/DB fields (Hold > Pending > Done). Hold reason/detail from the first Hold step.
+    // Builds a full report payload from the CURRENT top-level answers (= one flat / one report).
+    function buildReportPayload() {
       const stepStatuses = answers.stepStatuses || [];
       const statusSummary = stepStatuses.map(e => e.step + ' (' + e.status + ')').join(', ');
       const holdEntry = stepStatuses.find(e => e.status === 'Hold');
+      // representative single-column status (Hold > Pending > Done > Not Required).
       const repStatus = stepStatuses.some(e => e.status === 'Hold') ? 'Hold'
         : stepStatuses.some(e => e.status === 'Pending') ? 'Pending'
         : stepStatuses.some(e => e.status === 'Done') ? 'Done'
         : (stepStatuses.length ? 'Not Required' : '');
-
-      const payload = {
+      return {
         siteType: answers.siteType,
         clientType: answers.clientType,
         developer: answers.developer,
@@ -1362,6 +1455,42 @@
         measurement: answers.measurement,
         measurementFile: answers.measurementFile || null
       };
+    }
+
+    function submitForm() {
+      if (submitting) return;
+
+      // Every flat must be complete before the visit can be submitted.
+      const bad = invalidFlatIndexes();
+      if (bad.length) {
+        const names = bad.map(i => String((answers.flats && answers.flats[i] && answers.flats[i].flatNo) || '').trim() || ('#' + (i + 1)));
+        alert('Please complete all details for flat(s): ' + names.join(', '));
+        if (isMultiFlat()) { saveActiveFlat(); loadFlat(bad[0]); }
+        currentPage = 0;
+        renderCurrentPage();
+        return;
+      }
+
+      submitting = true;
+      setSubmittedMode(true);
+      document.getElementById('pageMount').innerHTML = '<div class="center-screen"><div class="spinner"></div><h2>Submitting report</h2><p>Uploading photos and saving your entry.</p></div>';
+
+      if (!window.google || !google.script || !google.script.run) {
+        onSubmitError({ message: 'This form must be opened from the Apps Script web app URL.' });
+        return;
+      }
+
+      let payload;
+      if (isMultiFlat()) {
+        ensureFlats();
+        saveActiveFlat();
+        const flatsPayload = (answers.flats || []).map((_, i) => { loadFlat(i); return buildReportPayload(); });
+        loadFlat(0);                          // top-level = first flat (representative)
+        payload = buildReportPayload();
+        payload.flats = flatsPayload;         // every flat's own data -> per-flat progress writes
+      } else {
+        payload = buildReportPayload();
+      }
 
       google.script.run
         .withSuccessHandler(onSubmitSuccess)
@@ -1415,6 +1544,8 @@
       if (!Array.isArray(answers.teams)) answers.teams = [];
       if (!Array.isArray(answers.tomorrowSteps)) answers.tomorrowSteps = [];
       if (!Array.isArray(answers.hiddenSteps)) answers.hiddenSteps = [];
+      if (!Array.isArray(answers.flats)) answers.flats = [];
+      if (typeof answers.activeFlat !== 'number' || answers.activeFlat < 0) answers.activeFlat = 0;
       syncTeams();
       document.addEventListener('click', onDocProjectClick, true);   // close search dropdowns on outside click
       renderCurrentPage();
