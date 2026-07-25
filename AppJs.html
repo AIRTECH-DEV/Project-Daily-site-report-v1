@@ -1403,7 +1403,17 @@
       ['teams','stepStatuses','doneSteps','lockedSteps','hiddenSteps','tomorrowSteps','photo'].forEach(k => { if (!Array.isArray(answers[k])) answers[k] = []; });
       syncTeams();
     }
-    function switchFlat(i) { if (i === answers.activeFlat) return; saveActiveFlat(); loadFlat(i); renderCurrentPage(); }
+    function switchFlat(i) {
+      if (i === answers.activeFlat) return;
+      saveActiveFlat();
+      loadFlat(i);
+      // From Review: a fully-filled flat stays on Review (just re-review it); only an
+      // INCOMPLETE flat drops to page 1 so its missing details can be filled.
+      if (currentPage >= 3 && !(isStep1Valid() && isStep2Valid() && isStep3Valid())) {
+        currentPage = 0;
+      }
+      renderCurrentPage();
+    }
     function addFlatEntry() {
       saveActiveFlat();
       answers.flats.push(blankFlat());
