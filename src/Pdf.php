@@ -36,7 +36,7 @@ class Pdf
      * @param array $ctx [
      *   project_name, timestamp (string), headers[], rowValues[],
      *   photos => [ ['bytes'=>bin,'mime'=>str], ... ],
-     *   drawing => ['bytes'=>bin,'mime'=>str] | null,
+     *   drawings => [ ['bytes'=>bin,'mime'=>str], ... ]  (legacy: drawing => one blob),
      *   out_path => absolute pdf path
      * ]
      * @return string out_path
@@ -69,11 +69,7 @@ class Pdf
         // Page 1 = activity + details only.
         $pdf->AddPage();
 
-        if (!empty($ctx['drawing']['bytes'])) {
-            $this->sectionHeader($pdf, 'DRAWING CHANGE PHOTO');
-            $this->imageFit($pdf, $ctx['drawing'], 320, 220);
-            $pdf->Ln(10);
-        }
+        $this->drawingBlock($pdf, $ctx);
 
         $this->sectionHeader($pdf, 'SITE PHOTOS');
         $photos = $ctx['photos'] ?? [];
@@ -94,7 +90,7 @@ class Pdf
      * ONE consolidated PDF for a multi-flat developer visit. Shared title once, then a
      * per-flat section (banner + activity + details + drawing + photos), page-broken.
      * @param array $ctx [ project_name, timestamp, out_path,
-     *   flats => [ ['label','headers','rowValues','activity','photos','drawing',
+     *   flats => [ ['label','headers','rowValues','activity','photos','drawings',
      *               'client_hold','project_location'], ... ] ]
      */
     public function buildMulti(array $ctx): string
@@ -129,11 +125,7 @@ class Pdf
             $this->sectionHeader($pdf, 'PROJECT DETAILS');
             $this->detailTable($pdf, $f['headers'] ?? [], $f['rowValues'] ?? [], $f['client_hold'] ?? null, (string)($f['project_location'] ?? ''));
 
-            if (!empty($f['drawing']['bytes'])) {
-                $this->sectionHeader($pdf, 'DRAWING CHANGE PHOTO');
-                $this->imageFit($pdf, $f['drawing'], 320, 220);
-                $pdf->Ln(10);
-            }
+            $this->drawingBlock($pdf, $f);
 
             $this->sectionHeader($pdf, 'SITE PHOTOS');
             $photos = $f['photos'] ?? [];
@@ -328,6 +320,30 @@ class Pdf
         $dw = $iw * $scale; $dh = $ih * $scale;
         $ix = $x + ($w - $dw) / 2; $iy = $y + ($h - $dh) / 2;
         $pdf->Image($tmp['path'], $ix, $iy, $dw, $dh, $type);
+    }
+
+    /** DRAWING CHANGE section — one stacked image per uploaded drawing file. */
+    private function drawingBlock(PmsFpdf $pdf, array $ctx): void
+    {
+        $list = $this->drawingList($ctx);
+        if (!$list) { return; }
+        $this->sectionHeader($pdf, count($list) > 1 ? 'DRAWING CHANGE PHOTOS' : 'DRAWING CHANGE PHOTO');
+        foreach ($list as $d) {
+            if ($pdf->GetY() + 220 > $pdf->GetPageHeight() - 82) { $pdf->AddPage(); }
+            $this->imageFit($pdf, $d, 320, 220);
+            $pdf->Ln(10);
+        }
+    }
+
+    /** Accepts drawings => [ {bytes,mime}, ... ] and the older single drawing => {bytes,mime}. */
+    private function drawingList(array $ctx): array
+    {
+        $list = [];
+        foreach ((array)($ctx['drawings'] ?? []) as $d) {
+            if (is_array($d) && !empty($d['bytes'])) { $list[] = $d; }
+        }
+        if (!$list && !empty($ctx['drawing']['bytes'])) { $list[] = $ctx['drawing']; }
+        return $list;
     }
 
     private function imageFit(PmsFpdf $pdf, array $photo, float $maxW, float $maxH): void
