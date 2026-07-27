@@ -143,16 +143,15 @@ class Tracker
     private function stripReportFiles(array $r): array
     {
         foreach (['photos', 'drawingPhoto', 'measurementFile'] as $k) {
-            if (!isset($r[$k])) {
+            if (!isset($r[$k]) || !is_array($r[$k])) {
                 continue;
             }
-            if ($k === 'photos' && is_array($r[$k])) {
-                $r[$k] = array_map(fn($f) => is_array($f)
+            // Each slot is a list of blobs; older payloads sent a single blob object.
+            $r[$k] = (isset($r[$k]['base64']) || isset($r[$k]['name']))
+                ? ['name' => $r[$k]['name'] ?? '', 'mimeType' => $r[$k]['mimeType'] ?? '']
+                : array_map(fn($f) => is_array($f)
                     ? ['name' => $f['name'] ?? '', 'mimeType' => $f['mimeType'] ?? '']
                     : $f, $r[$k]);
-            } elseif (is_array($r[$k])) {
-                $r[$k] = ['name' => $r[$k]['name'] ?? '', 'mimeType' => $r[$k]['mimeType'] ?? ''];
-            }
         }
         return $r;
     }

@@ -28,11 +28,12 @@ $atts->execute([$id]);
 $atts = $atts->fetchAll();
 
 $photos = array_values(array_filter($atts, fn($a) => $a['kind'] === 'site_photo'));
-$pdf    = null; $drawing = null; $measure = null;
+// drawing / measurement each accept several uploads -> keep every one.
+$pdf = null; $drawings = []; $measures = [];
 foreach ($atts as $a) {
     if ($a['kind'] === 'pdf' && $a['url']) $pdf = $a;
-    if ($a['kind'] === 'drawing') $drawing = $a;
-    if ($a['kind'] === 'measurement') $measure = $a;
+    if ($a['kind'] === 'drawing' && $a['url']) $drawings[] = $a;
+    if ($a['kind'] === 'measurement' && $a['url']) $measures[] = $a;
 }
 
 $payload = json_decode((string)$s['payload_json'], true) ?: [];
@@ -278,8 +279,8 @@ if (count($visitFlats) > 1):
 
       <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:10px">
         <?php if ($pdf): ?><a class="att-file" href="<?= Admin::e($pdf['url']) ?>" target="_blank"><span class="pdf-ic"><i class="bi bi-file-earmark-pdf"></i></span> Report PDF</a><?php endif; ?>
-        <?php if ($drawing && $drawing['url']): ?><a class="att-file" href="<?= Admin::e($drawing['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--info-bg);color:var(--info)"><i class="bi bi-vector-pen"></i></span> Drawing change</a><?php endif; ?>
-        <?php if ($measure && $measure['url']): ?><a class="att-file" href="<?= Admin::e($measure['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--warn-bg);color:var(--warn)"><i class="bi bi-rulers"></i></span> Measurement</a><?php endif; ?>
+        <?php foreach ($drawings as $di => $drawing): ?><a class="att-file" href="<?= Admin::e($drawing['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--info-bg);color:var(--info)"><i class="bi bi-vector-pen"></i></span> Drawing change<?= count($drawings) > 1 ? ' ' . ($di + 1) : '' ?></a><?php endforeach; ?>
+        <?php foreach ($measures as $mi => $measure): ?><a class="att-file" href="<?= Admin::e($measure['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--warn-bg);color:var(--warn)"><i class="bi bi-rulers"></i></span> Measurement<?= count($measures) > 1 ? ' ' . ($mi + 1) : '' ?></a><?php endforeach; ?>
       </div>
     </div>
   </div>

@@ -20,7 +20,7 @@ class ResponseSheet
     /**
      * @param array  $p         submission payload
      * @param string $projectName resolved project/developer name for the row
-     * @param array  $urls      ['site'=>[url,...], 'drawing'=>?url, 'measurement'=>?url]
+     * @param array  $urls      ['site'=>[url,...], 'drawing'=>[url,...], 'measurement'=>[url,...]]
      * @param string $email     submitter email (or 'unknown')
      * @return array [tabName, rowNumber, headers, rowValues]
      */
@@ -73,15 +73,22 @@ class ResponseSheet
         $set($H('approval required?', 'why'), $p['amendment'] ?? 'No');
         $set($H('why'), ($p['amendment'] ?? '') === 'Yes' ? ($p['amendmentWhy'] ?? '') : 'N/A');
         $set($H('changes in drawing', 'upload photo here'), $p['drawingChange'] ?? 'No');
-        $set($H('upload photo here'), $urls['drawing'] ?? 'N/A');
+        $set($H('upload photo here'), self::urlCell($urls['drawing'] ?? null));
         $set($H('measurement report created today', 'upload the measurement'), $p['measurement'] ?? 'No');
-        $set($H('upload the measurement report here'), $urls['measurement'] ?? 'N/A');
+        $set($H('upload the measurement report here'), self::urlCell($urls['measurement'] ?? null));
         $set($H('mail status'), 'PENDING');
 
         $updatedRange = $this->sheets->appendRow($ssId, $tab, $row);
         $rowNum = $this->rowFromRange($updatedRange);
 
         return [$tab, $rowNum, $headers, $row];
+    }
+
+    /** Drawing / measurement can hold several uploads — one comma-joined cell, 'N/A' when empty. */
+    private static function urlCell($v): string
+    {
+        $s = is_array($v) ? implode(', ', array_filter(array_map('strval', $v))) : trim((string)$v);
+        return $s !== '' ? $s : 'N/A';
     }
 
     /** Stamp a header-named cell on an existing response row (PDF ID, Mail Status...). */

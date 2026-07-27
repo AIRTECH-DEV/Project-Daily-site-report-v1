@@ -306,8 +306,8 @@
       return planOk && !!answers.drawingChange && amendOk;
     }
     function isStep3Valid() {
-      const drawingOk = answers.drawingChange === 'Yes' ? !!answers.drawingPhoto : true;
-      const measurementOk = answers.measurement === 'Yes' ? !!answers.measurementFile : true;
+      const drawingOk = answers.drawingChange === 'Yes' ? fileArr(answers.drawingPhoto).length > 0 : true;
+      const measurementOk = answers.measurement === 'Yes' ? fileArr(answers.measurementFile).length > 0 : true;
       return drawingOk && !!answers.measurement && measurementOk;
     }
     function isCurrentPageValid() {
@@ -359,8 +359,8 @@
         if (answers.amendment === 'Yes' && String(answers.amendmentWhy || '').trim() === '') m.push('Amendment Notes');
       } else if (currentPage === 2) {
         if (!answers.measurement) m.push('Measurement Report Created Today?');
-        if (answers.drawingChange === 'Yes' && !answers.drawingPhoto) m.push('Drawing Change Photo');
-        if (answers.measurement === 'Yes' && !answers.measurementFile) m.push('Measurement Report File');
+        if (answers.drawingChange === 'Yes' && !fileArr(answers.drawingPhoto).length) m.push('Drawing Change Photo');
+        if (answers.measurement === 'Yes' && !fileArr(answers.measurementFile).length) m.push('Measurement Report File');
       }
       return m;
     }
@@ -759,27 +759,27 @@
     }
 
     function renderStep3() {
-      const drawingPhoto = answers.drawingPhoto ? [answers.drawingPhoto] : [];
+      const drawingPhoto = fileArr(answers.drawingPhoto);
       const measurement = answers.measurement || '';
-      const measurementFile = answers.measurementFile ? [answers.measurementFile] : [];
+      const measurementFile = fileArr(answers.measurementFile);
       const drawingPhotoBlock = answers.drawingChange === 'Yes'
         ? `
                 <div class="dropzone ${drawingPhoto.length ? 'has-files' : ''}" onclick="document.getElementById('drawingPhotoInput').click()">
                   <div class="drop-icon">+</div>
-                  <div class="drop-main">Upload drawing photo</div>
-                  <div class="drop-sub">Image or PDF accepted</div>
+                  <div class="drop-main">Upload drawing photos</div>
+                  <div class="drop-sub">Image or PDF · you can add multiple files</div>
                 </div>
-                <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('drawingPhoto', this.files, false)">
+                <input type="file" id="drawingPhotoInput" accept="image/*,.pdf" multiple style="display:none;" onchange="handleFiles('drawingPhoto', this.files, true)">
                 <div class="file-list" id="fileList-drawingPhoto"></div>`
         : '<div class="hint-note">This upload is required only when drawing change is Yes.</div>';
       const measurementFileBlock = measurement === 'Yes'
         ? `
                 <div class="dropzone ${measurementFile.length ? 'has-files' : ''}" onclick="document.getElementById('measurementFileInput').click()">
                   <div class="drop-icon">+</div>
-                  <div class="drop-main">Upload measurement report</div>
-                  <div class="drop-sub">PDF / Image accepted</div>
+                  <div class="drop-main">Upload measurement reports</div>
+                  <div class="drop-sub">PDF / Image · you can add multiple files</div>
                 </div>
-                <input type="file" id="measurementFileInput" accept="image/*,.pdf" style="display:none;" onchange="handleFiles('measurementFile', this.files, false)">
+                <input type="file" id="measurementFileInput" accept="image/*,.pdf" multiple style="display:none;" onchange="handleFiles('measurementFile', this.files, true)">
                 <div class="file-list" id="fileList-measurementFile"></div>`
         : '<div class="hint-note">This upload is required only when measurement report is Yes.</div>';
       return `
@@ -876,9 +876,9 @@
               ${reviewRow('Tentative End Date', answers.tentativeEndDate ? (fmtLongDate(answers.tentativeEndDate) + (daysLeftText(answers.tentativeEndDate) ? ' · ' + daysLeftText(answers.tentativeEndDate) : '')) : '-')}
               ${holdEntry ? reviewRow('Hold Reason', holdEntry.holdReason || '-') : ''}
               ${holdEntry ? reviewRow('Hold Detail', holdEntry.holdReasonDetail || '-') : ''}
-              ${reviewRow('Drawing Photo', answers.drawingPhoto ? answers.drawingPhoto.name : '-')}
+              ${reviewRow('Drawing Photo', fileArr(answers.drawingPhoto).map(f => f.name).join(', ') || '-')}
               ${reviewRow('Measurement Created', answers.measurement || '-')}
-              ${reviewRow('Measurement File', answers.measurementFile ? answers.measurementFile.name : '-')}
+              ${reviewRow('Measurement File', fileArr(answers.measurementFile).map(f => f.name).join(', ') || '-')}
             </div>
             <div class="review-card">
               <h4>Ready to Submit</h4>
@@ -1319,30 +1319,37 @@
     }
     function setYesNo(key, val) { answers[key] = val; renderCurrentPage(); }
 
+    // Upload slots hold a LIST of {name,mimeType,base64}. Older drafts stored a single
+    // object (or null) for drawingPhoto / measurementFile, so normalise on every read.
+    function fileArr(v) {
+      if (Array.isArray(v)) return v;
+      return v ? [v] : [];
+    }
+
     async function handleFiles(stepId, fileListRaw, multiple) {
       const newFiles = await Promise.all(Array.from(fileListRaw).map(async f => ({
         name: f.name,
         mimeType: f.type || 'application/octet-stream',
         base64: await fileToBase64(f)
       })));
-      if (multiple) answers[stepId] = (answers[stepId] || []).concat(newFiles);
+      if (multiple) answers[stepId] = fileArr(answers[stepId]).concat(newFiles);
       else answers[stepId] = newFiles[0] || null;
       renderCurrentPage();
     }
 
     function renderFileLists() {
       renderFileList('photo', true);
-      renderFileList('drawingPhoto', false);
-      renderFileList('measurementFile', false);
+      renderFileList('drawingPhoto', true);
+      renderFileList('measurementFile', true);
     }
     function renderFileList(stepId, multiple) {
       const el = document.getElementById('fileList-' + stepId);
       if (!el) return;
-      const files = multiple ? (answers[stepId] || []) : (answers[stepId] ? [answers[stepId]] : []);
+      const files = multiple ? fileArr(answers[stepId]) : (answers[stepId] ? [answers[stepId]] : []);
       el.innerHTML = files.map((f, i) => `<div class="file-chip"><span>${escapeHtml(f.name)}</span><button onclick="removeFile('${stepId}',${i},${multiple})">Remove</button></div>`).join('');
     }
     function removeFile(stepId, index, multiple) {
-      if (multiple) answers[stepId].splice(index, 1);
+      if (multiple) { const list = fileArr(answers[stepId]); list.splice(index, 1); answers[stepId] = list; }
       else answers[stepId] = null;
       renderCurrentPage();
     }
@@ -1383,8 +1390,8 @@
     function blankFlat() {
       return { flatNo:'', floor:'', teams:[], stepStatuses:[], doneSteps:[], status:'', holdReason:'', holdReasonDetail:'',
         lockedSteps:[], hiddenSteps:[], tentativeEndDate:'', tentativeLocked:false, activity:'', photo:[], tomorrowSteps:[],
-        nextPlan:'', nextStepStartDate:'', amendment:'', amendmentWhy:'', drawingChange:'', drawingPhoto:null,
-        measurement:'', measurementFile:null, generatedOrderId:'' };
+        nextPlan:'', nextStepStartDate:'', amendment:'', amendmentWhy:'', drawingChange:'', drawingPhoto:[],
+        measurement:'', measurementFile:[], generatedOrderId:'' };
     }
     function ensureFlats() {
       if (!Array.isArray(answers.flats)) answers.flats = [];
@@ -1501,9 +1508,9 @@
         amendment: answers.amendment,
         amendmentWhy: answers.amendmentWhy,
         drawingChange: answers.drawingChange,
-        drawingPhoto: answers.drawingPhoto || null,
+        drawingPhoto: fileArr(answers.drawingPhoto),
         measurement: answers.measurement,
-        measurementFile: answers.measurementFile || null
+        measurementFile: fileArr(answers.measurementFile)
       };
     }
 

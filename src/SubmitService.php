@@ -90,29 +90,33 @@ class SubmitService
                 $folderId = $this->drive->getOrCreateProjectFolder($projectName);
                 foreach ($reports as $ri => $rep) {
                     $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
-                    $urls = ['site' => [], 'drawing' => null, 'measurement' => null];
+                    $urls = $this->blankUrls();
                     foreach (($rep['photos'] ?? []) as $i => $f) {
                         $saved = $this->drive->saveBase64File($f, $folderId, $tag . 'SitePhoto_' . ($i + 1));
                         if ($saved) { $urls['site'][] = $saved['url']; $tracker->addAttachment('site_photo', $saved); $totalPhotos++; }
                     }
-                    if (($rep['drawingChange'] ?? '') === 'Yes' && !empty($rep['drawingPhoto'])) {
-                        $saved = $this->drive->saveBase64File($rep['drawingPhoto'], $folderId, $tag . 'DrawingChange');
-                        if ($saved) { $urls['drawing'] = $saved['url']; $tracker->addAttachment('drawing', $saved); }
+                    if (($rep['drawingChange'] ?? '') === 'Yes') {
+                        foreach ($this->filesOf($rep['drawingPhoto'] ?? null) as $i => $f) {
+                            $saved = $this->drive->saveBase64File($f, $folderId, $tag . 'DrawingChange_' . ($i + 1));
+                            if ($saved) { $urls['drawing'][] = $saved['url']; $tracker->addAttachment('drawing', $saved); }
+                        }
                     }
-                    if (($rep['measurement'] ?? '') === 'Yes' && !empty($rep['measurementFile'])) {
-                        $saved = $this->drive->saveBase64File($rep['measurementFile'], $folderId, $tag . 'MeasurementReport');
-                        if ($saved) { $urls['measurement'] = $saved['url']; $tracker->addAttachment('measurement', $saved); }
+                    if (($rep['measurement'] ?? '') === 'Yes') {
+                        foreach ($this->filesOf($rep['measurementFile'] ?? null) as $i => $f) {
+                            $saved = $this->drive->saveBase64File($f, $folderId, $tag . 'MeasurementReport_' . ($i + 1));
+                            if ($saved) { $urls['measurement'][] = $saved['url']; $tracker->addAttachment('measurement', $saved); }
+                        }
                     }
                     $reports[$ri]['_urls'] = $urls;
                 }
                 $tracker->stepDone($log, $totalPhotos . ' photo(s) uploaded' . ($isMulti ? (' across ' . count($reports) . ' flat(s)') : ''), 'folder ' . $folderId);
             } else {
-                foreach ($reports as $ri => $rep) { $reports[$ri]['_urls'] = ['site' => [], 'drawing' => null, 'measurement' => null]; }
+                foreach ($reports as $ri => $rep) { $reports[$ri]['_urls'] = $this->blankUrls(); }
                 $tracker->stepSkipped($log, 'Shared Drive not configured — photos not uploaded.');
                 $warnings[] = 'Photos not uploaded (Shared Drive not configured).';
             }
         } catch (Throwable $e) {
-            foreach ($reports as $ri => $rep) { if (!isset($reports[$ri]['_urls'])) { $reports[$ri]['_urls'] = ['site' => [], 'drawing' => null, 'measurement' => null]; } }
+            foreach ($reports as $ri => $rep) { if (!isset($reports[$ri]['_urls'])) { $reports[$ri]['_urls'] = $this->blankUrls(); } }
             $tracker->stepFailed($log, $e->getMessage());
             $warnings[] = 'Photo upload failed: ' . $e->getMessage();
         }
@@ -270,11 +274,7 @@ class SubmitService
             $bytes = $this->decode($f);
             if ($bytes !== null) { $photos[] = ['bytes' => $bytes, 'mime' => $f['mimeType'] ?? 'image/jpeg']; }
         }
-        $drawing = null;
-        if (($p['drawingChange'] ?? '') === 'Yes' && !empty($p['drawingPhoto'])) {
-            $b = $this->decode($p['drawingPhoto']);
-            if ($b !== null) { $drawing = ['bytes' => $b, 'mime' => $p['drawingPhoto']['mimeType'] ?? 'image/jpeg']; }
-        }
+        $drawings = $this->drawingImages($p);
 
         $dir = __DIR__ . '/../storage/reports';
         if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
@@ -290,7 +290,7 @@ class SubmitService
             'headers'          => $headers,
             'rowValues'        => $rowValues,
             'photos'           => $photos,
-            'drawing'          => $drawing,
+            'drawings'         => $drawings,
             'client_hold'      => $this->clientHoldText($p),
             'project_location' => $this->developerLocation($p),
             'out_path'         => $out,
@@ -308,18 +308,13 @@ class SubmitService
                 $bytes = $this->decode($f);
                 if ($bytes !== null) { $photos[] = ['bytes' => $bytes, 'mime' => $f['mimeType'] ?? 'image/jpeg']; }
             }
-            $drawing = null;
-            if (($rep['drawingChange'] ?? '') === 'Yes' && !empty($rep['drawingPhoto'])) {
-                $b = $this->decode($rep['drawingPhoto']);
-                if ($b !== null) { $drawing = ['bytes' => $b, 'mime' => $rep['drawingPhoto']['mimeType'] ?? 'image/jpeg']; }
-            }
             $flatsCtx[] = [
                 'label'            => $this->flatLabel($rep),
                 'headers'          => $rowsInfo[$ri]['headers'],
                 'rowValues'        => $rowsInfo[$ri]['rowValues'],
                 'activity'         => (string)($rep['activity'] ?? ''),
                 'photos'           => $photos,
-                'drawing'          => $drawing,
+                'drawings'         => $this->drawingImages($rep),
                 'client_hold'      => $this->clientHoldText($rep),
                 'project_location' => $this->developerLocation($rep),
             ];
@@ -396,6 +391,35 @@ class SubmitService
             $parts[] = $d !== '' ? $d : trim((string)$p['holdReason']);
         }
         return implode("\n", array_values(array_unique(array_filter($parts))));
+    }
+
+    /** Empty per-report URL bucket (drawing/measurement are lists — multiple uploads allowed). */
+    private function blankUrls(): array
+    {
+        return ['site' => [], 'drawing' => [], 'measurement' => []];
+    }
+
+    /**
+     * Upload slots accept many files, but older payloads (and saved drafts) carry a single
+     * {name,mimeType,base64} object. Normalises either shape to a list of file arrays.
+     */
+    private function filesOf($v): array
+    {
+        if (!is_array($v) || !$v) { return []; }
+        if (isset($v['base64']) || isset($v['name'])) { return [$v]; }   // single blob
+        return array_values(array_filter($v, 'is_array'));
+    }
+
+    /** Decoded drawing-change images for the PDF (empty unless drawingChange = Yes). */
+    private function drawingImages(array $r): array
+    {
+        if (($r['drawingChange'] ?? '') !== 'Yes') { return []; }
+        $out = [];
+        foreach ($this->filesOf($r['drawingPhoto'] ?? null) as $f) {
+            $b = $this->decode($f);
+            if ($b !== null) { $out[] = ['bytes' => $b, 'mime' => $f['mimeType'] ?? 'image/jpeg']; }
+        }
+        return $out;
     }
 
     private function decode(?array $f): ?string
