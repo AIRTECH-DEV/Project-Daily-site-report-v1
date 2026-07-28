@@ -401,6 +401,17 @@
     @media (max-width: 480px) {
       .svh-title { font-size: clamp(21px, 7.6vw, 30px); }
     }
+    .app-tabs {
+      display: flex; gap: 8px; padding: 10px; margin-top: 10px;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px;
+      box-shadow: 0 3px 12px rgba(0,0,0,.04);
+    }
+    .app-tab {
+      flex: 1; min-height: 42px; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px; text-decoration: none; color: #666; font-size: 13px; font-weight: 800;
+    }
+    .app-tab.active { color: #fff; background: var(--red); }
+    .app-tab:not(.active):hover { color: var(--red); background: #fff5f5; }
   </style>
 </head>
 <body>
@@ -424,6 +435,11 @@
           </div>
         </div>
       </section>
+
+      <nav class="app-tabs" aria-label="PMS sections">
+        <a class="app-tab active" href="./">New Report</a>
+        <a class="app-tab" href="reports.php">Report History</a>
+      </nav>
 
       <div id="pageMount"></div>
     </div>
