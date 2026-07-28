@@ -112,6 +112,43 @@ class Orders
         return ['site' => $site, 'billing' => $billing];
     }
 
+    /**
+     * 0-based Orders columns that hold a site address, best first: shipping /
+     * site location, then a bare "Address", then billing as the last resort.
+     * Callers must walk the list and take the first NON-EMPTY cell: the Non-VRV
+     * sheet still carries a legacy "Address" column that is empty on every row
+     * (the real one is "Full Shipping Address"), so picking the first header
+     * that merely contains "address" yields a blank for every Non-VRV order.
+     */
+    public static function addressCols(array $headers): array
+    {
+        $shipping = []; $plain = []; $billing = [];
+        foreach ($headers as $i => $h) {
+            $hl = strtolower((string)$h);
+            if (strpos($hl, 'address') === false || strpos($hl, 'email') !== false) {
+                continue;                       // "Email Address" is not a location
+            }
+            if (strpos($hl, 'shipping') !== false || strpos($hl, 'location') !== false) {
+                $shipping[] = $i;
+            } elseif (strpos($hl, 'billing') !== false) {
+                $billing[] = $i;
+            } else {
+                $plain[] = $i;
+            }
+        }
+        return array_merge($shipping, $plain, $billing);
+    }
+
+    /** First non-empty cell among $cols, '' when the row has none. */
+    public static function firstFilled(array $row, array $cols): string
+    {
+        foreach ($cols as $i) {
+            $v = trim((string)($row[$i] ?? ''));
+            if ($v !== '') { return $v; }
+        }
+        return '';
+    }
+
     /* ---------------- index ---------------- */
 
     private function index(string $siteType): array

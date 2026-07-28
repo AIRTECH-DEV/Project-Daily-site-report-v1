@@ -13,7 +13,8 @@
  * Client contact resolution mirrors the existing report notifiers:
  *   phone   -> Whatsapp::resolvePhones (Orders sheet phone cols / developer_phones)
  *   address -> Developer: "Developer - Building - Flat N"
- *              General:   Orders sheet address column (by project name)
+ *              General:   Orders sheet address column (by project name; the
+ *                         shipping/site column, falling back to billing)
  *
  * Never throws to the caller — a push problem must not affect anything else.
  * Sheets/Drive are optional: without them only the developer path is enriched
@@ -153,19 +154,21 @@ class CommissionPush
                 $cols = Orders::nameCols($headers);
                 $nameCols = array_merge($cols['site'], $cols['billing']);
                 if (!$nameCols) { $nameCols = [3]; }
-                $addrCol = -1; $emailCol = -1;
+                // Address: ranked candidates, first non-empty wins — the Non-VRV
+                // sheet's plain "Address" column is empty on every row.
+                $addrCols = Orders::addressCols($headers);
+                $emailCol = -1;
                 foreach ($headers as $i => $h) {
                     $c = strtolower((string)$h);
-                    if ($addrCol  < 0 && strpos($c, 'address') !== false) { $addrCol  = $i; }
-                    if ($emailCol < 0 && strpos($c, 'email')   !== false) { $emailCol = $i; }
+                    if ($emailCol < 0 && strpos($c, 'email') !== false) { $emailCol = $i; }
                 }
                 for ($r = 1; $r < count($rows); $r++) {
                     foreach ($nameCols as $nameCol) {
                         $key = strtolower(trim((string)($rows[$r][$nameCol] ?? '')));
                         if ($key === '') { continue; }
                         if (!isset($map[$key])) { $map[$key] = ['address' => '', 'email' => '']; }
-                        if ($addrCol  >= 0 && $map[$key]['address'] === '') {
-                            $map[$key]['address'] = trim((string)($rows[$r][$addrCol] ?? ''));
+                        if ($map[$key]['address'] === '') {
+                            $map[$key]['address'] = Orders::firstFilled($rows[$r], $addrCols);
                         }
                         if ($emailCol >= 0 && $map[$key]['email'] === '') {
                             $map[$key]['email'] = trim((string)($rows[$r][$emailCol] ?? ''));
