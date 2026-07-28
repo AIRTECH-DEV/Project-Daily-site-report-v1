@@ -341,7 +341,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ---
 
-## 10. Schedule the worker & PE-plan reminder (cron)
+## 10. Schedule the worker, PE-plan reminder & commissioning push (cron)
 
 On Windows these are Scheduled Tasks; on Linux use **cron as `www-data`** so files it
 writes match web ownership:
@@ -355,12 +355,26 @@ Add:
 
 # PE-plan reminder — runs every 15 min, self-gates to send once/day at send_time.
 */15 * * * * /usr/bin/php /var/www/html/pms/scripts/pe_plan_send.php >> /var/www/html/pms/storage/logs/pe_plan_cron.log 2>&1
+
+# Commissioning push — sends newly-Commissioned projects to the HVAC/VAPL backend.
+*/5 * * * * /usr/bin/php /var/www/html/pms/scripts/commission_push.php >> /var/www/html/pms/storage/logs/commission_cron.log 2>&1
 ```
 Check: `sudo crontab -u www-data -l`.
 
 > The per-submit spawn handles instant processing; this cron is the safety net that
 > guarantees the queue drains and delayed notifications fire even if a spawn is missed.
 > Keep the every-minute worker even with `exec()` enabled.
+
+**Commissioning push prerequisites** — without all three it is a silent no-op:
+1. `app_backend.url` + `api_key` set in `config/secrets.php` (see `secrets.example.php`).
+   Blank url ⇒ the script exits with `note: app_backend.url blank — push OFF`.
+2. `projects.app_pushed_at` exists (fresh installs: `admin_ext_schema.sql`; older DBs:
+   `db/commission_push.sql`; the script also self-adds it when the DB user has ALTER).
+3. A project only becomes a candidate once the **rollup** flags it `lifecycle =
+   'Commissioned'` — that happens in the admin sync, which auto-runs on admin page
+   load. If nobody opens the panel, also schedule `*/10 * * * * … scripts/admin_sync.php`.
+
+Verify: `sudo -u www-data php scripts/commission_push.php` → `{"pushed":N,"failed":0,…}`.
 
 ---
 
