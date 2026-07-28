@@ -86,9 +86,15 @@ $cfg = [
         'scrape_tab'      => 'VRV Scraped Data1',
         'scrape_name_col' => 1,            // 0-based col B (Project Name)
         'scrape_email_col'=> 3,            // 0-based col D (Scraped Emails)
+        // Must list BOTH Orders sheets — same pair as whatsapp.order_ss_ids. The
+        // Non-VRV one was missing, so every Non-VRV General report had no client
+        // address to find and silently fell back to fallback_to (crm@).
         'order_ss_ids'    => [
+            '1hvqgSI3f05d1wSoQVxaBPDzr4maHhTz5MLqhmN4a5Is',   // Non-VRV Orders
+            '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0',   // VRV Orders
+            // Legacy sheet — the service account gets 403 on it, so it contributes
+            // nothing today. Kept only so it starts working if it is ever shared.
             '1HwYDM6ARcDomEqmhqBTxRe3OsAzeezTq_8Wnhsm3_eY',
-            '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0',
         ],
         'order_tab'       => 'Orders',
         'developer_emails'=> [

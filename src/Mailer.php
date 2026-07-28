@@ -179,17 +179,28 @@ class Mailer
         return false;
     }
 
-    /** Keeps only real addresses from "a@x.com, No emails found". */
+    /**
+     * Keeps only real addresses from a free-text sheet cell such as
+     * "a@x.com, No emails found" or "a@x.com/, b@y.com" or "<a@x.com>".
+     *
+     * Strict, because Smtp::send() wraps each one as RCPT TO:<$addr> — a stray
+     * angle bracket or trailing slash from the Orders sheet makes the server
+     * reject the command and the WHOLE email (client + CC) fails, not just that
+     * recipient. "/" is a real separator in these sheets, so split on it too.
+     */
     private function cleanRecipients($raw): string
     {
         if ($raw === null || $raw === '') {
             return '';
         }
-        $parts = preg_split('/[,;\s]+/', (string)$raw);
-        $ok = array_filter($parts, function ($s) {
-            $at = strpos($s, '@');
-            return $at > 0 && strpos($s, '.', $at) !== false;
-        });
+        $ok = [];
+        foreach (preg_split('#[,;/\s]+#', (string)$raw) as $part) {
+            $addr = trim($part, " \t\n\r\0\x0B<>\"'.");
+            $key = strtolower($addr);
+            if ($addr !== '' && !isset($ok[$key]) && filter_var($addr, FILTER_VALIDATE_EMAIL)) {
+                $ok[$key] = $addr;      // first spelling of a duplicate wins
+            }
+        }
         return implode(',', $ok);
     }
 }
