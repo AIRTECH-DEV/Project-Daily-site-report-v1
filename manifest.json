@@ -1,0 +1,16 @@
+{
+  "name": "Daily Site Report",
+  "short_name": "Site Report",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f5f5",
+  "theme_color": "#d71920",
+  "icons": [
+    {
+      "src": "assets/images/pms-app-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

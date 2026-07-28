@@ -15,9 +15,6 @@ class Db
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
-            // Fail fast when MySQL is down/hung instead of hanging the request
-            // until nginx returns 504.
-            PDO::ATTR_TIMEOUT            => 5,
             // Server tz is UTC in prod; DEFAULT CURRENT_TIMESTAMP columns would
             // land 5:30 behind everything PHP writes. Pin the session to IST.
             PDO::MYSQL_ATTR_INIT_COMMAND => "SET time_zone = '+05:30'",

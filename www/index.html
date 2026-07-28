@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PMS</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background:#f5f5f5; color:#222; }
+      .box { max-width: 560px; margin: 40px auto; background:#fff; padding: 24px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+      code { background:#f3f3f3; padding:2px 6px; border-radius:4px; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h2>Opening PMS</h2>
+      <p>The app is loading your PHP site through the local server.</p>
+      <p>If it does not open automatically, make sure XAMPP Apache and MySQL are running and that your phone is connected to the same network as the computer.</p>
+      <ul>
+        <li><code>http://192.168.1.22/App_PMS/</code></li>
+      </ul>
+    </div>
+    <script>
+      (function () {
+        var candidates = [
+          'http://192.168.1.22/App_PMS/',
+          'http://10.0.2.2/App_PMS/',
+          'http://127.0.0.1/App_PMS/',
+          'http://localhost/App_PMS/',
+          'http://10.0.2.2/pms/',
+          'http://127.0.0.1/pms/',
+          'http://localhost/pms/'
+        ];
+        var current = 0;
+        function tryNext() {
+          if (current >= candidates.length) return;
+          var url = candidates[current++];
+          var iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = url;
+          iframe.onload = function () { window.location.replace(url); };
+          iframe.onerror = function () { tryNext(); };
+          document.body.appendChild(iframe);
+        }
+        tryNext();
+      })();
+    </script>
+  </body>
+</html>

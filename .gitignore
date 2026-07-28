@@ -1,6 +1,27 @@
 Project tasks.txt
 
 # Secrets — never commit the service-account private key
+# Local dependency installs
+node_modules/
+
+# Local notes and machine/server credentials
+pass.txt
+
+# Android/Gradle machine-specific and generated output
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+
+# IDE/OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
 config/google-service-account.json
 
 # Local secrets (SMTP app password, WhatsApp token) — set once per server, never committed

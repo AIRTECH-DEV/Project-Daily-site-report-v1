@@ -1,0 +1,31 @@
+{
+  "name": "project-daily-site-report-v1",
+  "version": "1.0.0",
+  "description": "**Owner:** Vakharia Air Tech Pvt. Ltd. (VAPL) — Daikin air-conditioning sales, service & projects, Pune, India\r **Repository:** `AIRTECH-DEV/<pms-repo>`\r **Status:** Production-ready · primary working branch `v10` → merges to `main`",
+  "main": "sw.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AIRTECH-DEV/Project-Daily-site-report-v1.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/AIRTECH-DEV/Project-Daily-site-report-v1/issues"
+  },
+  "homepage": "https://github.com/AIRTECH-DEV/Project-Daily-site-report-v1#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/ios": "^8.4.2",
+    "@capacitor/preferences": "^8.0.1"
+  }
+}

@@ -33,20 +33,9 @@ class Sync
              FROM submissions ORDER BY id ASC"
         )->fetchAll(PDO::FETCH_ASSOC);
 
-        // One transaction for the whole rebuild. Without it every row INSERT is
-        // its own commit — thousands of round trips that push a sync past the
-        // nginx fastcgi_read_timeout (504) once the table grows.
-        $own = !$db->inTransaction();
-        if ($own) { $db->beginTransaction(); }
-        try {
-            $wf   = self::rebuildWorkforce($db, $subs);
-            $proj = self::rebuildProjects($db, $subs);
-            $al   = self::rebuildAlerts($db, self::thr($cfg));
-            if ($own) { $db->commit(); }
-        } catch (Throwable $e) {
-            if ($own && $db->inTransaction()) { $db->rollBack(); }
-            throw $e;
-        }
+        $wf   = self::rebuildWorkforce($db, $subs);
+        $proj = self::rebuildProjects($db, $subs);
+        $al   = self::rebuildAlerts($db, self::thr($cfg));
 
         return [
             'submissions'   => count($subs),
@@ -75,9 +64,7 @@ class Sync
 
     private static function rebuildWorkforce(PDO $db, array $subs): array
     {
-        // DELETE, not TRUNCATE: TRUNCATE is DDL and implicitly commits, which
-        // would break run()'s transaction (and it takes a metadata lock).
-        $db->exec("DELETE FROM visit_workers");
+        $db->exec("TRUNCATE TABLE visit_workers");
 
         $insVW = $db->prepare(
             "INSERT INTO visit_workers (submission_id, project_key, worker_name, type, contractor_name, steps, engineer, visit_date)

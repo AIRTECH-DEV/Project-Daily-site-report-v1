@@ -51,10 +51,6 @@ class Admin
                     PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
                     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                     PDO::ATTR_EMULATE_PREPARES   => false,
-                    // Fail fast when MySQL is down/hung: without this the connect
-                    // can outlast nginx's fastcgi_read_timeout and the page 504s
-                    // instead of showing the "Database offline" banner.
-                    PDO::ATTR_TIMEOUT            => 5,
                     PDO::MYSQL_ATTR_INIT_COMMAND => "SET time_zone = '+05:30'",
                 ]
             );
@@ -301,41 +297,16 @@ class Admin
         self::runSync();
     }
 
-    /**
-     * Forces a sync now; returns stats (or [] on failure). Never throws.
-     *
-     * Two guards keep a slow sync from taking the whole panel down with 504s:
-     *  - flock single-flight, so concurrent page loads never pile up on the same
-     *    rebuild (the time stamp alone can't stop an overlap when a run outlives
-     *    the throttle window);
-     *  - the PHP session file is closed for the duration, otherwise the session
-     *    lock is held for the entire sync and EVERY other request from that
-     *    browser — login.php included — blocks in session_start() until nginx
-     *    gives up.
-     */
+    /** Forces a sync now; returns stats (or [] on failure). Never throws. */
     public static function runSync(): array
     {
         @file_put_contents(self::syncStampFile(), (string)time());   // stamp first to avoid stampede
-
-        $lockFile = self::syncStampFile() . '.lock';
-        $lock = @fopen($lockFile, 'c');
-        if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) {
-            fclose($lock);
-            return [];                       // another request is already syncing
-        }
-
-        $hadSession = session_status() === PHP_SESSION_ACTIVE;
-        if ($hadSession) { session_write_close(); }
-
         try {
             require_once __DIR__ . '/helpers.php';
             require_once __DIR__ . '/Sync.php';
             return Sync::run(self::db(), self::overrides());
         } catch (Throwable $e) {
             return [];
-        } finally {
-            if ($hadSession && !headers_sent()) { @session_start(); }
-            if ($lock) { @flock($lock, LOCK_UN); fclose($lock); }
         }
     }
 }

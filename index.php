@@ -77,6 +77,14 @@ window.PMS_ENGINEERS = $engJson;
   window.google.script = window.google.script || {};
   window.google.script.run = new Runner();
 })();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function (err) {
+      console.warn('Service worker registration failed', err);
+    });
+  });
+}
 </script>
 JS;
 
