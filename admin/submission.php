@@ -117,7 +117,7 @@ $flatSteps = function (array $payload, string $currentStatus): array {
 };
 
 $stepOrder = []; $stepStat = []; $stepDone = []; $stepHold = [];
-$allRows = $db->query("SELECT payload_json, current_status, created_at, client_type, developer, building, flat_no, project FROM submissions ORDER BY id ASC");
+$allRows = $db->query("SELECT payload_json, current_status, created_at, client_type, developer, building, flat_no, project, order_id FROM submissions ORDER BY id ASC");
 foreach ($allRows as $r) {
     if (projectKey($r) !== projectKey($s)) continue;
     $pl = json_decode((string)$r['payload_json'], true) ?: [];

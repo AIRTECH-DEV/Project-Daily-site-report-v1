@@ -147,8 +147,12 @@ class CommissionPush
                 $rows = $this->sheets->getTab($ssId, $tab);
                 if (count($rows) < 2) { continue; }
                 $headers = $rows[0];
-                $nameCol = Sheets::findColIndex($headers, 'project name');
-                if ($nameCol < 0) { $nameCol = 3; }
+                // Keyed under BOTH the site name and the client's billing name — a
+                // project filed under either must still carry its address/email to
+                // the commissioning app.
+                $cols = Orders::nameCols($headers);
+                $nameCols = array_merge($cols['site'], $cols['billing']);
+                if (!$nameCols) { $nameCols = [3]; }
                 $addrCol = -1; $emailCol = -1;
                 foreach ($headers as $i => $h) {
                     $c = strtolower((string)$h);
@@ -156,14 +160,16 @@ class CommissionPush
                     if ($emailCol < 0 && strpos($c, 'email')   !== false) { $emailCol = $i; }
                 }
                 for ($r = 1; $r < count($rows); $r++) {
-                    $key = strtolower(trim((string)($rows[$r][$nameCol] ?? '')));
-                    if ($key === '') { continue; }
-                    if (!isset($map[$key])) { $map[$key] = ['address' => '', 'email' => '']; }
-                    if ($addrCol  >= 0 && $map[$key]['address'] === '') {
-                        $map[$key]['address'] = trim((string)($rows[$r][$addrCol] ?? ''));
-                    }
-                    if ($emailCol >= 0 && $map[$key]['email'] === '') {
-                        $map[$key]['email'] = trim((string)($rows[$r][$emailCol] ?? ''));
+                    foreach ($nameCols as $nameCol) {
+                        $key = strtolower(trim((string)($rows[$r][$nameCol] ?? '')));
+                        if ($key === '') { continue; }
+                        if (!isset($map[$key])) { $map[$key] = ['address' => '', 'email' => '']; }
+                        if ($addrCol  >= 0 && $map[$key]['address'] === '') {
+                            $map[$key]['address'] = trim((string)($rows[$r][$addrCol] ?? ''));
+                        }
+                        if ($emailCol >= 0 && $map[$key]['email'] === '') {
+                            $map[$key]['email'] = trim((string)($rows[$r][$emailCol] ?? ''));
+                        }
                     }
                 }
             } catch (Throwable $e) {

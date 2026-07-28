@@ -121,20 +121,29 @@ class Mailer
                     continue;
                 }
                 $headers = $rows[0];
-                $nameCol = Sheets::findColIndex($headers, 'project name');
-                if ($nameCol < 0) { $nameCol = 3; }
+                // Index under BOTH the site name and the client's billing name, so a
+                // report filed under either still reaches the real client instead of
+                // falling through to fallback_to.
+                $cols = Orders::nameCols($headers);
+                if (!$cols['site'] && !$cols['billing']) { $cols['site'] = [3]; }
                 $mailCol = Sheets::findColIndex($headers, 'client email');
                 if ($mailCol < 0) { $mailCol = Sheets::findColIndex($headers, 'email'); }
                 if ($mailCol < 0) {
                     continue;
                 }
+                $byKind = ['site' => [], 'billing' => []];
                 for ($i = 1; $i < count($rows); $i++) {
-                    $name = strtolower(trim((string)($rows[$i][$nameCol] ?? '')));
                     $mail = $this->cleanRecipients($rows[$i][$mailCol] ?? '');
-                    if ($name !== '' && $mail !== '') {
-                        $map[$name] = $mail; // later sheet wins
+                    if ($mail === '') { continue; }
+                    foreach ($byKind as $kind => $_) {
+                        foreach ($cols[$kind] as $c) {
+                            $name = strtolower(trim((string)($rows[$i][$c] ?? '')));
+                            if ($name !== '') { $byKind[$kind][$name] = $mail; }
+                        }
                     }
                 }
+                // later sheet wins; within a sheet the site name beats a billing name
+                $map = array_merge($map, $byKind['billing'], $byKind['site']);
             } catch (Throwable $e) {
                 // sheet not accessible -> skip
             }

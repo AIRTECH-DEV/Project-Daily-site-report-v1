@@ -299,7 +299,7 @@ class Perf
 
         /* --- pass 1: submissions → who first completed which step --- */
         $subs = $db->query(
-            "SELECT id, engineer, project, developer, building, flat_no, client_type,
+            "SELECT id, engineer, project, order_id, developer, building, flat_no, client_type,
                     payload_json, created_at, status
              FROM submissions ORDER BY id ASC"
         )->fetchAll(PDO::FETCH_ASSOC);

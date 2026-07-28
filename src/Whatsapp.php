@@ -300,8 +300,11 @@ class Whatsapp
                     continue;
                 }
                 $headers = $rows[0];
-                $nameCol = Sheets::findColIndex($headers, 'project name');
-                if ($nameCol < 0) { $nameCol = 3; }
+                // Index under BOTH the site name and the client's billing name: a
+                // report filed under the billing name found no number at all while
+                // this map was keyed on the site name only.
+                $cols = Orders::nameCols($headers);
+                if (!$cols['site'] && !$cols['billing']) { $cols['site'] = [3]; }
                 $phoneCols = [];
                 foreach ($headers as $i => $h) {
                     if (stripos((string)$h, 'phone') !== false) { $phoneCols[] = $i; }
@@ -309,18 +312,26 @@ class Whatsapp
                 if (!$phoneCols) {
                     continue;
                 }
+                $byKind = ['site' => [], 'billing' => []];
                 for ($r = 1; $r < count($rows); $r++) {
-                    $key = strtolower(trim((string)($rows[$r][$nameCol] ?? '')));
-                    if ($key === '') { continue; }
                     $nums = [];
                     foreach ($phoneCols as $c) {
                         $nums = array_merge($nums, $this->splitPhones($rows[$r][$c] ?? ''));
                     }
                     $nums = array_values(array_unique($nums));
-                    if ($nums) {
-                        $map[$key] = array_values(array_unique(array_merge($map[$key] ?? [], $nums)));
+                    if (!$nums) { continue; }
+                    foreach ($byKind as $kind => $_) {
+                        foreach ($cols[$kind] as $c) {
+                            $key = strtolower(trim((string)($rows[$r][$c] ?? '')));
+                            if ($key === '') { continue; }
+                            $byKind[$kind][$key] = array_values(array_unique(
+                                array_merge($byKind[$kind][$key] ?? [], $nums)
+                            ));
+                        }
                     }
                 }
+                // Site name wins where a client's billing name collides with one.
+                $map = array_merge($map, $byKind['billing'], $byKind['site']);
             } catch (Throwable $e) {
                 // sheet not accessible -> skip
             }

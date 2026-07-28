@@ -47,11 +47,26 @@ function projectLabel(array $r): string
     return trim((string)($r['project'] ?? '')) ?: '(no project)';
 }
 
-/** A stable grouping key for "one project" across visits. */
+/**
+ * A stable grouping key for "one project" across visits.
+ *
+ * General reports group on ORDER ID, not the project name: the site-report
+ * dropdown used to offer a site name AND the client's billing name for the same
+ * order, so keying on the picked label listed one job as two projects, each with
+ * its own visit count and lifecycle. The name is only a stand-in for rows whose
+ * order was never resolved (pre-fix reports — see scripts/merge_project_aliases.php).
+ *
+ * Every caller must SELECT order_id alongside project/client_type, or its rows
+ * will key differently from the projects table and links will dead-end.
+ */
 function projectKey(array $r): string
 {
     if (($r['client_type'] ?? '') === 'Developer') {
         return 'D|' . strtolower(trim(($r['developer'] ?? '') . '|' . ($r['building'] ?? '') . '|' . ($r['flat_no'] ?? '')));
+    }
+    $orderId = strtolower(trim((string)($r['order_id'] ?? '')));
+    if ($orderId !== '') {
+        return 'O|' . $orderId;
     }
     return 'G|' . strtolower(trim((string)($r['project'] ?? '')));
 }

@@ -37,7 +37,7 @@ class PePlan
         // have work scheduled on several days across reports, so each (project,date)
         // is its own entry. The latest report for the same project+date wins.
         $plans = [];   // projectKey|date => plan
-        $sql = "SELECT id, project, developer, building, flat_no, client_type, engineer, created_at, payload_json
+        $sql = "SELECT id, project, order_id, developer, building, flat_no, client_type, engineer, created_at, payload_json
                 FROM submissions ORDER BY id ASC";
         foreach ($db->query($sql) as $r) {
             $pl = json_decode((string)$r['payload_json'], true) ?: [];
@@ -89,10 +89,15 @@ class PePlan
         return trim((string)($r['project'] ?? '')) ?: '(no project)';
     }
 
+    /** Mirror of helpers.php projectKey() — General groups on Order ID, not the name. */
     private function projectKey(array $r): string
     {
         if (($r['client_type'] ?? '') === 'Developer') {
             return 'D|' . strtolower(trim(($r['developer'] ?? '') . '|' . ($r['building'] ?? '') . '|' . ($r['flat_no'] ?? '')));
+        }
+        $orderId = strtolower(trim((string)($r['order_id'] ?? '')));
+        if ($orderId !== '') {
+            return 'O|' . $orderId;
         }
         return 'G|' . strtolower(trim((string)($r['project'] ?? '')));
     }
