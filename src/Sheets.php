@@ -149,49 +149,15 @@ class Sheets
     /* ---------------- getProjectNames (ported) ---------------- */
 
     /**
-     * Deduped, sorted project list for a site type, merging every project-name /
-     * billing-name column found by header text — same rules as code.js.
+     * Deduped, sorted project list for a site type — the SITE name of every order,
+     * one entry each. Orders owns the rules; see its header for why a flat merge of
+     * the site and client-billing name columns (the old behaviour) split one job
+     * into two projects.
      * @param array $cfg app config
      */
     public function getProjectNames(array $cfg, string $siteType): array
     {
-        $isVRV = ($siteType === 'VRV');
-        $sheetId = $isVRV ? $cfg['vrv_orders_sheet_id'] : $cfg['nonvrv_orders_sheet_id'];
-        $gid     = $isVRV ? $cfg['vrv_orders_gid'] : $cfg['nonvrv_orders_gid'];
-
-        $title = $this->titleForGid($sheetId, (int)$gid);
-        if ($title === null) {
-            return [];
-        }
-        $rows = $this->getTab($sheetId, $title);
-        if (count($rows) < 2) {
-            return [];
-        }
-        $headers = $rows[0];
-
-        $projectCols = [];
-        foreach ($headers as $i => $h) {
-            $hl = strtolower((string)$h);
-            $isProject =
-                strpos($hl, 'select project name') !== false ||
-                (strpos($hl, 'project name') !== false && strpos($hl, 'executive') === false) ||
-                strpos($hl, 'billing customer name') !== false;
-            if ($isProject) { $projectCols[] = $i; }
-        }
-        if (!$projectCols) {
-            return [];
-        }
-
-        $cleaned = [];
-        for ($r = 1; $r < count($rows); $r++) {
-            foreach ($projectCols as $c) {
-                $v = isset($rows[$r][$c]) ? trim(preg_replace('/\s+/', ' ', (string)$rows[$r][$c])) : '';
-                if ($v !== '') { $cleaned[$v] = true; }
-            }
-        }
-        $out = array_keys($cleaned);
-        sort($out, SORT_FLAG_CASE | SORT_STRING);
-        return $out;
+        return (new Orders($this, $cfg))->names($siteType);
     }
 
     /* ---------------- shared key helpers (ported) ---------------- */
@@ -205,6 +171,25 @@ class Sheets
     public static function compactKey($value): string
     {
         return preg_replace('/[^a-z0-9]/', '', self::normalizeKey($value));
+    }
+
+    /**
+     * True when a header names an ORDER ID column ("Order ID", "OrderID", "Order No").
+     * Shared by the Orders index and the PMS row finder so both agree on which
+     * column carries the identity. "Order Date" / "Order Type" are never it.
+     */
+    public static function isOrderIdHeader(string $text): bool
+    {
+        $t = self::normalizeKey($text);
+        if ($t === '' || strpos($t, 'order') === false) {
+            return false;
+        }
+        if (strpos($t, 'date') !== false) {
+            return false;
+        }
+        return $t === 'order'
+            || strpos($t, 'orderid') !== false
+            || (bool)preg_match('/(^|[^a-z])(id|no|no\.|number|code|ref)([^a-z]|$)/', $t);
     }
 
     /** 0-based header search by substring, case-insensitive, optional exclude (findColIndex). */

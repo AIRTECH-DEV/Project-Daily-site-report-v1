@@ -28,4 +28,16 @@ return [
         'pass' => '',        // the pms_user password
     ],
     'php_binary' => '',      // Linux: /usr/bin/php   ·   Windows/XAMPP: C:\xampp\php\php.exe
+
+    // HVAC commissioning intake (scripts/commission_push.php). Blank url = push OFF
+    // — silently, so a missing block here is why nothing ever reaches the app.
+    // CommissionPush appends "/ingest/commissioned" to the url; the VAPL endpoint
+    // routes on its query string instead, hence the trailing "&x=" on that URL.
+    //   prod: https://service.vakhariaairtech.com/vapl/api/commissioning_api.php?action=ingest_commissioned&x=
+    //   dev : http://localhost/vapl/api/commissioning_api.php
+    // api_key MUST equal VAPL_APP_API_KEY in vapl/config/config.php (and the app's apiKey).
+    'app_backend' => [
+        'url'     => '',
+        'api_key' => '',
+    ],
 ];

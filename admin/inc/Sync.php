@@ -360,7 +360,7 @@ class Sync
 
         // notification coverage: latest submission per project without an email/whatsapp done log
         $missing = $db->query(
-            "SELECT s.id, s.project, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT s.id, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
              FROM submissions s
              WHERE s.overall_status IN ('done','partial')
                AND NOT EXISTS (SELECT 1 FROM process_log p WHERE p.submission_id=s.id AND p.step IN ('email','whatsapp') AND p.status='done')
@@ -374,7 +374,7 @@ class Sync
 
         // pipeline failures
         $fails = $db->query(
-            "SELECT p.submission_id, p.step, p.message, s.project, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT p.submission_id, p.step, p.message, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
              FROM process_log p JOIN submissions s ON s.id=p.submission_id
              WHERE p.status='failed' ORDER BY p.id DESC LIMIT 100"
         )->fetchAll(PDO::FETCH_ASSOC);

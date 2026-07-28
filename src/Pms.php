@@ -18,11 +18,22 @@ class Pms
     private $sheets;
     /** @var array */
     private $cfg;
+    /** @var ?Orders */
+    private $orders = null;
 
     public function __construct(Sheets $sheets, array $cfg)
     {
         $this->sheets = $sheets;
         $this->cfg = $cfg;
+    }
+
+    /** Lazy Orders index (one sheet read, cached) — only General reports need it. */
+    private function orders(): Orders
+    {
+        if ($this->orders === null) {
+            $this->orders = new Orders($this->sheets, $this->cfg);
+        }
+        return $this->orders;
     }
 
     /**
@@ -223,18 +234,7 @@ class Pms
         $rows = $this->sheets->getTab($ssId, $title);
         $info = $this->headerInfo($rows);
 
-        $pmsRow = -1;
-        $orderId = $this->getOrderIdForProject((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
-        if ($orderId !== '') {
-            $orderCol = $this->findOrderIdCol($info);
-            if ($orderCol > 0) {
-                $pmsRow = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
-            }
-        }
-        if ($pmsRow < 0) {
-            $projCol = $this->findNamedCol($info, 'Project Name');
-            $pmsRow = $this->findRowByColValue($rows, $info, $projCol, (string)($p['project'] ?? ''));
-        }
+        [$pmsRow, $orderId] = $this->findGeneralRow($rows, $info, $p);
         if ($pmsRow < 0) {
             return ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => $orderId];
         }
@@ -572,26 +572,54 @@ class Pms
         $rows = $this->sheets->getTab($ssId, $title);
         $info = $this->headerInfo($rows);
 
-        // Match by Order ID first (exact shared key), fall back to project name.
-        $pmsRow = -1;
-        $orderId = $this->getOrderIdForProject((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
-        if ($orderId !== '') {
-            $orderCol = $this->findOrderIdCol($info);
-            if ($orderCol > 0) {
-                $pmsRow = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
-            }
-        }
+        [$pmsRow, $orderId] = $this->findGeneralRow($rows, $info, $p);
         if ($pmsRow < 0) {
-            $projCol = $this->findNamedCol($info, 'Project Name');
-            $pmsRow = $this->findRowByColValue($rows, $info, $projCol, (string)($p['project'] ?? ''));
-        }
-        if ($pmsRow < 0) {
+            // Carry the Order ID out even on a miss: it identifies the project for
+            // the tracker DB, and dropping it here is what let one job show up as
+            // two in the admin panel when the PMS row wasn't in the sheet yet.
             return $this->skip('Project "' . ($p['project'] ?? '') . '"'
                 . ($orderId !== '' ? ' (Order ID ' . $orderId . ')' : '')
-                . ' not found in ' . $tabName . '. Progress sheet not updated.');
+                . ' not found in ' . $tabName . '. Progress sheet not updated.', $orderId);
         }
         $this->updateRow($ssId, $title, $rows, $pmsRow, $info, $p, false);
         return ['updated' => true, 'warning' => '', 'order_id' => $orderId];
+    }
+
+    /**
+     * The PMS row for a General submission, plus the Order ID its project resolved to.
+     *
+     * Order ID is the identity: the dropdown offers a site name AND the client's
+     * billing name for the same order, so matching on the picked label alone filed
+     * one job under two names. Name matching stays as a fallback for rows whose
+     * Order ID cell is still blank, and tries EVERY name the order is known by —
+     * "PMS - VRV" files these under the site name but "PMS - NonVRV" under the
+     * billing name, so one fixed column value would miss half the time.
+     *
+     * @return array [1-based row or -1, order id or '']
+     */
+    private function findGeneralRow(array $rows, array $info, array $p): array
+    {
+        $siteType = (string)($p['siteType'] ?? '');
+        $picked   = (string)($p['project'] ?? '');
+        $orderId  = $this->orders()->orderIdFor($siteType, $picked);
+
+        if ($orderId !== '') {
+            $orderCol = $this->findOrderIdCol($info);
+            if ($orderCol > 0) {
+                $row = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
+                if ($row >= 0) {
+                    return [$row, $orderId];
+                }
+            }
+        }
+        $projCol = $this->findNamedCol($info, 'Project Name');
+        foreach ($this->orders()->matchNames($siteType, $picked) as $name) {
+            $row = $this->findRowByColValue($rows, $info, $projCol, $name);
+            if ($row >= 0) {
+                return [$row, $orderId];
+            }
+        }
+        return [-1, $orderId];
     }
 
     /* ---------------- write one PMS row (updatePmsRow_) ---------------- */
@@ -878,24 +906,10 @@ class Pms
         return -1;
     }
 
-    private function isOrderIdHeader(string $text): bool
-    {
-        $t = Sheets::normalizeKey($text);
-        if ($t === '' || strpos($t, 'order') === false) {
-            return false;
-        }
-        if (strpos($t, 'date') !== false) {
-            return false;
-        }
-        return $t === 'order'
-            || strpos($t, 'orderid') !== false
-            || (bool)preg_match('/(^|[^a-z])(id|no|no\.|number|code|ref)([^a-z]|$)/', $t);
-    }
-
     private function findOrderIdCol(array $info): int
     {
         for ($i = 0; $i < $info['lastCol']; $i++) {
-            if ($this->isOrderIdHeader((string)$info['subVals'][$i]) || $this->isOrderIdHeader((string)$info['groupVals'][$i])) {
+            if (Sheets::isOrderIdHeader((string)$info['subVals'][$i]) || Sheets::isOrderIdHeader((string)$info['groupVals'][$i])) {
                 return $i + 1;
             }
         }
@@ -958,57 +972,6 @@ class Pms
         return $digitHits === 1 ? $digitRow : -1;
     }
 
-    /* ---------------- Order ID from Orders sheet (getOrderIdForProject_) ---------------- */
-
-    private function getOrderIdForProject(string $siteType, string $projectName): string
-    {
-        $want = Sheets::normalizeKey($projectName);
-        if ($want === '') {
-            return '';
-        }
-        try {
-            $isVRV = ($siteType === 'VRV');
-            $ssId = $isVRV ? $this->cfg['vrv_orders_sheet_id'] : $this->cfg['nonvrv_orders_sheet_id'];
-            $gid  = $isVRV ? $this->cfg['vrv_orders_gid'] : $this->cfg['nonvrv_orders_gid'];
-            $title = $this->sheets->titleForGid($ssId, (int)$gid);
-            if ($title === null) {
-                return '';
-            }
-            $rows = $this->sheets->getTab($ssId, $title);
-            if (count($rows) < 2) {
-                return '';
-            }
-            $headers = $rows[0];
-            $orderCol = -1;
-            $nameCols = [];
-            foreach ($headers as $i => $h) {
-                if ($orderCol < 0 && $this->isOrderIdHeader((string)$h)) {
-                    $orderCol = $i;
-                }
-                $hl = strtolower((string)$h);
-                if (strpos($hl, 'select project name') !== false
-                    || (strpos($hl, 'project name') !== false && strpos($hl, 'executive') === false)
-                    || strpos($hl, 'billing customer name') !== false) {
-                    $nameCols[] = $i;
-                }
-            }
-            if ($orderCol < 0 || !$nameCols) {
-                return '';
-            }
-            for ($r = 1; $r < count($rows); $r++) {
-                foreach ($nameCols as $c) {
-                    if (Sheets::normalizeKey($rows[$r][$c] ?? '') === $want) {
-                        $oid = $rows[$r][$orderCol] ?? '';
-                        return trim((string)$oid);
-                    }
-                }
-            }
-            return '';
-        } catch (Throwable $e) {
-            return '';
-        }
-    }
-
     /* ---------------- misc ---------------- */
 
     private function cell(array $rows, int $row1, int $col1)
@@ -1049,8 +1012,9 @@ class Pms
         return $d ? $d->format('d-M-Y') : $ymd;
     }
 
-    private function skip(string $msg): array
+    /** Not stamped — but still report the Order ID when we know it (see updateGeneral). */
+    private function skip(string $msg, string $orderId = ''): array
     {
-        return ['updated' => false, 'warning' => $msg];
+        return ['updated' => false, 'warning' => $msg, 'order_id' => $orderId];
     }
 }

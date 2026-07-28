@@ -67,6 +67,31 @@ class SubmitService
         $tracker->updateSubmission(['overall_status' => 'processing']);
 
         $isDeveloper = ($p['clientType'] ?? '') === 'Developer';
+
+        // Pin a General report to its order and file it under the site name BEFORE
+        // anything downstream keys off that name — otherwise one job splits in two:
+        // two Drive folders, two admin projects, and a phone/email lookup that
+        // misses. The dropdown is site-names-only now, but a saved draft or a
+        // hand-typed entry can still arrive holding the client's billing name.
+        if (!$isDeveloper) {
+            $rec = (new Orders($this->sheets, $this->cfg))
+                ->resolve((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
+            if ($rec) {
+                $patch = [];
+                if ($rec['canonical'] !== '' && $rec['canonical'] !== ($p['project'] ?? '')) {
+                    $p['project'] = $rec['canonical'];
+                    $job['payload']['project'] = $rec['canonical'];
+                    $patch['project'] = $rec['canonical'];
+                }
+                if ($rec['order_id'] !== '') {
+                    $patch['order_id'] = $rec['order_id'];
+                }
+                if ($patch) {
+                    $tracker->updateSubmission($patch);
+                }
+            }
+        }
+
         $projectName = trim((string)($isDeveloper
             ? ($p['developer'] ?: 'General_Reports')
             : ($p['project'] ?: 'General_Reports')));

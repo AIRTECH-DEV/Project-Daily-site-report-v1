@@ -16,7 +16,7 @@ $db = Admin::db();
 // resolve the project: ?key=<project_key> or ?id=<submission_id>
 $key = trim($_GET['key'] ?? '');
 if ($key === '' && isset($_GET['id'])) {
-    $st = $db->prepare("SELECT client_type, developer, building, flat_no, project FROM submissions WHERE id=?");
+    $st = $db->prepare("SELECT client_type, developer, building, flat_no, project, order_id FROM submissions WHERE id=?");
     $st->execute([(int)$_GET['id']]);
     if ($row = $st->fetch()) $key = projectKey($row);
 }
