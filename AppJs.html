@@ -112,6 +112,19 @@
       return String(str == null ? '' : str).toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 
+    // The existing submission contract expects one text field (`engineer`). Keep it
+    // intact while allowing the picker to hold up to two distinct PE names.
+    function selectedEngineers() {
+      let selected = Array.isArray(answers.engineers) ? answers.engineers.slice() : [];
+      if (!selected.length && String(answers.engineer || '').trim()) {
+        const legacy = String(answers.engineer).trim();
+        selected = ENGINEERS.includes(legacy) ? [legacy] : legacy.split(/\s*,\s*/);
+      }
+      return selected.filter((name, index, list) =>
+        String(name).trim() !== '' && list.indexOf(name) === index
+      ).slice(0, 2);
+    }
+
     // 'YYYY-MM-DD' -> local-midnight Date. Plain new Date(str) parses ISO as UTC,
     // which shifts the day for anyone behind GMT. null when not an ISO date.
     function parseISODate(str) {
@@ -411,7 +424,8 @@
       const floor = answers.floor || '';
       const flatNo = answers.flatNo || '';
       const project = answers.project || '';
-      const engineer = answers.engineer || '';
+      const engineers = selectedEngineers();
+      const engineer = engineers.join(', ');
       const activity = answers.activity || '';
       const amend = answers.amendment || '';
       const photoCount = (answers.photo || []).length;
@@ -575,12 +589,24 @@
               <div class="section">
                 <div class="section-head">
                   ${iconUser()}
-                  <div><div class="section-title">Assigned Engineer</div><div class="section-sub">Select the engineer who visited the site.</div></div>
+                  <div><div class="section-title">Assigned Engineer</div><div class="section-sub">Select up to two project engineers who visited the site.</div></div>
                 </div>
-                <select class="dropdown-field ${engineer ? '' : 'placeholder'}" id="engineerSelect" onchange="selectEngineer(this.value)">
-                  <option value="">Select project engineer</option>
-                  ${ENGINEERS.map(name => `<option value="${escapeHtml(name)}" ${engineer === name ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
-                </select>
+                <div class="engineer-picker" id="engineerPicker">
+                  <button type="button" class="dropdown-field engineer-trigger ${engineer ? '' : 'placeholder'}" onclick="toggleEngineerPicker(event)" aria-haspopup="listbox" aria-expanded="false">
+                    <span>${engineer ? escapeHtml(engineer) : 'Select project engineer(s)'}</span>
+                  </button>
+                  <div class="engineer-menu" id="engineerMenu" role="listbox" aria-multiselectable="true">
+                    ${ENGINEERS.map((name, index) => {
+                      const checked = engineers.includes(name);
+                      const disabled = !checked && engineers.length >= 2;
+                      return `<label class="engineer-option ${disabled ? 'disabled' : ''}">
+                        <input type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} onchange="selectEngineer(${index})">
+                        <span>${escapeHtml(name)}</span>
+                      </label>`;
+                    }).join('')}
+                    <div class="engineer-limit">${engineers.length}/2 selected</div>
+                  </div>
+                </div>
               </div>
 
               <div class="section">
@@ -926,13 +952,20 @@
       input.addEventListener('focus', function(e) { onProjectSearch(e); });
     }
 
-    // Closes any open search dropdown (project OR flat) on an outside click.
+    // Closes any open search or engineer dropdown on an outside click.
     // Registered once in init().
     function onDocProjectClick(e) {
       document.querySelectorAll('.search-wrap').forEach(function (wrap) {
         const res = wrap.querySelector('.search-results');
         if (res && !wrap.contains(e.target)) res.style.display = 'none';
       });
+      const picker = document.getElementById('engineerPicker');
+      if (picker && !picker.contains(e.target)) {
+        const menu = document.getElementById('engineerMenu');
+        const trigger = picker.querySelector('.engineer-trigger');
+        if (menu) menu.style.display = 'none';
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+      }
     }
 
     function onProjectSearch(e) {
@@ -1195,7 +1228,30 @@
       const chip = document.getElementById('nextStepStartChip');
       if (chip) chip.innerHTML = startDateChipHtml(val);
     }
-    function selectEngineer(value) { answers.engineer = value; renderCurrentPage(); }
+    function toggleEngineerPicker(event) {
+      if (event) event.stopPropagation();
+      const menu = document.getElementById('engineerMenu');
+      const trigger = document.querySelector('.engineer-trigger');
+      if (!menu) return;
+      const open = menu.style.display !== 'block';
+      menu.style.display = open ? 'block' : 'none';
+      if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    function selectEngineer(index) {
+      const name = ENGINEERS[index];
+      if (!name) return;
+      const selected = selectedEngineers();
+      const at = selected.indexOf(name);
+      if (at > -1) selected.splice(at, 1);
+      else if (selected.length < 2) selected.push(name);
+      answers.engineers = selected;
+      answers.engineer = selected.join(', '); // unchanged value used by submit/PDF/sheets
+      renderCurrentPage();
+      const menu = document.getElementById('engineerMenu');
+      const trigger = document.querySelector('.engineer-trigger');
+      if (menu) menu.style.display = 'block';
+      if (trigger) trigger.setAttribute('aria-expanded', 'true');
+    }
 
     // ----- Team on Site: N teams; each team = people[{name,type,contractor}] + shared workDone[] -----
     function newPerson() { return { name: '', techType: '', contractorName: '' }; }
