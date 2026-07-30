@@ -12,34 +12,123 @@ require __DIR__ . '/inc/helpers.php';
 
 $cfg = Admin::cfg();      // already merged with existing overrides
 $flash = ''; $flashType = 'ok';
+$action = (string)($_POST['action'] ?? '');
 
-// Operational/tracker tables holding submitted report data + everything derived
-// from it. Cleared by the Danger Zone reset. Auth/ops tables (admin_users,
-// rate_limits, audit_logs) and config/overrides.json are intentionally kept.
-$DATA_TABLES = [
-    'submissions', 'process_log', 'attachments',   // live pipeline (schema.sql)
-    'visit_workers', 'projects', 'contractors', 'workers', 'alerts', 'alert_events', // derived (admin_ext)
-];
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'clear_data') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'delete_submission') {
     Admin::requireEditor();
     if (!Admin::checkCsrf()) {
-        $flash = 'Invalid request token. Refresh and try again.'; $flashType = 'bad';
+        $flash = 'Invalid request token. Refresh and try again. Nothing was deleted.'; $flashType = 'bad';
     } elseif (trim((string)($_POST['confirm'] ?? '')) !== 'DELETE') {
-        $flash = 'Type DELETE in the box to confirm. Nothing was cleared.'; $flashType = 'bad';
+        $flash = 'Type DELETE exactly to confirm. Nothing was deleted.'; $flashType = 'bad';
+    } elseif (!ctype_digit((string)($_POST['submission_id'] ?? '')) || (int)$_POST['submission_id'] < 1) {
+        $flash = 'Select a valid report row. Nothing was deleted.'; $flashType = 'bad';
     } else {
+        $db = null;
+        $deleteCommitted = false;
         try {
             $db = Admin::db();
-            $db->exec('SET FOREIGN_KEY_CHECKS=0');
-            foreach ($DATA_TABLES as $t) $db->exec("TRUNCATE TABLE `$t`");
-            $db->exec('SET FOREIGN_KEY_CHECKS=1');
-            @unlink(__DIR__ . '/../storage/.admin_sync');   // force fresh sync next load
-            Admin::audit('clear_tracker_data', 'submissions', null, '', 'truncated: ' . implode(',', $DATA_TABLES));
-            $flash = 'All tracker data cleared. Sheets untouched. Dashboard is now empty — new submissions rebuild it.';
+            $id = (int)$_POST['submission_id'];
+            $db->beginTransaction();
+
+            $find = $db->prepare(
+                "SELECT id, public_id, site_type, client_type, developer, building, flat_no, project, order_id,
+                        engineer, overall_status, created_at
+                 FROM submissions WHERE id = ? FOR UPDATE"
+            );
+            $find->execute([$id]);
+            $deleted = $find->fetch(PDO::FETCH_ASSOC);
+            if (!$deleted) {
+                throw new RuntimeException('The selected report no longer exists.');
+            }
+            if (in_array($deleted['overall_status'], ['received','queued','processing','awaiting_notify'], true)) {
+                throw new RuntimeException('This report is still processing and cannot be deleted yet.');
+            }
+
+            $affectedWorkers = $db->prepare(
+                "SELECT DISTINCT worker_id, contractor_id FROM visit_workers WHERE submission_id = ?"
+            );
+            $affectedWorkers->execute([$id]);
+            $affected = $affectedWorkers->fetchAll(PDO::FETCH_ASSOC);
+
+            // alert_events has no FK; process logs and attachments cascade from submissions.
+            $db->prepare(
+                "DELETE ae FROM alert_events ae
+                 INNER JOIN alerts a ON a.id = ae.alert_id
+                 WHERE a.submission_id = ?"
+            )->execute([$id]);
+            $db->prepare("DELETE FROM alerts WHERE submission_id = ?")->execute([$id]);
+            $db->prepare("DELETE FROM visit_workers WHERE submission_id = ?")->execute([$id]);
+            $remove = $db->prepare("DELETE FROM submissions WHERE id = ?");
+            $remove->execute([$id]);
+            if ($remove->rowCount() !== 1) {
+                throw new RuntimeException('The selected report could not be deleted.');
+            }
+            $db->commit();
+            $deleteCommitted = true;
+            $label = projectLabel($deleted);
+            Admin::audit(
+                'delete_submission',
+                'submissions',
+                $id,
+                json_encode($deleted, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'deleted selected report; rebuilding derived tracker data'
+            );
+
+            // Remove this project master only if no other submission resolves to the
+            // same project key; surviving projects are refreshed by the sync below.
+            $deletedProjectKey = projectKey($deleted);
+            $projectStillExists = false;
+            $remaining = $db->query(
+                "SELECT site_type, client_type, developer, building, flat_no, project, order_id
+                 FROM submissions"
+            )->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($remaining as $report) {
+                if (projectKey($report) === $deletedProjectKey) {
+                    $projectStillExists = true;
+                    break;
+                }
+            }
+            if (!$projectStillExists) {
+                $db->prepare("DELETE FROM projects WHERE project_key = ?")->execute([$deletedProjectKey]);
+            }
+
+            // Rebuild project/workforce/alert rollups from all reports that remain.
+            @unlink(__DIR__ . '/../storage/.admin_sync');
+            Admin::runSync();
+
+            // Preserve shared/manual master rows; remove only newly orphaned rows that
+            // were connected to the deleted submission.
+            $workerIds = array_values(array_unique(array_filter(array_map(
+                static fn($r) => (int)($r['worker_id'] ?? 0), $affected
+            ))));
+            $contractorIds = array_values(array_unique(array_filter(array_map(
+                static fn($r) => (int)($r['contractor_id'] ?? 0), $affected
+            ))));
+            foreach ($workerIds as $workerId) {
+                $db->prepare(
+                    "DELETE FROM workers WHERE id = ?
+                     AND NOT EXISTS (SELECT 1 FROM visit_workers WHERE worker_id = ?)"
+                )->execute([$workerId, $workerId]);
+            }
+            foreach ($contractorIds as $contractorId) {
+                $db->prepare(
+                    "DELETE FROM contractors WHERE id = ?
+                     AND NOT EXISTS (SELECT 1 FROM visit_workers WHERE contractor_id = ?)"
+                )->execute([$contractorId, $contractorId]);
+            }
+
+            $flash = 'Report #' . $id . ' (' . $label . ') was permanently deleted. Google Sheets and Drive files were untouched.';
         } catch (Throwable $e) {
-            $flash = 'Could not clear data: ' . $e->getMessage(); $flashType = 'bad';
+            if ($db instanceof PDO && $db->inTransaction()) $db->rollBack();
+            $flash = $deleteCommitted
+                ? 'The report was deleted, but some dashboard rollups could not refresh: ' . $e->getMessage()
+                : 'Could not delete report: ' . $e->getMessage();
+            $flashType = 'bad';
         }
     }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'clear_data') {
+    // Retired endpoint: an old/cached bulk-delete form must never clear the database.
+    $flash = 'Bulk deletion is disabled. Select one report row to delete.'; $flashType = 'bad';
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     Admin::requireEditor();
     if (!Admin::checkCsrf()) {
@@ -146,6 +235,7 @@ $alertsMode   = $ov['alerts_mode'] ?? 'OFF';
 $alertsEmail  = !empty($ov['alerts_email']);
 $managerEmail = (string)($ov['alert_manager_email'] ?? '');
 $peNames = array_keys($teamContacts);
+foreach (($cfg['engineers'] ?? []) as $e) { if (!empty($e['active'])) $peNames[] = $e['name']; }   // roster from admin/users.php
 try { foreach (Admin::db()->query("SELECT DISTINCT primary_pe FROM projects WHERE primary_pe<>''") as $r) $peNames[] = $r['primary_pe']; } catch (Throwable $e) {}
 $peNames = array_values(array_unique($peNames));
 sort($peNames);
@@ -162,9 +252,29 @@ $peTestTo   = $cfg['pe_plan']['test_to'] ?? '';
 $peTpl      = $cfg['pe_plan']['template_name'] ?? 'pe_plan_reminder';
 $peTestDate = date('Y-m-d', strtotime('+1 day'));   // test defaults to tomorrow (the real reminder day)
 
-// Danger Zone — how many submissions currently in the DB (guides the reset copy)
+// Danger Zone — database-backed report search for guarded deletion.
+$deleteRows = [];
+$deleteSearch = trim((string)($_GET['delete_q'] ?? ''));
 $subCount = 0;
-try { $subCount = (int)Admin::db()->query("SELECT COUNT(*) FROM submissions")->fetchColumn(); } catch (Throwable $e) {}
+try {
+    $deleteDb = Admin::db();
+    $subCount = (int)$deleteDb->query("SELECT COUNT(*) FROM submissions")->fetchColumn();
+    $deleteSql =
+        "SELECT id, public_id, site_type, client_type, developer, building, flat_no, project,
+                engineer, overall_status, created_at
+         FROM submissions";
+    if ($deleteSearch !== '') {
+        $deleteSql .=
+            " WHERE CONCAT_WS(' ', id, public_id, site_type, client_type, developer, building,
+                       flat_no, project, engineer, overall_status,
+                       DATE_FORMAT(created_at, '%d %b %Y %h:%i %p')) LIKE ?";
+    }
+    $deleteSql .= " ORDER BY id DESC LIMIT 200";
+    $deleteStmt = $deleteDb->prepare($deleteSql);
+    $deleteStmt->execute($deleteSearch !== '' ? ['%' . $deleteSearch . '%'] : []);
+    $deleteRows = $deleteStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {}
+$deleteShown = count($deleteRows);
 
 // one-shot flash from the "Send test now" endpoint (pe_plan_test.php)
 if (!empty($_SESSION['pe_plan_flash'])) {
@@ -391,34 +501,156 @@ Layout::head('Settings', 'settings');
   </fieldset>
 </form>
 
+<style>
+  .delete-search{display:flex;align-items:center;gap:9px;margin:0 0 14px}
+  .delete-search-field{position:relative;flex:1;max-width:650px}
+  .delete-search-field i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#8b9ab0;pointer-events:none}
+  .delete-search-field input{width:100%;height:42px;border:1px solid #dce3ec;border-radius:8px;background:#fff;padding:0 13px 0 38px;color:#2c3d55;outline:0;font:inherit;font-size:13px}
+  .delete-search-field input:focus{border-color:#76a9f8;box-shadow:0 0 0 3px rgba(47,129,247,.10)}
+  .delete-table-wrap{border:1px solid #e5eaf1;border-radius:10px;overflow:auto;max-height:390px}
+  .delete-table{width:100%;border-collapse:collapse;min-width:760px;font-size:12.5px}
+  .delete-table th{position:sticky;top:0;z-index:1;background:#f7f9fc;color:#697a91;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px 12px;border-bottom:1px solid #e5eaf1}
+  .delete-table td{padding:11px 12px;border-bottom:1px solid #edf0f5;color:#42526a;vertical-align:middle}
+  .delete-table tr:last-child td{border-bottom:0}
+  .delete-table tbody tr{cursor:pointer;transition:background .15s ease}
+  .delete-table tbody tr:hover{background:#f8fbff}
+  .delete-table tbody tr.is-selected{background:#fff3f2;box-shadow:inset 3px 0 #c0392b}
+  .delete-table tbody tr.is-busy{cursor:not-allowed;opacity:.58;background:#fafafa}
+  .delete-table td b{display:block;color:#22334c;font-size:12.5px}
+  .delete-table td small{display:block;color:#8a99ad;margin-top:3px}
+  .delete-row-radio{width:16px;height:16px;margin:0;accent-color:#c0392b;cursor:pointer}
+  .delete-row-radio:disabled{cursor:not-allowed}
+  .delete-status{display:inline-flex;border-radius:12px;padding:3px 8px;background:#e8f7ee;color:#257047;font-size:10.5px;font-weight:700;text-transform:capitalize}
+  .delete-status.busy{background:#fff3d8;color:#8a6400}
+  .delete-wait{color:#9aa6b6;font-size:11px}
+  .delete-row-action{padding:7px 10px!important;background:#c0392b!important;color:#fff!important;border-color:#c0392b!important}
+  .delete-row-action[hidden]{display:none}
+  .delete-next-btn,.delete-final-btn{background:#c0392b!important;color:#fff!important;border-color:#c0392b!important}
+  .delete-next-btn:disabled{opacity:.45;cursor:not-allowed}
+  .delete-empty{padding:26px;border:1px dashed #d9e0e9;border-radius:10px;color:#8190a5;text-align:center}
+  .delete-empty i{margin-right:6px}
+  .delete-modal[hidden]{display:none}
+  .delete-modal{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px}
+  .delete-modal-backdrop{position:absolute;inset:0;background:rgba(12,25,45,.58);backdrop-filter:blur(2px)}
+  .delete-modal-card{position:relative;z-index:1;width:min(460px,100%);background:#fff;border-radius:14px;box-shadow:0 24px 70px rgba(6,20,42,.28);padding:28px}
+  .delete-modal-x{position:absolute;right:14px;top:14px;border:0;background:transparent;color:#8190a5;cursor:pointer;font-size:16px}
+  .delete-modal-icon{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;background:#fff0ed;color:#c0392b;font-size:22px}
+  .delete-modal-icon.final{background:#c0392b;color:#fff}
+  .delete-modal-card h3{text-align:center;margin:0 0 9px;color:#1b2b42;font-size:18px}
+  .delete-modal-card p{text-align:center;margin:0 0 18px;color:#617188;font-size:13px;line-height:1.55}
+  .delete-confirm-input{width:100%;text-align:center;font-weight:800;letter-spacing:.18em;text-transform:uppercase}
+  .delete-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+  @media(max-width:700px){.delete-search{align-items:stretch;flex-wrap:wrap}.delete-search-field{flex-basis:100%;max-width:none}.delete-modal-actions{flex-direction:column-reverse}.delete-modal-actions .btn{width:100%}}
+</style>
+
 <?php if (!Admin::isViewer()): ?>
-<div class="card2" style="margin-top:22px;border:1px solid #f0b4b4">
-  <div class="card2-head"><i class="bi bi-exclamation-triangle" style="color:#c0392b"></i><h2>Danger Zone — Clear Tracker Data</h2>
-    <span class="sub">wipe all submitted reports &amp; everything derived from them</span></div>
+<div class="card2" id="delete-reports" style="margin-top:22px;border:1px solid #f0b4b4">
+  <div class="card2-head"><i class="bi bi-exclamation-triangle" style="color:#c0392b"></i><h2>Danger Zone — Delete Report</h2>
+    <span class="sub">select and permanently delete one tracker report</span></div>
   <div class="card2-body">
     <p style="color:#5b6b82;font-size:13px;margin:0 0 12px">
-      Deletes <b>every submission</b> and all data built from it — process log, attachments, projects,
-      contractors, workers, visits, and alerts. Use once after go-live to drop test data.
-      <b>Google Sheets are NOT touched</b> (clear those manually, as you did). Admin logins, audit trail,
-      and your Settings above are kept. <b>This cannot be undone.</b>
+      Select the specific report row you want to remove. Its tracker process log, attachment records,
+      visit records, and affected dashboard rollups will be updated. <b>Google Sheets and Drive files are
+      NOT touched.</b> Admin logins, audit history, and Settings are kept. <b>This cannot be undone.</b>
     </p>
     <p style="color:#8190a5;font-size:12.5px;margin:0 0 14px">
-      Currently in DB: <b><?= $subCount ?></b> submission<?= $subCount === 1 ? '' : 's' ?> (+ derived rows).
+      Currently in DB: <b><?= $subCount ?></b> report<?= $subCount === 1 ? '' : 's' ?>.
+      Showing <b><?= $deleteShown ?></b><?= $deleteSearch !== '' ? ' matching' : ' most recent' ?> report<?= $deleteShown === 1 ? '' : 's' ?>.
+      Reports still processing cannot be selected.
     </p>
-    <form method="POST" onsubmit="return confirm('Permanently delete ALL tracker data? Sheets stay untouched. This cannot be undone.');">
+
+    <form class="delete-search" method="GET" action="<?= Admin::BASE ?>/settings.php#delete-reports">
+      <div class="delete-search-field">
+        <i class="bi bi-search"></i>
+        <input type="search" name="delete_q" value="<?= Admin::e($deleteSearch) ?>"
+          placeholder="Search report ID, project, engineer, status, site type, or date…" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> Search</button>
+      <?php if ($deleteSearch !== ''): ?>
+        <a class="btn btn-ghost" href="<?= Admin::BASE ?>/settings.php#delete-reports"><i class="bi bi-x-lg"></i> Clear</a>
+      <?php endif; ?>
+    </form>
+
+    <?php if (!$deleteRows): ?>
+      <div class="delete-empty"><i class="bi bi-inbox"></i>
+        <?= $deleteSearch !== '' ? 'No reports match “' . Admin::e($deleteSearch) . '”.' : 'No tracker reports are available to delete.' ?>
+      </div>
+    <?php else: ?>
+      <div class="delete-table-wrap">
+        <table class="delete-table">
+          <thead><tr><th style="width:42px">Select</th><th>Report</th><th>Engineer</th><th>Status</th><th>Submitted</th><th style="width:105px">Action</th></tr></thead>
+          <tbody>
+          <?php foreach ($deleteRows as $report):
+            $busy = in_array($report['overall_status'], ['received','queued','processing','awaiting_notify'], true);
+            $reportLabel = projectLabel($report);
+          ?>
+            <tr class="<?= $busy ? 'is-busy' : '' ?>">
+              <td>
+                <input class="delete-row-radio" type="radio" name="delete_row"
+                  value="<?= (int)$report['id'] ?>"
+                  data-label="<?= Admin::e($reportLabel) ?>"
+                  data-engineer="<?= Admin::e($report['engineer'] ?: 'Unassigned') ?>"
+                  <?= $busy ? 'disabled' : '' ?>
+                  aria-label="Select report #<?= (int)$report['id'] ?>">
+              </td>
+              <td>
+                <b>#<?= (int)$report['id'] ?> · <?= Admin::e($reportLabel) ?></b>
+                <small><?= Admin::e($report['site_type']) ?> · <?= Admin::e($report['client_type'] ?: 'General') ?></small>
+              </td>
+              <td><?= Admin::e($report['engineer'] ?: '—') ?></td>
+              <td><span class="delete-status <?= $busy ? 'busy' : '' ?>"><?= Admin::e(str_replace('_', ' ', $report['overall_status'])) ?></span></td>
+              <td><?= Admin::e(date('d M Y, h:i a', strtotime($report['created_at']))) ?></td>
+              <td>
+                <?php if ($busy): ?>
+                  <span class="delete-wait">Wait</span>
+                <?php else: ?>
+                  <button class="btn delete-row-action" type="button" hidden><i class="bi bi-trash3"></i> Delete</button>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
+</div>
+
+<?php if ($deleteRows): ?>
+<div class="delete-modal" id="deleteModal" hidden>
+  <div class="delete-modal-backdrop" data-delete-close></div>
+  <div class="delete-modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+    <button class="delete-modal-x" type="button" data-delete-close aria-label="Close"><i class="bi bi-x-lg"></i></button>
+    <form method="POST" id="deleteReportForm">
       <?= Admin::csrfField() ?>
-      <input type="hidden" name="action" value="clear_data">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <label style="font-size:13px;color:#5b6b82">Type <span class="mono">DELETE</span> to confirm
-          <input class="inp" type="text" name="confirm" autocomplete="off" placeholder="DELETE" style="width:140px;margin-left:8px">
-        </label>
-        <button class="btn" type="submit" style="background:#c0392b;color:#fff;border-color:#c0392b">
-          <i class="bi bi-trash3"></i> Clear all tracker data
-        </button>
+      <input type="hidden" name="action" value="delete_submission">
+      <input type="hidden" name="submission_id" id="deleteSubmissionId" value="">
+
+      <div id="deleteConfirmStep">
+        <div class="delete-modal-icon"><i class="bi bi-shield-exclamation"></i></div>
+        <h3 id="deleteModalTitle">Confirm report deletion</h3>
+        <p>You selected <b id="deleteModalReport"></b>. Type <span class="mono">DELETE</span> exactly to continue.</p>
+        <input class="inp delete-confirm-input" type="text" name="confirm" id="deleteConfirmInput"
+          autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="DELETE">
+        <div class="delete-modal-actions">
+          <button class="btn btn-ghost" type="button" data-delete-close>Cancel</button>
+          <button class="btn delete-next-btn" type="button" id="deleteNextBtn" disabled>Next <i class="bi bi-arrow-right"></i></button>
+        </div>
+      </div>
+
+      <div id="deleteFinalStep" hidden>
+        <div class="delete-modal-icon final"><i class="bi bi-trash3"></i></div>
+        <h3>Delete this report permanently?</h3>
+        <p><b id="deleteFinalReport"></b> and its tracker-related records will be removed. This action cannot be undone.</p>
+        <div class="delete-modal-actions">
+          <button class="btn btn-ghost" type="button" id="deleteBackBtn"><i class="bi bi-arrow-left"></i> Back</button>
+          <button class="btn delete-final-btn" type="submit"><i class="bi bi-trash3"></i> Delete report</button>
+        </div>
       </div>
     </form>
   </div>
 </div>
+<?php endif; ?>
 <?php endif; ?>
 
 <div class="card2" style="margin-top:22px">
@@ -432,6 +664,93 @@ Layout::head('Settings', 'settings');
 </div>
 <script>
 (function () {
+  // Guarded single-report deletion: select row -> type DELETE -> Next -> Delete.
+  const deleteRadios = Array.from(document.querySelectorAll('.delete-row-radio'));
+  const deleteModal = document.getElementById('deleteModal');
+  const deleteId = document.getElementById('deleteSubmissionId');
+  const deleteInput = document.getElementById('deleteConfirmInput');
+  const deleteNext = document.getElementById('deleteNextBtn');
+  const deleteConfirmStep = document.getElementById('deleteConfirmStep');
+  const deleteFinalStep = document.getElementById('deleteFinalStep');
+  let selectedDeleteRow = null;
+
+  function chooseDeleteRow(radio) {
+    if (!radio || radio.disabled) return;
+    selectedDeleteRow = radio;
+    radio.checked = true;
+    deleteRadios.forEach(function (item) {
+      const row = item.closest('tr');
+      if (row) {
+        row.classList.toggle('is-selected', item === radio);
+        const action = row.querySelector('.delete-row-action');
+        if (action) action.hidden = item !== radio;
+      }
+    });
+  }
+
+  deleteRadios.forEach(function (radio) {
+    radio.addEventListener('change', function () { chooseDeleteRow(radio); });
+    const row = radio.closest('tr');
+    if (row) row.addEventListener('click', function (event) {
+      if (event.target.closest('a,button') || radio.disabled) return;
+      chooseDeleteRow(radio);
+    });
+  });
+
+  function resetDeleteDialog() {
+    if (deleteConfirmStep) deleteConfirmStep.hidden = false;
+    if (deleteFinalStep) deleteFinalStep.hidden = true;
+    if (deleteInput) deleteInput.value = '';
+    if (deleteNext) deleteNext.disabled = true;
+  }
+  function closeDeleteDialog() {
+    if (deleteModal) deleteModal.hidden = true;
+    document.body.style.overflow = '';
+    resetDeleteDialog();
+  }
+
+  function openDeleteDialog() {
+    if (!selectedDeleteRow || !deleteModal) return;
+    const summary = '#' + selectedDeleteRow.value + ' · ' + selectedDeleteRow.dataset.label +
+      ' · ' + selectedDeleteRow.dataset.engineer;
+    deleteId.value = selectedDeleteRow.value;
+    document.getElementById('deleteModalReport').textContent = summary;
+    document.getElementById('deleteFinalReport').textContent = summary;
+    resetDeleteDialog();
+    deleteModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    setTimeout(function () { deleteInput.focus(); }, 0);
+  }
+  document.querySelectorAll('.delete-row-action').forEach(function (button) {
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      chooseDeleteRow(button.closest('tr').querySelector('.delete-row-radio'));
+      openDeleteDialog();
+    });
+  });
+
+  document.querySelectorAll('[data-delete-close]').forEach(function (button) {
+    button.addEventListener('click', closeDeleteDialog);
+  });
+  if (deleteInput) deleteInput.addEventListener('input', function () {
+    deleteNext.disabled = deleteInput.value === 'DELETE' ? false : true;
+  });
+  if (deleteNext) deleteNext.addEventListener('click', function () {
+    if (!deleteInput || deleteInput.value !== 'DELETE') return;
+    deleteConfirmStep.hidden = true;
+    deleteFinalStep.hidden = false;
+    document.querySelector('.delete-final-btn').focus();
+  });
+  const deleteBack = document.getElementById('deleteBackBtn');
+  if (deleteBack) deleteBack.addEventListener('click', function () {
+    deleteFinalStep.hidden = true;
+    deleteConfirmStep.hidden = false;
+    deleteInput.focus();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && deleteModal && !deleteModal.hidden) closeDeleteDialog();
+  });
+
   let nextIdx = <?= count($rows) ?>;   // fresh group index for newly-added developers
 
   window.rmRow = function (btn) {

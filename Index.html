@@ -111,6 +111,7 @@
     .step-check.assigned.st-done    { border-color:#cfe6d0; background:#f2faf3; }
     .step-check.assigned.st-pending { border-color:#f0dcae; background:#fff9ef; }
     .step-check.assigned.st-hold    { border-color:#f2b8bb; background:#fff6f6; }
+    .step-check.assigned.st-notreq  { border-color:#dcdce2; background:#f6f6f8; }
     .step-stat-tag {
       margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
       border-radius:4px; padding:1px 6px; border:1px solid transparent;
@@ -118,6 +119,7 @@
     .step-stat-tag.st-done    { color:#2f7d32; background:#e7f4e8; border-color:#cfe6d0; }
     .step-stat-tag.st-pending { color:#8a5a00; background:#fff4e5; border-color:#f0dcae; }
     .step-stat-tag.st-hold    { color:#b60f17; background:#fdECEC; border-color:#f2b8bb; }
+    .step-stat-tag.st-notreq  { color:#5a5f6a; background:#eef0f3; border-color:#dcdce2; }
     .step-remove { border:0; background:none; color:#b0555a; cursor:pointer; font-size:16px; line-height:1; padding:0 2px; flex:0 0 auto; }
     .step-remove:hover { color:var(--red); }
     .status-apply { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
@@ -125,15 +127,37 @@
     .status-apply .apply-btn:disabled { opacity:.45; cursor:not-allowed; }
     @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
 
-    /* People-on-site detail rows (one block per person; multiple works each) */
-    .people-rows { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+    /* Developer multi-flat switcher (one visit, many flats, each its own report) */
+    .flat-bar { background:#fff; border:1px solid #ececec; border-radius:12px; padding:12px 14px; margin:14px 0 16px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
+    .flat-bar-head { display:flex; flex-direction:column; gap:2px; margin-bottom:10px; }
+    .flat-bar-title { font-size:13px; font-weight:800; color:#222; text-transform:uppercase; letter-spacing:.03em; }
+    .flat-bar-sub { font-size:11px; color:#999; }
+    .flat-chips { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .flat-chip { display:inline-flex; align-items:center; gap:7px; border:1px solid #e2e2e2; background:#fafafa; border-radius:20px; padding:7px 14px; font-size:13px; font-weight:700; color:#555; cursor:pointer; }
+    .flat-chip.active { border-color:var(--red); background:#fff5f5; color:var(--red); }
+    .flat-chip-x { border:0; background:none; color:inherit; cursor:pointer; font-size:16px; line-height:1; padding:0; opacity:.55; }
+    .flat-chip-x:hover { opacity:1; }
+    .flat-chip.add { border-style:dashed; color:var(--red); border-color:#f2c0c3; background:#fff; }
+
+    /* Team-on-site: N teams (number-box), each team = members + ONE shared "work done" */
+    .teams { display:flex; flex-direction:column; gap:14px; margin-top:12px; }
+    .team-block { border:1px solid #e6e6e6; border-radius:10px; padding:12px; background:#fbfbfc; }
+    .team-head { margin-bottom:8px; }
+    .team-badge { display:inline-block; background:#fbeceb; color:var(--red); font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; padding:4px 10px; border-radius:12px; }
+    .person-remove-spacer { display:inline-block; }
+    .people-rows { display:flex; flex-direction:column; gap:10px; }
     .person-block { border:1px solid #ececec; border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#fcfcfc; }
-    .person-top { display:grid; grid-template-columns: 22px 1fr 176px; gap:8px; align-items:center; }
+    .person-top { display:grid; grid-template-columns: 22px 1fr 176px 30px; gap:8px; align-items:center; }
     /* Contractor company name drops to its own full-width line — it never fits beside name + type. */
     .person-top .contractor-name { grid-column: 2 / -1; }
     .person-idx { width:22px; height:22px; border-radius:50%; background:#fbeceb; color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
-    .person-top .field, .person-top .dropdown-field, .person-work .dropdown-field { height:40px; }
-    .person-work { display:flex; flex-direction:column; gap:8px; }
+    .person-top .field, .person-top .dropdown-field, .team-work .dropdown-field { height:40px; }
+    .person-remove { border:0; background:none; color:#b0555a; cursor:pointer; font-size:20px; line-height:1; padding:0 2px; justify-self:end; }
+    .person-remove:hover { color:var(--red); }
+    .add-person-btn { margin-top:12px; height:38px; border-style:dashed; color:var(--red); border-color:#f2c0c3; }
+    .team-work { margin-top:14px; display:flex; flex-direction:column; gap:8px; }
+    .team-work-label { font-size:12px; font-weight:700; color:#555; }
+    .team-work-label span { font-weight:500; color:#999; }
     .work-add { max-width:260px; }
     .work-chips { }
     .work-chip { display:inline-flex; align-items:center; gap:7px; background:#fff5f5; border:1px solid #f2c0c3; color:#b60f17; border-radius:14px; padding:4px 6px 4px 11px; font-size:12px; font-weight:600; }
@@ -175,6 +199,22 @@
     }
     .dropdown-field:focus { border-color:#f0a3a7; box-shadow:0 0 0 3px rgba(215,25,32,.07); }
     .dropdown-field.placeholder { color:#9a9a9a; }
+
+    /* Assigned engineer: one dropdown, maximum two PE selections. */
+    .engineer-picker { position:relative; }
+    .engineer-trigger { display:flex; align-items:center; text-align:left; }
+    .engineer-trigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .engineer-menu {
+      display:none; position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:30;
+      max-height:240px; overflow:auto; padding:5px 0 0; background:#fff; border:1px solid #e4e4e4;
+      border-radius:8px; box-shadow:0 12px 24px rgba(0,0,0,.10);
+    }
+    .engineer-option { display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:13px; color:#333; cursor:pointer; }
+    .engineer-option:hover { background:#fff5f5; }
+    .engineer-option input { width:16px; height:16px; margin:0; accent-color:var(--red); cursor:pointer; }
+    .engineer-option.disabled { color:#aaa; cursor:not-allowed; background:#fafafa; }
+    .engineer-option.disabled input { cursor:not-allowed; }
+    .engineer-limit { position:sticky; bottom:0; padding:7px 12px; border-top:1px solid #eee; background:#fafafa; color:#888; font-size:11px; text-align:right; }
 
     .search-wrap { position: relative; }
     .field, .textarea, .selectish {
@@ -239,6 +279,19 @@
     .plan-chip.st-done { border-color:#cfe6d0; color:#2f7d32; }
     .plan-chip.st-pending { border-color:#f0dcae; color:#8a5a00; }
     .plan-chip.st-hold { border-color:#f2b8bb; color:#b60f17; }
+    .plan-chip.st-notreq { border-color:#dcdce2; color:#5a5f6a; }
+
+    /* Next Step Start Date picker + its highlight chip */
+    .startdate-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:6px; }
+    .date-chip { display:inline-flex; align-items:center; gap:12px; padding:8px 16px; border-radius:12px; white-space:nowrap;
+                 --dc-tint:#f6e7c4; border:1.5px solid #f0dcae; background:#fffbf2; color:#8a5a00; }
+    .date-chip.over { --dc-tint:#f8d5d7; border-color:#f2b8bb; background:#fff5f5; color:#b60f17; }
+    .dc-ico { width:30px; height:30px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--dc-tint); }
+    .dc-ico svg { width:16px; height:16px; }
+    .dc-sep { width:1px; align-self:stretch; margin:2px 0; background:var(--dc-tint); }
+    .dc-txt { display:flex; flex-direction:column; gap:3px; }
+    .dc-date { font-size:18px; font-weight:800; line-height:1; letter-spacing:-.01em; }
+    .dc-lbl { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; opacity:.85; }
 
     .yesno-row { display:flex; gap: 10px; }
     .yesno-btn { flex:1; height: 34px; border:1px solid #ddd; border-radius:6px; background:#fff; font-weight: 600; cursor:pointer; color:#666; }
@@ -279,19 +332,32 @@
       .col { padding-right:0; }
       .col + .col { border-left:0; border-top:1px solid #ececec; padding:18px 0 0; }
       .pill-row { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      /* Single-column (stacked) layouts make a long form -> pin the action bar so
+         Save & Next is always visible without scrolling to the very bottom. */
+      .app-wrap { padding-bottom: 96px; }
+      .actionbar {
+        position: fixed; left:0; right:0; bottom:0; z-index:100;
+        background:#fff; margin:0;
+        padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
+        border-top:1px solid #e6e6e6; box-shadow: 0 -6px 18px rgba(0,0,0,.08);
+      }
     }
+    .photo-amend-grid { display:grid; grid-template-columns: 1.2fr .8fr; gap:18px; align-items:start; }
     @media (max-width: 760px) {
-      .app-wrap { padding:10px; }
+      .app-wrap { padding: 10px 10px 160px; }   /* taller: bar stacks to two rows here */
       .stepper { padding: 10px 12px 10px; }
       .step-label { font-size: 9px; }
       .option-grid.four { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .option-grid.two, .pill-row { grid-template-columns: 1fr; }
-      .actionbar { flex-direction: column; align-items:stretch; }
+      .photo-amend-grid { grid-template-columns: 1fr; gap:14px; }
+      /* Phones: stack the fixed bar (position/background inherited from the 980 rule). */
+      .actionbar { flex-direction: column; align-items:stretch; gap:8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
       .actions-left, .actions-right { width:100%; }
       .actions-left .btn, .actions-right .btn { flex:1; }
+      .btn { height: 46px; }               /* larger touch targets on phones */
     }
     @media (max-width: 480px) {
-      .app-wrap { padding: 8px; }
+      .app-wrap { padding: 8px 8px 160px; }   /* keep bottom clearance for the fixed action bar */
       .hero { border-radius: 0; }
       .stepper { padding: 10px 6px; }
       .step-track::before, .step-track::after { left: 8%; }
@@ -351,6 +417,17 @@
     @media (max-width: 480px) {
       .svh-title { font-size: clamp(21px, 7.6vw, 30px); }
     }
+    .app-tabs {
+      display: flex; gap: 8px; padding: 10px; margin-top: 10px;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px;
+      box-shadow: 0 3px 12px rgba(0,0,0,.04);
+    }
+    .app-tab {
+      flex: 1; min-height: 42px; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px; text-decoration: none; color: #666; font-size: 13px; font-weight: 800;
+    }
+    .app-tab.active { color: #fff; background: var(--red); }
+    .app-tab:not(.active):hover { color: var(--red); background: #fff5f5; }
   </style>
 </head>
 <body>
@@ -374,6 +451,11 @@
           </div>
         </div>
       </section>
+
+      <nav class="app-tabs" aria-label="PMS sections">
+        <a class="app-tab active" href="./">New Report</a>
+        <a class="app-tab" href="reports.php">Report History</a>
+      </nav>
 
       <div id="pageMount"></div>
     </div>
