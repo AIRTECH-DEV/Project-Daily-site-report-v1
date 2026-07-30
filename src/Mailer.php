@@ -121,20 +121,29 @@ class Mailer
                     continue;
                 }
                 $headers = $rows[0];
-                $nameCol = Sheets::findColIndex($headers, 'project name');
-                if ($nameCol < 0) { $nameCol = 3; }
+                // Index under BOTH the site name and the client's billing name, so a
+                // report filed under either still reaches the real client instead of
+                // falling through to fallback_to.
+                $cols = Orders::nameCols($headers);
+                if (!$cols['site'] && !$cols['billing']) { $cols['site'] = [3]; }
                 $mailCol = Sheets::findColIndex($headers, 'client email');
                 if ($mailCol < 0) { $mailCol = Sheets::findColIndex($headers, 'email'); }
                 if ($mailCol < 0) {
                     continue;
                 }
+                $byKind = ['site' => [], 'billing' => []];
                 for ($i = 1; $i < count($rows); $i++) {
-                    $name = strtolower(trim((string)($rows[$i][$nameCol] ?? '')));
                     $mail = $this->cleanRecipients($rows[$i][$mailCol] ?? '');
-                    if ($name !== '' && $mail !== '') {
-                        $map[$name] = $mail; // later sheet wins
+                    if ($mail === '') { continue; }
+                    foreach ($byKind as $kind => $_) {
+                        foreach ($cols[$kind] as $c) {
+                            $name = strtolower(trim((string)($rows[$i][$c] ?? '')));
+                            if ($name !== '') { $byKind[$kind][$name] = $mail; }
+                        }
                     }
                 }
+                // later sheet wins; within a sheet the site name beats a billing name
+                $map = array_merge($map, $byKind['billing'], $byKind['site']);
             } catch (Throwable $e) {
                 // sheet not accessible -> skip
             }
@@ -170,17 +179,28 @@ class Mailer
         return false;
     }
 
-    /** Keeps only real addresses from "a@x.com, No emails found". */
+    /**
+     * Keeps only real addresses from a free-text sheet cell such as
+     * "a@x.com, No emails found" or "a@x.com/, b@y.com" or "<a@x.com>".
+     *
+     * Strict, because Smtp::send() wraps each one as RCPT TO:<$addr> — a stray
+     * angle bracket or trailing slash from the Orders sheet makes the server
+     * reject the command and the WHOLE email (client + CC) fails, not just that
+     * recipient. "/" is a real separator in these sheets, so split on it too.
+     */
     private function cleanRecipients($raw): string
     {
         if ($raw === null || $raw === '') {
             return '';
         }
-        $parts = preg_split('/[,;\s]+/', (string)$raw);
-        $ok = array_filter($parts, function ($s) {
-            $at = strpos($s, '@');
-            return $at > 0 && strpos($s, '.', $at) !== false;
-        });
+        $ok = [];
+        foreach (preg_split('#[,;/\s]+#', (string)$raw) as $part) {
+            $addr = trim($part, " \t\n\r\0\x0B<>\"'.");
+            $key = strtolower($addr);
+            if ($addr !== '' && !isset($ok[$key]) && filter_var($addr, FILTER_VALIDATE_EMAIL)) {
+                $ok[$key] = $addr;      // first spelling of a duplicate wins
+            }
+        }
         return implode(',', $ok);
     }
 }

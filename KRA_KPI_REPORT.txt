@@ -1,0 +1,301 @@
+================================================================================
+                    KRA & KPI DEFINITION REPORT
+        PMS — Site Visit Report & Project Tracker (Vakharia Air Tech)
+                  GROUP A — OPERATIONAL / BUSINESS KRAs
+================================================================================
+
+Document type : Key Result Areas (KRA) & Key Performance Indicators (KPI)
+Project        : PMS — daily site-visit reporting + project portfolio tracker
+Owner org      : Vakharia Air Tech Pvt. Ltd. (VAPL), Pune — Daikin AC projects
+Prepared by    : Engineering / Ops
+Scope          : Operational / business result areas only (what VAPL achieves
+                 by using the PMS tool). System/software health KRAs are out of
+                 scope for this document.
+Status         : Draft for baseline (targets to be tuned after 1 month of data)
+
+
+--------------------------------------------------------------------------------
+0. HOW TO READ THIS DOCUMENT
+--------------------------------------------------------------------------------
+
+KRA (Key Result Area)
+    A broad area of responsibility where results are expected. Answers
+    "WHAT must this project achieve?" — outcome-focused, not a number.
+
+KPI (Key Performance Indicator)
+    A specific, measurable metric that proves a KRA is (or is not) being met.
+    Answers "HOW do we know?" — always a number, %, count, or time.
+
+Every KPI below lists:
+    Metric        - what is counted
+    Formula       - how it is computed
+    Target        - the goal (suggested; baseline first, then tighten)
+    Data source   - exactly where the number comes from in this system
+    Cadence       - how often it is reviewed
+
+The system already computes most of these on the Admin dashboard
+(/pms/admin/), so no new tooling is required to start measuring — the
+numbers are live in the tracker database (`pms`).
+
+The five business result areas:
+    A1  Field reporting discipline & timeliness
+    A2  Project progress & on-time delivery
+    A3  Risk, holds & issue resolution
+    A4  Client communication / report delivery
+    A5  Workforce & contractor utilisation
+
+
+================================================================================
+KRA A1 — FIELD REPORTING DISCIPLINE & TIMELINESS
+================================================================================
+Objective: every active site is reported daily by the assigned Project
+Engineer (PE), so the portfolio view is never stale.
+
+KPI A1.1  Daily reporting compliance
+    Formula     : active projects with a report in last 48h / total active
+                  projects x 100
+    Target      : >= 90%
+    Data source : projects.last_report_at vs lifecycle in
+                  (Active, At Risk, Commissioning Pending); admin dashboard
+                  "compliant" counter
+    Cadence     : Daily
+
+KPI A1.2  Stale sites (no update)
+    Metric      : count of active projects with no report in 24h / 48h
+    Formula     : hours since projects.last_report_at
+    Target      : 24h count trending down; 48h count = 0
+    Data source : Admin dashboard "No update 24h / 48h" strip
+    Cadence     : Daily
+
+KPI A1.3  On-time submission window
+    Metric      : % of daily reports filed same day as the site visit
+    Formula     : submissions where DATE(created_at) = visit date / total
+    Target      : >= 95%
+    Data source : submissions.created_at
+    Cadence     : Weekly
+
+KPI A1.4  Unassigned live projects
+    Metric      : active projects with no primary PE
+    Target      : 0
+    Data source : projects.primary_pe = '' on live lifecycle; dashboard
+                  "Unassigned PE"
+    Cadence     : Daily
+
+
+================================================================================
+KRA A2 — PROJECT PROGRESS & ON-TIME DELIVERY
+================================================================================
+Objective: sites move through the step lifecycle and commission on or before
+target date.
+
+KPI A2.1  Average portfolio progress
+    Formula     : avg(steps_done / steps_total x 100) over non-closed projects
+    Target      : baseline, then steady upward trend
+    Data source : projects.steps_done / projects.steps_total
+    Cadence     : Weekly
+
+KPI A2.2  Overdue projects
+    Metric      : projects past target_end and not Commissioned/Closed
+    Formula     : projects.target_end < today AND lifecycle not in
+                  (Commissioned, Closed)
+    Target      : < 5% of active portfolio
+    Data source : Admin dashboard "Overdue"
+    Cadence     : Daily
+
+KPI A2.3  On-time commissioning rate
+    Formula     : projects commissioned on/before target_end / all commissioned
+                  x 100
+    Target      : >= 80%
+    Data source : projects.commissioned_at vs projects.target_end
+    Cadence     : Monthly
+
+KPI A2.4  Commissioning throughput
+    Metric      : projects reaching Commissioned per month
+    Data source : projects.lifecycle = Commissioned, commissioned_at
+    Cadence     : Monthly
+
+KPI A2.5  Average cycle time
+    Formula     : avg(commissioned_at - first_report_at) in days
+    Target      : baseline, then reduce
+    Data source : projects.first_report_at, projects.commissioned_at
+    Cadence     : Monthly
+
+
+================================================================================
+KRA A3 — RISK, HOLDS & ISSUE RESOLUTION
+================================================================================
+Objective: holds and risks are surfaced early and cleared fast; ownership
+(Client vs VAPL) is clear.
+
+KPI A3.1  Projects on hold (split by owner)
+    Metric      : count On Hold, split Client vs VAPL
+    Target      : VAPL-owned holds minimised (they are ours to fix)
+    Data source : projects.lifecycle = On Hold, projects.hold_owner;
+                  dashboard "On Hold — Client x / VAPL y"
+    Cadence     : Daily
+
+KPI A3.2  Average hold age
+    Formula     : avg(today - hold_since) in days over On Hold projects
+    Target      : < 7 days for VAPL-owned holds
+    Data source : projects.hold_since; dashboard avgHoldAge
+    Cadence     : Weekly
+
+KPI A3.3  Open alert backlog
+    Metric      : alerts in status open/ack/snoozed
+    Target      : critical = 0 open > 24h
+    Data source : alerts.status, alerts.severity
+    Cadence     : Daily
+
+KPI A3.4  Alert resolution time
+    Formula     : avg(resolved_at - created_at) by severity
+    Target      : critical < 24h, warning < 72h
+    Data source : alerts.created_at, alerts.resolved_at, alert_events
+    Cadence     : Weekly
+
+KPI A3.5  At-risk share
+    Formula     : At Risk projects / active portfolio x 100
+    Data source : projects.lifecycle = At Risk; per-project risk from open
+                  alert max severity (dashboard risk pill)
+    Cadence     : Weekly
+
+
+================================================================================
+KRA A4 — CLIENT COMMUNICATION / REPORT DELIVERY
+================================================================================
+Objective: every completed report reaches the client/developer over both
+channels (email + WhatsApp), with the branded PDF.
+
+KPI A4.1  Delivery coverage (both channels)
+    Formula     : reports with BOTH email AND whatsapp = done / live reports
+                  x 100
+    Target      : >= 98%
+    Data source : process_log steps email + whatsapp; submissions
+                  overall_status in (done, partial); dashboard delivery-coverage
+    Cadence     : Daily
+
+KPI A4.2  Email delivery success
+    Formula     : email steps done / (done + failed) x 100
+    Target      : >= 99%
+    Data source : process_log.step = 'email'
+    Cadence     : Daily
+
+KPI A4.3  WhatsApp delivery success
+    Formula     : whatsapp steps done / (done + failed) x 100
+    Target      : >= 98%
+    Data source : process_log.step = 'whatsapp'
+    Cadence     : Daily
+
+KPI A4.4  PE-plan reminder dispatch
+    Metric      : evening reminder image sent once/day at configured time
+    Target      : 100% of scheduled days
+    Data source : scripts/pe_plan_send.php self-gate log; settings send_time
+    Cadence     : Daily
+
+
+================================================================================
+KRA A5 — WORKFORCE & CONTRACTOR UTILISATION
+================================================================================
+Objective: visibility into who is on site (VAPL vs contractor), labour load,
+and contractor-needed steps.
+
+KPI A5.1  PE workload balance
+    Metric      : active projects per PE (peLoad)
+    Target      : within +/- 1 of team average (no overload)
+    Data source : projects.primary_pe over live lifecycles
+    Cadence     : Weekly
+
+KPI A5.2  Site visits per day
+    Metric      : submissions created today / week
+    Data source : submissions.created_at (dashboard visitsToday, 7-day trend)
+    Cadence     : Daily
+
+KPI A5.3  Contractor vs VAPL labour mix
+    Formula     : contractor visit_workers / total visit_workers x 100
+    Data source : visit_workers.type
+    Cadence     : Monthly
+
+KPI A5.4  Contractor-need coverage
+    Metric      : live projects whose next step is contractor-typical but had
+                  no contractor on last visit (conNeed)
+    Target      : trending to 0 (mobilise contractors in time)
+    Data source : dashboard conNeed logic (visit_workers, step stats)
+    Cadence     : Weekly
+
+KPI A5.5  Active workforce roster
+    Metric      : distinct workers / contractors seen in period
+    Data source : workers.last_seen, contractors.last_seen, .visits
+    Cadence     : Monthly
+
+
+================================================================================
+1. KRA -> ROLE OWNERSHIP MAP
+================================================================================
+
+Role                     Primary KRAs        Reviews on
+-----------------------  ------------------  ------------------------------
+Project Engineer (PE)    A1, A2, A5          Daily (own sites)
+Ops / Project Manager    A2, A3, A4, A5      Daily standup + weekly
+Client-comms owner       A4                  Daily
+Management (portfolio)   A2, A3              Monthly review
+
+
+================================================================================
+2. REVIEW CADENCE SUMMARY
+================================================================================
+
+Daily    : A1.1  A1.2  A1.4  A2.2  A3.1  A3.3  A4.1  A4.2  A4.3  A4.4  A5.2
+Weekly   : A1.3  A2.1  A3.2  A3.4  A3.5  A5.1  A5.4
+Monthly  : A2.3  A2.4  A2.5  A5.3  A5.5
+
+
+================================================================================
+3. DATA SOURCE APPENDIX (where each KPI is read from)
+================================================================================
+
+Tracker DB (`pms`)
+  submissions        - one row per report; overall_status, created_at
+                       (A1.3, A5.2)
+  process_log        - one row per step; step, status, timestamps
+                       (A4.1-A4.3)
+  projects           - lifecycle rollup: steps_done/total, lifecycle,
+                       hold_owner, hold_since, target_end, primary_pe,
+                       last_report_at, commissioned_at, first_report_at
+                       (A1.1, A1.4, A2.*, A3.1, A3.2, A5.1)
+  alerts/alert_events- risk + resolution  (A3.3, A3.4, A3.5)
+  visit_workers      - per (visit, worker) labour  (A5.3, A5.4)
+  workers/contractors- roster + visit counts  (A5.5)
+
+Admin dashboard (/pms/admin/)
+  index.php          - lifecycle KPIs, No-update 24/48h, Overdue, Unassigned,
+                       delivery coverage, risk, hold age, avg progress, trend
+  holds.php          - holds by owner  (A3.1, A3.2)
+  notifications.php  - alert inbox  (A3.3, A3.4)
+  workforce.php /    - workers, contractors  (A5.*)
+    contractor.php
+  planner.php /      - next-plan, calendar  (A5.4)
+    calendar.php
+
+Field scripts (scripts/)
+  pe_plan_send.php   - evening PE-plan reminder dispatch  (A4.4)
+
+
+================================================================================
+4. NOTES ON USING THESE TARGETS
+================================================================================
+
+- Targets marked as percentages are SUGGESTED. Run one month to establish a
+  baseline, then set realistic targets slightly above baseline and tighten
+  each quarter.
+- These Group-A KPIs measure how well VAPL runs its AC-installation projects
+  using the tool — field discipline, progress, risk, client communication, and
+  workforce. They do NOT measure the software's own health (that is a separate
+  system-KRA exercise).
+- Almost every KPI here is already visible on the admin dashboard today, so
+  measurement can begin immediately with no new development.
+- Keep the 48h "no update" (A1.2), overdue (A2.2), and delivery-coverage (A4.1)
+  KPIs on a daily glance — they are the earliest warning that field discipline,
+  schedule, or client communication is slipping.
+
+================================================================================
+                                END OF REPORT
+================================================================================

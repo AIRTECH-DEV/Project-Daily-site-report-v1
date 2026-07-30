@@ -18,11 +18,22 @@ class Pms
     private $sheets;
     /** @var array */
     private $cfg;
+    /** @var ?Orders */
+    private $orders = null;
 
     public function __construct(Sheets $sheets, array $cfg)
     {
         $this->sheets = $sheets;
         $this->cfg = $cfg;
+    }
+
+    /** Lazy Orders index (one sheet read, cached) — only General reports need it. */
+    private function orders(): Orders
+    {
+        if ($this->orders === null) {
+            $this->orders = new Orders($this->sheets, $this->cfg);
+        }
+        return $this->orders;
     }
 
     /**
@@ -34,12 +45,66 @@ class Pms
     {
         try {
             if (($p['clientType'] ?? '') === 'Developer') {
+                $flats = $p['flats'] ?? null;
+                if (is_array($flats) && $flats) {
+                    return $this->updateDeveloperFlats($p, $flats);
+                }
                 return $this->updateDeveloper($p);
             }
             return $this->updateGeneral($p);
         } catch (Throwable $e) {
             return ['updated' => false, 'warning' => 'Progress sheet update error: ' . $e->getMessage()];
         }
+    }
+
+    /**
+     * Multi-flat developer visit: stamp EACH flat's OWN row with its OWN step statuses.
+     * Developer/building/engineer are shared; flatNo/floor/siteType/stepStatuses/tentative
+     * are per flat. Reuses updateDeveloper() once per flat, aggregates the outcome so one
+     * bad flat never blocks the rest.
+     */
+    private function updateDeveloperFlats(array $p, array $flats): array
+    {
+        $anyUpdated = false;
+        $warnings = [];
+        $orderIds = [];
+        foreach ($flats as $idx => $flat) {
+            if (!is_array($flat)) {
+                continue;
+            }
+            $sub = $p;                                   // shared developer / building / engineer
+            unset($sub['flats']);
+            foreach (['flatNo', 'floor', 'siteType', 'stepStatuses', 'tentativeEndDate', 'tomorrowSteps', 'nextStepStartDate'] as $k) {
+                if (array_key_exists($k, $flat)) {
+                    $sub[$k] = $flat[$k];
+                }
+            }
+            $flatNo = trim((string)($sub['flatNo'] ?? ''));
+            if ($flatNo === '') {
+                continue;
+            }
+            try {
+                $r = $this->updateDeveloper($sub);
+            } catch (Throwable $e) {
+                $warnings[] = 'Flat ' . $flatNo . ': ' . $e->getMessage();
+                continue;
+            }
+            if (!empty($r['updated'])) {
+                $anyUpdated = true;
+            }
+            if (!empty($r['warning'])) {
+                $warnings[] = 'Flat ' . $flatNo . ': ' . $r['warning'];
+            }
+            if (!empty($r['order_id'])) {
+                $orderIds[$flatNo] = $r['order_id'];
+            }
+        }
+        return [
+            'updated'   => $anyUpdated,
+            'warning'   => implode(' | ', array_values(array_filter($warnings))),
+            'order_id'  => $orderIds ? (string)reset($orderIds) : '',
+            'order_ids' => $orderIds,
+        ];
     }
 
     /**
@@ -54,7 +119,7 @@ class Pms
                 ? $this->progressDeveloper($p)
                 : $this->progressGeneral($p);
         } catch (Throwable $e) {
-            $base = ['found' => false, 'doneSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
+            $base = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => '', 'tentativeEndDate' => ''];
         }
         // Amendment / Drawing / Measurement are asked fresh on every visit — the form
         // never adopts the previous response-sheet answers.
@@ -111,7 +176,7 @@ class Pms
     private function progressDeveloper(array $p): array
     {
         $orderId = $this->makeDeveloperOrderId((string)($p['building'] ?? ''), (string)($p['flatNo'] ?? ''));
-        $empty = ['found' => false, 'doneSteps' => [], 'orderId' => $orderId];
+        $empty = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => $orderId];
 
         $dev = $this->cfg['developer_building_sheets'][$p['developer'] ?? ''] ?? null;
         if (!$dev || empty($dev['spreadsheetId'])) {
@@ -148,6 +213,7 @@ class Pms
         return [
             'found'            => true,
             'doneSteps'        => $this->readDoneSteps($rows, $devRow, $info),
+            'notRequiredSteps' => $this->readHiddenSteps($rows, $devRow, $info),
             'orderId'          => $orderId,
             'tentativeEndDate' => $this->readTentative($rows, $devRow, $info),
         ];
@@ -155,7 +221,7 @@ class Pms
 
     private function progressGeneral(array $p): array
     {
-        $empty = ['found' => false, 'doneSteps' => [], 'orderId' => ''];
+        $empty = ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => ''];
 
         $ssId = $this->cfg['general_pms_sheet_id'];
         $tabName = ($p['siteType'] ?? '') === 'VRV'
@@ -168,24 +234,14 @@ class Pms
         $rows = $this->sheets->getTab($ssId, $title);
         $info = $this->headerInfo($rows);
 
-        $pmsRow = -1;
-        $orderId = $this->getOrderIdForProject((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
-        if ($orderId !== '') {
-            $orderCol = $this->findOrderIdCol($info);
-            if ($orderCol > 0) {
-                $pmsRow = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
-            }
-        }
+        [$pmsRow, $orderId] = $this->findGeneralRow($rows, $info, $p);
         if ($pmsRow < 0) {
-            $projCol = $this->findNamedCol($info, 'Project Name');
-            $pmsRow = $this->findRowByColValue($rows, $info, $projCol, (string)($p['project'] ?? ''));
-        }
-        if ($pmsRow < 0) {
-            return ['found' => false, 'doneSteps' => [], 'orderId' => $orderId];
+            return ['found' => false, 'doneSteps' => [], 'notRequiredSteps' => [], 'orderId' => $orderId];
         }
         return [
             'found'            => true,
             'doneSteps'        => $this->readDoneSteps($rows, $pmsRow, $info),
+            'notRequiredSteps' => $this->readHiddenSteps($rows, $pmsRow, $info),
             'orderId'          => $orderId,
             'tentativeEndDate' => $this->readTentative($rows, $pmsRow, $info),
         ];
@@ -194,10 +250,7 @@ class Pms
     /** Reads the "Tentitive Project End date" cell, converting a Sheets serial to Y-m-d. */
     private function readTentative(array $rows, int $row, array $info): string
     {
-        $col = $this->findColContains($info, 'tentative');
-        if ($col < 1) {
-            $col = $this->findColContains($info, 'tentitive'); // the sheet's actual spelling
-        }
+        $col = $this->findTentativeEndCol($info);
         if ($col < 1) {
             return '';
         }
@@ -210,6 +263,31 @@ class Pms
             }
         }
         return trim((string)$v);
+    }
+
+    /**
+     * The tentative-PROJECT-END-date column. The sheet also carries a "Tentitive Project
+     * START date" column, so a plain "tent" substring match would grab the wrong one
+     * (whichever comes first). Require "end" and reject "start". Spelling-tolerant
+     * ("tentative"/"tentitive"). 1-based, or -1.
+     */
+    private function findTentativeEndCol(array $info): int
+    {
+        $fallback = -1;
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $h = trim(Sheets::normalizeKey($info['groupVals'][$i] ?? '') . ' ' . Sheets::normalizeKey($info['subVals'][$i] ?? ''));
+            $isTent = (strpos($h, 'tentative') !== false || strpos($h, 'tentitive') !== false);
+            if (!$isTent || strpos($h, 'start') !== false) {
+                continue;                                  // never the START-date column
+            }
+            if (strpos($h, 'end') !== false) {
+                return $i + 1;                             // exact: the END-date column
+            }
+            if ($fallback < 1) {
+                $fallback = $i + 1;                        // a lone tentative col (no start/end wording)
+            }
+        }
+        return $fallback;
     }
 
     /** First column whose group/sub header contains a substring (normalized). 1-based, or -1. */
@@ -238,6 +316,36 @@ class Pms
     ];
 
     /**
+     * Dismantle ("Dismental") pseudo-steps. Each shares its base step's column
+     * GROUP and is stamped into that group's "Dismental Status" sub-column (not
+     * the normal "Status"). Base + dismental are MUTUALLY EXCLUSIVE in the form
+     * (only one of a pair ever reaches Done), so the group's shared Start/End date
+     * columns never collide.
+     *   display step name (compact) => base group header text.
+     */
+    private const DISMENTAL_MAP = [
+        'copperpipingdismental' => 'Copper Piping',
+        'draindismental'        => 'Drain',
+        'mainductingdismental'  => 'Main Ducting',
+        'idudismental'          => 'Indoor Installation',
+        'odudismental'          => 'odu unit installation',
+    ];
+    /** base group (compact) => dismantle step display name (reverse of DISMENTAL_MAP). */
+    private const DISMENTAL_BY_GROUP = [
+        'copperpiping'        => 'Copper Piping Dismental',
+        'drain'               => 'Drain Dismental',
+        'mainducting'         => 'Main Ducting Dismental',
+        'indoorinstallation'  => 'IDU Dismental',
+        'oduunitinstallation' => 'ODU Dismental',
+    ];
+
+    /** Base group header for a dismantle step name, or '' when it isn't one. */
+    private function dismentalGroupFor(string $stepName): string
+    {
+        return self::DISMENTAL_MAP[Sheets::compactKey($stepName)] ?? '';
+    }
+
+    /**
      * Step names counted as done on a row:
      *   - grouped steps whose "Status" sub-cell reads "Done", plus
      *   - single-column DATE steps (e.g. "LS Material Delivery") that hold any value.
@@ -259,6 +367,17 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
             $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // "Dismental Status" sub-col -> report the dismantle step (own name), Done-only.
+            if (strpos($sub, 'dismental') !== false) {
+                if (strpos($sub, 'status') !== false
+                    && Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
+                    $d = self::DISMENTAL_BY_GROUP[Sheets::compactKey($name)] ?? '';
+                    if ($d !== '') {
+                        $add($d);
+                    }
+                }
+                continue;
+            }
             if ($sub === 'status') {
                 if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
                     $add($name);
@@ -269,7 +388,57 @@ class Pms
             if ($sub !== '' || $name === '' || in_array(Sheets::normalizeKey($name), self::NON_STEP_COLS, true)) {
                 continue;
             }
-            if (trim((string)$this->cell($rows, $row, $i + 1)) !== '') {
+            // A "Not Required" date step is hidden, not done — don't count it here.
+            $val = trim((string)$this->cell($rows, $row, $i + 1));
+            if ($val !== '' && Sheets::normalizeKey($val) !== 'not required') {
+                $add($name);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Step names marked "Not Required" on a row (grouped Status sub-cell == "Not Required",
+     * or a single-column date step holding the literal "Not Required"). The front-end HIDES
+     * these steps entirely on the next visit. Mirror of readDoneSteps.
+     */
+    private function readHiddenSteps(array $rows, int $row, array $info): array
+    {
+        $out = [];
+        $seen = [];
+        $add = function (string $name) use (&$out, &$seen) {
+            $key = Sheets::compactKey($name);
+            if ($name === '' || isset($seen[$key])) {
+                return;
+            }
+            $seen[$key] = true;
+            $out[] = $name;
+        };
+
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // "Dismental Status" == "Not Required" -> hide the dismantle step next visit.
+            if (strpos($sub, 'dismental') !== false) {
+                if (strpos($sub, 'status') !== false
+                    && Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
+                    $d = self::DISMENTAL_BY_GROUP[Sheets::compactKey($name)] ?? '';
+                    if ($d !== '') {
+                        $add($d);
+                    }
+                }
+                continue;
+            }
+            if ($sub === 'status') {
+                if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
+                    $add($name);
+                }
+                continue;
+            }
+            if ($sub !== '' || $name === '' || in_array(Sheets::normalizeKey($name), self::NON_STEP_COLS, true)) {
+                continue;
+            }
+            if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
                 $add($name);
             }
         }
@@ -403,26 +572,54 @@ class Pms
         $rows = $this->sheets->getTab($ssId, $title);
         $info = $this->headerInfo($rows);
 
-        // Match by Order ID first (exact shared key), fall back to project name.
-        $pmsRow = -1;
-        $orderId = $this->getOrderIdForProject((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
-        if ($orderId !== '') {
-            $orderCol = $this->findOrderIdCol($info);
-            if ($orderCol > 0) {
-                $pmsRow = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
-            }
-        }
+        [$pmsRow, $orderId] = $this->findGeneralRow($rows, $info, $p);
         if ($pmsRow < 0) {
-            $projCol = $this->findNamedCol($info, 'Project Name');
-            $pmsRow = $this->findRowByColValue($rows, $info, $projCol, (string)($p['project'] ?? ''));
-        }
-        if ($pmsRow < 0) {
+            // Carry the Order ID out even on a miss: it identifies the project for
+            // the tracker DB, and dropping it here is what let one job show up as
+            // two in the admin panel when the PMS row wasn't in the sheet yet.
             return $this->skip('Project "' . ($p['project'] ?? '') . '"'
                 . ($orderId !== '' ? ' (Order ID ' . $orderId . ')' : '')
-                . ' not found in ' . $tabName . '. Progress sheet not updated.');
+                . ' not found in ' . $tabName . '. Progress sheet not updated.', $orderId);
         }
         $this->updateRow($ssId, $title, $rows, $pmsRow, $info, $p, false);
         return ['updated' => true, 'warning' => '', 'order_id' => $orderId];
+    }
+
+    /**
+     * The PMS row for a General submission, plus the Order ID its project resolved to.
+     *
+     * Order ID is the identity: the dropdown offers a site name AND the client's
+     * billing name for the same order, so matching on the picked label alone filed
+     * one job under two names. Name matching stays as a fallback for rows whose
+     * Order ID cell is still blank, and tries EVERY name the order is known by —
+     * "PMS - VRV" files these under the site name but "PMS - NonVRV" under the
+     * billing name, so one fixed column value would miss half the time.
+     *
+     * @return array [1-based row or -1, order id or '']
+     */
+    private function findGeneralRow(array $rows, array $info, array $p): array
+    {
+        $siteType = (string)($p['siteType'] ?? '');
+        $picked   = (string)($p['project'] ?? '');
+        $orderId  = $this->orders()->orderIdFor($siteType, $picked);
+
+        if ($orderId !== '') {
+            $orderCol = $this->findOrderIdCol($info);
+            if ($orderCol > 0) {
+                $row = $this->findRowByColValue($rows, $info, $orderCol, $orderId);
+                if ($row >= 0) {
+                    return [$row, $orderId];
+                }
+            }
+        }
+        $projCol = $this->findNamedCol($info, 'Project Name');
+        foreach ($this->orders()->matchNames($siteType, $picked) as $name) {
+            $row = $this->findRowByColValue($rows, $info, $projCol, $name);
+            if ($row >= 0) {
+                return [$row, $orderId];
+            }
+        }
+        return [-1, $orderId];
     }
 
     /* ---------------- write one PMS row (updatePmsRow_) ---------------- */
@@ -453,6 +650,28 @@ class Pms
             if ($step === '' || $stat === '') {
                 continue;
             }
+            // Dismantle steps -> the group's "Dismental Status" sub-col. The Done date
+            // reuses the group's shared "End Date" (base + dismental never both hit Done).
+            $dgroup = $this->dismentalGroupFor($step);
+            if ($dgroup !== '') {
+                $dcol = $this->findDismentalStatusCol($info, $dgroup);
+                if ($dcol < 1) {
+                    continue;
+                }
+                $this->sheets->setCell($ssId, $title, $row, $dcol, ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat);
+                if ($stat === 'Done') {
+                    $endCol = $this->findStepSubCol($info, $dgroup, 'End Date');
+                    if ($endCol > 0) {
+                        $cur = $this->cell($rows, $row, $endCol);
+                        if ($cur === '' || $cur === null) {
+                            $this->sheets->setCell($ssId, $title, $row, $endCol, $this->now());
+                        }
+                    }
+                } elseif ($stat === 'Hold') {
+                    $holdEntries[] = $e;
+                }
+                continue;
+            }
             $statusCol = $this->findStepStatusCol($info, $step);
             if ($statusCol < 1) {
                 continue;
@@ -465,6 +684,12 @@ class Pms
                     $cur = $this->cell($rows, $row, $statusCol);
                     if ($cur === '' || $cur === null) {
                         $this->sheets->setCell($ssId, $title, $row, $statusCol, $this->today());
+                    }
+                } elseif ($stat === 'Not Required') {
+                    // Stamp the literal so readHiddenSteps hides this date step next visit.
+                    $cur = $this->cell($rows, $row, $statusCol);
+                    if ($cur === '' || $cur === null) {
+                        $this->sheets->setCell($ssId, $title, $row, $statusCol, 'Not Required');
                     }
                 }
                 continue;
@@ -498,7 +723,10 @@ class Pms
                 if ($tStep === '') {
                     continue;
                 }
-                $startCol = $this->findStepSubCol($info, $tStep, 'Start Date');
+                $tGroup = $this->dismentalGroupFor($tStep);
+                $startCol = $tGroup !== ''
+                    ? $this->findStepSubCol($info, $tGroup, 'Start Date')
+                    : $this->findStepSubCol($info, $tStep, 'Start Date');
                 if ($startCol < 1) {
                     continue;
                 }
@@ -540,7 +768,12 @@ class Pms
         }
 
         if (!empty($p['tentativeEndDate'])) {
-            $setByName('Tentitive Project End date', $p['tentativeEndDate']);
+            // Write to the SAME column readTentative() reads (the END date col, never the
+            // adjacent "Tentitive Project START date"), so it round-trips on the next visit.
+            $tentCol = $this->findTentativeEndCol($info);
+            if ($tentCol > 0) {
+                $this->sheets->setCell($ssId, $title, $row, $tentCol, (string)$p['tentativeEndDate']);
+            }
         }
     }
 
@@ -582,7 +815,9 @@ class Pms
                 $lastGroup = $groupVals[$c];
             } else {
                 $s = Sheets::normalizeKey($subVals[$c]);
-                if (($s === 'status' || $s === 'start date' || $s === 'end date') && $lastGroup !== '') {
+                // Forward-fill the step name over its Status/Start/End AND the merged
+                // "Dismental Status" sub-cell (the latter is otherwise blank on read).
+                if (($s === 'status' || $s === 'start date' || $s === 'end date' || strpos($s, 'dismental') !== false) && $lastGroup !== '') {
                     $groupVals[$c] = $lastGroup;
                 }
             }
@@ -637,6 +872,24 @@ class Pms
         return -1;
     }
 
+    /** The "Dismental Status" sub-col under a step group (group name forward-filled). 1-based, or -1. */
+    private function findDismentalStatusCol(array $info, string $groupName): int
+    {
+        $g = Sheets::compactKey($groupName);
+        if ($g === '') {
+            return -1;
+        }
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            if (Sheets::compactKey($info['groupVals'][$i]) === $g) {
+                $s = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+                if (strpos($s, 'dismental') !== false && strpos($s, 'status') !== false) {
+                    return $i + 1;
+                }
+            }
+        }
+        return -1;
+    }
+
     private function findNamedCol(array $info, string $name): int
     {
         $n = Sheets::compactKey($name);
@@ -653,24 +906,10 @@ class Pms
         return -1;
     }
 
-    private function isOrderIdHeader(string $text): bool
-    {
-        $t = Sheets::normalizeKey($text);
-        if ($t === '' || strpos($t, 'order') === false) {
-            return false;
-        }
-        if (strpos($t, 'date') !== false) {
-            return false;
-        }
-        return $t === 'order'
-            || strpos($t, 'orderid') !== false
-            || (bool)preg_match('/(^|[^a-z])(id|no|no\.|number|code|ref)([^a-z]|$)/', $t);
-    }
-
     private function findOrderIdCol(array $info): int
     {
         for ($i = 0; $i < $info['lastCol']; $i++) {
-            if ($this->isOrderIdHeader((string)$info['subVals'][$i]) || $this->isOrderIdHeader((string)$info['groupVals'][$i])) {
+            if (Sheets::isOrderIdHeader((string)$info['subVals'][$i]) || Sheets::isOrderIdHeader((string)$info['groupVals'][$i])) {
                 return $i + 1;
             }
         }
@@ -733,57 +972,6 @@ class Pms
         return $digitHits === 1 ? $digitRow : -1;
     }
 
-    /* ---------------- Order ID from Orders sheet (getOrderIdForProject_) ---------------- */
-
-    private function getOrderIdForProject(string $siteType, string $projectName): string
-    {
-        $want = Sheets::normalizeKey($projectName);
-        if ($want === '') {
-            return '';
-        }
-        try {
-            $isVRV = ($siteType === 'VRV');
-            $ssId = $isVRV ? $this->cfg['vrv_orders_sheet_id'] : $this->cfg['nonvrv_orders_sheet_id'];
-            $gid  = $isVRV ? $this->cfg['vrv_orders_gid'] : $this->cfg['nonvrv_orders_gid'];
-            $title = $this->sheets->titleForGid($ssId, (int)$gid);
-            if ($title === null) {
-                return '';
-            }
-            $rows = $this->sheets->getTab($ssId, $title);
-            if (count($rows) < 2) {
-                return '';
-            }
-            $headers = $rows[0];
-            $orderCol = -1;
-            $nameCols = [];
-            foreach ($headers as $i => $h) {
-                if ($orderCol < 0 && $this->isOrderIdHeader((string)$h)) {
-                    $orderCol = $i;
-                }
-                $hl = strtolower((string)$h);
-                if (strpos($hl, 'select project name') !== false
-                    || (strpos($hl, 'project name') !== false && strpos($hl, 'executive') === false)
-                    || strpos($hl, 'billing customer name') !== false) {
-                    $nameCols[] = $i;
-                }
-            }
-            if ($orderCol < 0 || !$nameCols) {
-                return '';
-            }
-            for ($r = 1; $r < count($rows); $r++) {
-                foreach ($nameCols as $c) {
-                    if (Sheets::normalizeKey($rows[$r][$c] ?? '') === $want) {
-                        $oid = $rows[$r][$orderCol] ?? '';
-                        return trim((string)$oid);
-                    }
-                }
-            }
-            return '';
-        } catch (Throwable $e) {
-            return '';
-        }
-    }
-
     /* ---------------- misc ---------------- */
 
     private function cell(array $rows, int $row1, int $col1)
@@ -824,8 +1012,9 @@ class Pms
         return $d ? $d->format('d-M-Y') : $ymd;
     }
 
-    private function skip(string $msg): array
+    /** Not stamped — but still report the Order ID when we know it (see updateGeneral). */
+    private function skip(string $msg, string $orderId = ''): array
     {
-        return ['updated' => false, 'warning' => $msg];
+        return ['updated' => false, 'warning' => $msg, 'order_id' => $orderId];
     }
 }

@@ -37,7 +37,7 @@ class Bootstrap
     public static function autoload(): void
     {
         foreach ([
-            'GoogleAuth', 'GoogleClient', 'Sheets', 'Drive', 'Db', 'Tracker',
+            'GoogleAuth', 'GoogleClient', 'Sheets', 'Orders', 'Drive', 'Db', 'Tracker',
             'ResponseSheet', 'Pms', 'Pdf', 'PmsFpdf',
             'Smtp', 'Mailer', 'Whatsapp', 'NotificationService',
             'JobQueue', 'Spawn', 'SubmitService',

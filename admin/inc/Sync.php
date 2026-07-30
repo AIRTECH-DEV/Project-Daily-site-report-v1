@@ -33,9 +33,20 @@ class Sync
              FROM submissions ORDER BY id ASC"
         )->fetchAll(PDO::FETCH_ASSOC);
 
-        $wf   = self::rebuildWorkforce($db, $subs);
-        $proj = self::rebuildProjects($db, $subs);
-        $al   = self::rebuildAlerts($db, self::thr($cfg));
+        // One transaction for the whole rebuild. Without it every row INSERT is
+        // its own commit — thousands of round trips that push a sync past the
+        // nginx fastcgi_read_timeout (504) once the table grows.
+        $own = !$db->inTransaction();
+        if ($own) { $db->beginTransaction(); }
+        try {
+            $wf   = self::rebuildWorkforce($db, $subs);
+            $proj = self::rebuildProjects($db, $subs);
+            $al   = self::rebuildAlerts($db, self::thr($cfg));
+            if ($own) { $db->commit(); }
+        } catch (Throwable $e) {
+            if ($own && $db->inTransaction()) { $db->rollBack(); }
+            throw $e;
+        }
 
         return [
             'submissions'   => count($subs),
@@ -64,7 +75,9 @@ class Sync
 
     private static function rebuildWorkforce(PDO $db, array $subs): array
     {
-        $db->exec("TRUNCATE TABLE visit_workers");
+        // DELETE, not TRUNCATE: TRUNCATE is DDL and implicitly commits, which
+        // would break run()'s transaction (and it takes a metadata lock).
+        $db->exec("DELETE FROM visit_workers");
 
         $insVW = $db->prepare(
             "INSERT INTO visit_workers (submission_id, project_key, worker_name, type, contractor_name, steps, engineer, visit_date)
@@ -122,10 +135,35 @@ class Sync
         ];
     }
 
-    /** Structured per-visit workers from payload peopleRows (fallback: workDoneBy text). */
+    /** Structured per-visit workers from payload teams[] / legacy peopleRows[] (fallback: workDoneBy text). */
     private static function peopleRows(array $pl): array
     {
         $out = [];
+        // Current shape: teams[] = [{ people:[{name,techType,contractorName}], workDone:[...] }].
+        // Each member inherits the team's shared workDone as their steps.
+        $teams = $pl['teams'] ?? null;
+        if (is_array($teams) && $teams) {
+            foreach ($teams as $team) {
+                if (!is_array($team)) continue;
+                $steps = $team['workDone'] ?? [];
+                if (!is_array($steps)) $steps = explode(',', (string)$steps);
+                $steps = array_values(array_filter(array_map(fn($x) => trim((string)$x), $steps), fn($x) => $x !== ''));
+                foreach (($team['people'] ?? []) as $r) {
+                    if (!is_array($r)) continue;
+                    $name = trim((string)($r['name'] ?? ''));
+                    if ($name === '') continue;
+                    $type = (stripos((string)($r['techType'] ?? ''), 'contract') !== false) ? 'Contractor' : 'VAPL';
+                    $out[] = [
+                        'name'       => $name,
+                        'type'       => $type,
+                        'contractor' => $type === 'Contractor' ? trim((string)($r['contractorName'] ?? '')) : '',
+                        'steps'      => $steps,
+                    ];
+                }
+            }
+            return $out;
+        }
+        // Legacy shape: peopleRows[] (each person carried their own workDone).
         $rows = $pl['peopleRows'] ?? null;
         if (is_array($rows) && $rows) {
             foreach ($rows as $r) {
@@ -335,7 +373,7 @@ class Sync
 
         // notification coverage: latest submission per project without an email/whatsapp done log
         $missing = $db->query(
-            "SELECT s.id, s.project, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT s.id, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
              FROM submissions s
              WHERE s.overall_status IN ('done','partial')
                AND NOT EXISTS (SELECT 1 FROM process_log p WHERE p.submission_id=s.id AND p.step IN ('email','whatsapp') AND p.status='done')
@@ -349,7 +387,7 @@ class Sync
 
         // pipeline failures
         $fails = $db->query(
-            "SELECT p.submission_id, p.step, p.message, s.project, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT p.submission_id, p.step, p.message, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
              FROM process_log p JOIN submissions s ON s.id=p.submission_id
              WHERE p.status='failed' ORDER BY p.id DESC LIMIT 100"
         )->fetchAll(PDO::FETCH_ASSOC);

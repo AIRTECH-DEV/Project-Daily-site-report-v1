@@ -86,9 +86,15 @@ $cfg = [
         'scrape_tab'      => 'VRV Scraped Data1',
         'scrape_name_col' => 1,            // 0-based col B (Project Name)
         'scrape_email_col'=> 3,            // 0-based col D (Scraped Emails)
+        // Must list BOTH Orders sheets — same pair as whatsapp.order_ss_ids. The
+        // Non-VRV one was missing, so every Non-VRV General report had no client
+        // address to find and silently fell back to fallback_to (crm@).
         'order_ss_ids'    => [
+            '1hvqgSI3f05d1wSoQVxaBPDzr4maHhTz5MLqhmN4a5Is',   // Non-VRV Orders
+            '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0',   // VRV Orders
+            // Legacy sheet — the service account gets 403 on it, so it contributes
+            // nothing today. Kept only so it starts working if it is ever shared.
             '1HwYDM6ARcDomEqmhqBTxRe3OsAzeezTq_8Wnhsm3_eY',
-            '1SV_WhGa_sEdUkj1X46xRtoCNo5KG3Khi1jRkdl9LSz0',
         ],
         'order_tab'       => 'Orders',
         'developer_emails'=> [
@@ -145,6 +151,16 @@ $cfg = [
         'fonts'         => [],                 // optional TTF overrides: regular/semibold/bold
     ],
 
+    // ---- Project Engineers (site-report "Assigned Engineer" dropdown) ----
+    // Seed roster. The admin panel (admin/users.php) writes the live roster to
+    // config/overrides.json ("engineers"), which replaces this list. Entries may
+    // be plain names or {"name": "...", "active": 0|1}; inactive names stay on
+    // record but drop out of the app dropdown.
+    'engineers' => [
+        'Dada', 'Nagraj', 'Pratik', 'Ranjeet', 'Paresh', 'Shubham', 'Ganesh',
+        'Vrundavan', 'Parikshit', 'Prathamesh Paigude', 'Raj Jthape',
+    ],
+
     // ---- App ------------------------------------------------------------
     'timezone'    => 'Asia/Kolkata',
     'uploads_dir' => __DIR__ . '/../storage/uploads', // local temp before Drive push
@@ -158,6 +174,14 @@ $cfg = [
     'worker_poll_seconds'  => 15,    // gap between worker passes while jobs pending
     // Full path to the PHP CLI binary (PHP_BINARY is unreliable under mod_php).
     'php_binary'           => 'C:\\xampp\\php\\php.exe',
+
+    // ---- HVAC commissioning app backend (separate service) --------------
+    // PMS pushes each newly-Commissioned project here; the mobile app reads it.
+    // Blank url = push disabled. Set url + api_key per machine in secrets.php.
+    'app_backend' => [
+        'url'     => '',   // e.g. http://localhost/hvac_backend  (no trailing slash)
+        'api_key' => '',   // must equal the backend API_KEY and the app's apiKey
+    ],
 ];
 
 // ---- Server-local settings (config/secrets.php) -------------------------
@@ -184,6 +208,10 @@ if (is_file($secretsFile)) {
         }
         if (isset($secrets['php_binary']) && $secrets['php_binary'] !== '') {
             $cfg['php_binary'] = (string)$secrets['php_binary'];
+        }
+        // HVAC app backend URL + key (per-machine).
+        if (isset($secrets['app_backend']) && is_array($secrets['app_backend'])) {
+            $cfg['app_backend'] = array_merge($cfg['app_backend'], $secrets['app_backend']);
         }
     }
 }
@@ -230,7 +258,29 @@ if (is_file($overridesFile)) {
                 $cfg['pe_plan']['test_to'] = (string)$p['test_to'];
             }
         }
+        // Project Engineer roster — admin panel owns it once it writes the key.
+        if (isset($ov['engineers']) && is_array($ov['engineers']) && $ov['engineers']) {
+            $cfg['engineers'] = $ov['engineers'];
+        }
     }
 }
+
+// ---- Normalize the engineer roster --------------------------------------
+// Accepts plain names (seed list) or {"name":..,"active":..} rows (admin panel)
+// and always returns rows: [['name' => 'Dada', 'active' => 1], ...].
+$engineers = [];
+$seen = [];
+foreach ((array)($cfg['engineers'] ?? []) as $e) {
+    $name = is_array($e) ? trim((string)($e['name'] ?? '')) : trim((string)$e);
+    if ($name === '') continue;
+    $key = mb_strtolower($name);
+    if (isset($seen[$key])) continue;
+    $seen[$key] = true;
+    $engineers[] = [
+        'name'   => $name,
+        'active' => (is_array($e) && array_key_exists('active', $e)) ? (int)!empty($e['active']) : 1,
+    ];
+}
+$cfg['engineers'] = $engineers;
 
 return $cfg;

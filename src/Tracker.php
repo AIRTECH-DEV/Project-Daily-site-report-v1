@@ -122,22 +122,37 @@ class Tracker
         ]);
     }
 
-    /** Removes base64 blobs so payload_json stays small. */
+    /**
+     * Removes base64 blobs so payload_json stays small. Strips the top-level report AND
+     * every per-flat report in flats[] — a multi-flat visit carries photos for each flat,
+     * and leaving them in blew past max_allowed_packet on INSERT.
+     */
     private function stripFileBytes(array $p): array
     {
-        $clean = $p;
-        foreach (['photos', 'drawingPhoto', 'measurementFile'] as $k) {
-            if (!isset($clean[$k])) {
-                continue;
-            }
-            if ($k === 'photos' && is_array($clean[$k])) {
-                $clean[$k] = array_map(fn($f) => is_array($f)
-                    ? ['name' => $f['name'] ?? '', 'mimeType' => $f['mimeType'] ?? '']
-                    : $f, $clean[$k]);
-            } elseif (is_array($clean[$k])) {
-                $clean[$k] = ['name' => $clean[$k]['name'] ?? '', 'mimeType' => $clean[$k]['mimeType'] ?? ''];
-            }
+        $clean = $this->stripReportFiles($p);
+        if (isset($clean['flats']) && is_array($clean['flats'])) {
+            $clean['flats'] = array_map(
+                fn($f) => is_array($f) ? $this->stripReportFiles($f) : $f,
+                $clean['flats']
+            );
         }
         return $clean;
+    }
+
+    /** Replaces base64 file blobs with just {name,mimeType} in one report-shaped array. */
+    private function stripReportFiles(array $r): array
+    {
+        foreach (['photos', 'drawingPhoto', 'measurementFile'] as $k) {
+            if (!isset($r[$k]) || !is_array($r[$k])) {
+                continue;
+            }
+            // Each slot is a list of blobs; older payloads sent a single blob object.
+            $r[$k] = (isset($r[$k]['base64']) || isset($r[$k]['name']))
+                ? ['name' => $r[$k]['name'] ?? '', 'mimeType' => $r[$k]['mimeType'] ?? '']
+                : array_map(fn($f) => is_array($f)
+                    ? ['name' => $f['name'] ?? '', 'mimeType' => $f['mimeType'] ?? '']
+                    : $f, $r[$k]);
+        }
+        return $r;
     }
 }

@@ -18,6 +18,7 @@ class Layout
         'notifications' => ['notifications.php', 'bi-bell',      'Notifications'],
         'developers'  => ['developers.php',  'bi-diagram-3',    'Developers'],
         'workforce'   => ['workforce.php',   'bi-people-fill',  'Workforce'],
+        'performance' => ['performance.php', 'bi-trophy',       'Performance & Incentive'],
         'pipeline'    => ['pipeline.php',    'bi-diagram-2',    'Pipeline Health'],
         'settings'    => ['settings.php',    'bi-gear',         'Settings'],
         'users'       => ['users.php',       'bi-people',       'Admin Users'],
@@ -199,13 +200,13 @@ class Layout
         'pipeline' => [
             'intro' => 'Delivery health for the report pipeline — the chain that turns a submitted report into a PDF and sends it to the client by email and WhatsApp. A traffic light shows whether each report completed that chain.',
             'does'  => [
-                'See Green / Amber / Red health per report.',
+                'See each report\'s health: <b>Delivered</b> (green), <b>Processing</b> (amber), or <b>Failed</b> (red).',
                 'Identify which processing step failed (PDF, email, or WhatsApp).',
             ],
             'steps' => [
-                'On a Red item, note the failed step and its error message.',
+                'On a <b>Failed</b> item, note the failed step and its error message.',
                 'Confirm the cause in <b>Notifications</b>, then correct it (often a mode or contact in <b>Settings</b>).',
-                'Re-process; the item returns to Green once the chain completes.',
+                'Re-process; the item returns to <b>Delivered</b> once the chain completes.',
             ],
             'legend' => 'health',
         ],
@@ -312,6 +313,28 @@ class Layout
             'buttons' => [
                 ['bi-grid-1x2', 'Coloured stat tiles', 'Quick summary of this person: projects, total visits, distinct steps, last active, active months.'],
                 ['bi-box-arrow-up-right', 'Project / #Report links', 'Open the project or the exact report from any visit row.'],
+            ],
+        ],
+        'performance' => [
+            'intro' => 'Scorecards for paying incentive. Ranks every Project Engineer and VAPL worker on what they actually delivered in the chosen period, divides the incentive budget you allocated between them, and separately rates contractors on how hard they work and whether their sites finish on time. Project start dates are read from the PMS sheets — the <b>Marking</b> step\'s <b>Start Date</b>.',
+            'does'  => [
+                'Pick the scoring period (30 days / 90 days / 6 months / 1 year / all).',
+                'Allocate a total monthly budget for PEs and one for VAPL workers — each is divided in proportion to score.',
+                'See who is eligible, who is not, and exactly why.',
+                'Compare contractors on steps completed, steps per visit, and on-time delivery (they are rated, never paid from the budgets).',
+                'Check every project\'s start date, target end date, actual finish, and how many days early or late it was.',
+            ],
+            'steps' => [
+                'In the PMS sheet, fill the <b>Marking</b> step\'s <b>Start Date</b> for each project — that is the project start date.',
+                'Come back here and press <b>Refresh start dates from PMS sheets</b>.',
+                'Set the two <b>Total Budget Allocated</b> amounts in <b>Incentive Settings</b> and press <b>Save settings</b>.',
+                'Read the <b>Incentive</b> column in the PE and VAPL Worker tables — that is each person\'s payout.',
+            ],
+            'buttons' => [
+                ['bi-arrow-repeat', 'Refresh start dates from PMS sheets', 'Re-reads every PMS progress sheet and updates each project\'s start date, target end and actual finish. Read-only — it never writes to the sheets.'],
+                ['bi-sliders',      'Incentive Settings', 'The two Total Budget Allocated amounts, the eligibility floor, minimum visits, and how many days counts as a "fast" step.'],
+                ['bi-trophy',       'Score bar & grade',  'Score out of 100. A = 85+, B = 70+, C = 55+, D below 55. The breakdown is in "How the Score Is Calculated".'],
+                ['bi-calendar-range', 'Verdict column',   'On time = finished on or before target · Late = finished after · Overdue = target passed, still not finished · Running = in progress.'],
             ],
         ],
         'contractor' => [
@@ -538,12 +561,23 @@ class Layout
         return '<span class="pill pill-' . $tone . '">' . Admin::e($lc ?: '—') . '</span>';
     }
 
-    /** Traffic-light pipeline health from overall_status: Green / Amber / Red. */
+    /** Pipeline health from overall_status. Keeps the traffic-light colour, but the
+     *  label is a plain-English status (not the raw colour name "Green/Amber/Red"). */
     public static function pipelinePill(string $overall): string
     {
         $k = strtolower(trim($overall));
-        if ($k === 'done')            { return '<span class="pill pill-ok"><span class="dot"></span>Green</span>'; }
-        if ($k === 'failed')          { return '<span class="pill pill-bad"><span class="dot"></span>Red</span>'; }
-        return '<span class="pill pill-warn"><span class="dot"></span>Amber</span>';
+        // [tone, label]  tone drives the RAG colour (ok=green, warn=amber, bad=red).
+        $map = [
+            'done'            => ['ok',   'Delivered'],
+            'failed'          => ['bad',  'Failed'],
+            'partial'         => ['warn', 'Partial'],
+            'processing'      => ['warn', 'Processing'],
+            'running'         => ['warn', 'Processing'],
+            'awaiting_notify' => ['warn', 'Sending'],
+            'queued'          => ['warn', 'Queued'],
+            'received'        => ['warn', 'Queued'],
+        ];
+        [$tone, $label] = $map[$k] ?? ['warn', 'Processing'];
+        return '<span class="pill pill-' . $tone . '"><span class="dot"></span>' . $label . '</span>';
     }
 }

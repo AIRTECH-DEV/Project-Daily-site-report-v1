@@ -19,7 +19,7 @@ $normDate = fn($v) => (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', trim
 // ---- latest plan per project ------------------------------------------------
 $plans = [];   // project_key => plan (ascending id → latest report overwrites)
 foreach ($db->query(
-    "SELECT id, project, developer, building, flat_no, client_type, site_type, engineer, status, created_at, payload_json
+    "SELECT id, project, order_id, developer, building, flat_no, client_type, site_type, engineer, status, created_at, payload_json
      FROM submissions ORDER BY id ASC") as $r) {
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
     $steps = $pl['tomorrowSteps'] ?? null;

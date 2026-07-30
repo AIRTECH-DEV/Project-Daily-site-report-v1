@@ -28,11 +28,12 @@ $atts->execute([$id]);
 $atts = $atts->fetchAll();
 
 $photos = array_values(array_filter($atts, fn($a) => $a['kind'] === 'site_photo'));
-$pdf    = null; $drawing = null; $measure = null;
+// drawing / measurement each accept several uploads -> keep every one.
+$pdf = null; $drawings = []; $measures = [];
 foreach ($atts as $a) {
     if ($a['kind'] === 'pdf' && $a['url']) $pdf = $a;
-    if ($a['kind'] === 'drawing') $drawing = $a;
-    if ($a['kind'] === 'measurement') $measure = $a;
+    if ($a['kind'] === 'drawing' && $a['url']) $drawings[] = $a;
+    if ($a['kind'] === 'measurement' && $a['url']) $measures[] = $a;
 }
 
 $payload = json_decode((string)$s['payload_json'], true) ?: [];
@@ -116,7 +117,7 @@ $flatSteps = function (array $payload, string $currentStatus): array {
 };
 
 $stepOrder = []; $stepStat = []; $stepDone = []; $stepHold = [];
-$allRows = $db->query("SELECT payload_json, current_status, created_at, client_type, developer, building, flat_no, project FROM submissions ORDER BY id ASC");
+$allRows = $db->query("SELECT payload_json, current_status, created_at, client_type, developer, building, flat_no, project, order_id FROM submissions ORDER BY id ASC");
 foreach ($allRows as $r) {
     if (projectKey($r) !== projectKey($s)) continue;
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
@@ -174,6 +175,43 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
     <?php $renderCol($col1); $renderCol($col2); $renderCol($col3); ?>
   </div>
 </div>
+
+<?php
+// Multi-flat developer visit: one submission covers several flats (each its own steps).
+// The top row above shows the first flat; this card lists them all from the payload.
+$visitFlats = is_array($payload['flats'] ?? null) ? array_values(array_filter($payload['flats'], 'is_array')) : [];
+if (count($visitFlats) > 1):
+?>
+<div class="card2">
+  <div class="card2-head"><i class="bi bi-building text-primary"></i><h2>Flats in this visit</h2>
+    <span class="sub"><?= count($visitFlats) ?> flats · one consolidated report</span></div>
+  <div class="card2-body">
+    <div class="info-grid">
+      <?php foreach ($visitFlats as $fi => $f):
+        $fno = trim((string)($f['flatNo'] ?? ''));
+        $ffl = trim((string)($f['floor'] ?? ''));
+        $steps = [];
+        foreach ((is_array($f['stepStatuses'] ?? null) ? $f['stepStatuses'] : []) as $eSt) {
+            if (!is_array($eSt)) continue;
+            $st = trim((string)($eSt['step'] ?? ''));
+            if ($st !== '') $steps[] = $st . ' (' . trim((string)($eSt['status'] ?? '')) . ')';
+        }
+        $tent = trim((string)($f['tentativeEndDate'] ?? ''));
+        $work = trim((string)($f['workDoneBy'] ?? ''));
+      ?>
+      <div class="info-col">
+        <div class="info-row"><div class="info-key"><i class="bi bi-door-open"></i>Flat <?= $fi + 1 ?></div>
+          <div class="info-val"><b><?= Admin::e($fno !== '' ? $fno : '—') ?></b><?= $ffl !== '' ? ' <span class="info-val soft">· ' . Admin::e($ffl) . '</span>' : '' ?></div></div>
+        <div class="info-row"><div class="info-key"><i class="bi bi-list-check"></i>Steps</div>
+          <div class="info-val"><?= $steps ? Admin::e(implode(', ', $steps)) : '<span class="info-val soft">—</span>' ?></div></div>
+        <?php if ($work !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-hammer"></i>Work by</div><div class="info-val soft"><?= Admin::e($work) ?></div></div><?php endif; ?>
+        <?php if ($tent !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-calendar-event"></i>Tentative</div><div class="info-val"><?= Admin::e(fmtDate($tent) ?: $tent) ?></div></div><?php endif; ?>
+      </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
 
 <?php if ($wpTotal > 0): ?>
 <div class="card2">
@@ -241,8 +279,8 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
 
       <div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:10px">
         <?php if ($pdf): ?><a class="att-file" href="<?= Admin::e($pdf['url']) ?>" target="_blank"><span class="pdf-ic"><i class="bi bi-file-earmark-pdf"></i></span> Report PDF</a><?php endif; ?>
-        <?php if ($drawing && $drawing['url']): ?><a class="att-file" href="<?= Admin::e($drawing['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--info-bg);color:var(--info)"><i class="bi bi-vector-pen"></i></span> Drawing change</a><?php endif; ?>
-        <?php if ($measure && $measure['url']): ?><a class="att-file" href="<?= Admin::e($measure['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--warn-bg);color:var(--warn)"><i class="bi bi-rulers"></i></span> Measurement</a><?php endif; ?>
+        <?php foreach ($drawings as $di => $drawing): ?><a class="att-file" href="<?= Admin::e($drawing['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--info-bg);color:var(--info)"><i class="bi bi-vector-pen"></i></span> Drawing change<?= count($drawings) > 1 ? ' ' . ($di + 1) : '' ?></a><?php endforeach; ?>
+        <?php foreach ($measures as $mi => $measure): ?><a class="att-file" href="<?= Admin::e($measure['url']) ?>" target="_blank"><span class="pdf-ic" style="background:var(--warn-bg);color:var(--warn)"><i class="bi bi-rulers"></i></span> Measurement<?= count($measures) > 1 ? ' ' . ($mi + 1) : '' ?></a><?php endforeach; ?>
       </div>
     </div>
   </div>

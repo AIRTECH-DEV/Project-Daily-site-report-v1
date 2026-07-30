@@ -25,7 +25,7 @@ $plans = [];      // key => event
 $endByProj = [];  // projectKey => event
 $normDate = fn($v) => (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($v))) ? trim($v) : '';
 
-foreach ($db->query("SELECT id, project, developer, building, flat_no, client_type, site_type, engineer, created_at, tentative_end, payload_json FROM submissions ORDER BY id ASC") as $r) {
+foreach ($db->query("SELECT id, project, order_id, developer, building, flat_no, client_type, site_type, engineer, created_at, tentative_end, payload_json FROM submissions ORDER BY id ASC") as $r) {
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
 
     // planned steps for the next working day

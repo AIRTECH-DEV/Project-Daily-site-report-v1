@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud compute *)",
+      "Bash(ssh -i ~/.ssh/google_compute_engine -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null mis@35.234.208.82 'echo \"=== DISK ===\"; df -h /; echo; echo \"=== MEM ===\"; free -m; echo; echo \"=== SERVICES ===\"; for s in nginx php8.3-fpm mysql; do printf \"%-14s %s\\\\n\" \"$s\" \"$\\(systemctl is-active $s\\)\"; done')",
+      "Bash(gcloud projects *)",
+      "Bash(curl -s -m 20 -o /dev/null -w \"%{http_code} %{redirect_url}\\\\n\" \"http://35.234.208.82/\")",
+      "Bash(curl -sk -m 20 -o /dev/null -w \"%{http_code}\\\\n\" \"https://35.234.208.82/\")",
+      "Bash(curl -sk -m 20 -o /dev/null -w \"%{http_code}\\\\n\" \"https://35.234.208.82/api/project_names.php?siteType=Non-VRV\")",
+      "Bash(git push *)",
+      "Bash(timeout 150 ssh -i ~/.ssh/google_compute_engine -o StrictHostKeyChecking=no -o BatchMode=yes mis@35.234.208.82 \"cd /var/www/html/pms && until [ \\\\\"\\\\$\\(git rev-parse --short HEAD\\)\\\\\" = \\\\\"5250298\\\\\" ]; do sleep 5; done; echo DEPLOYED: \\\\$\\(git log --oneline -1\\)\")"
+    ]
+  }
+}
