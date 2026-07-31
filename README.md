@@ -215,7 +215,7 @@ A Bootstrap-based dashboard, gated by `Admin::requireAuth()`, that reads the tra
 | `test_async.php` / `test_notify_units.php` / `profile_submit.php` | Async + unit + profiling tests. |
 | `create_wa_template.php` / `create_pe_plan_template.php` / `check_wa_template.php` | WhatsApp template management + approval check. |
 | `admin_sync.php` | CLI master-data sync (same rebuild the admin panel runs). |
-| `commission_push.php` | Sends `lifecycle='Commissioned'` projects to the HVAC/VAPL backend; idempotent + retrying (run every 5 min from cron). Needs `app_backend.url` in `secrets.php` — blank = push OFF. |
+| `commission_push.php` | Sends projects to the HVAC/VAPL backend once **Pre-Commissioning** is done (`projects.pre_commissioned_at`; `lifecycle` Commissioned/Closed is a fallback candidate); idempotent + retrying (run every 5 min from cron). Needs `app_backend.url` in `secrets.php` — blank = push OFF. |
 
 ---
 

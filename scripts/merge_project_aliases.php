@@ -124,7 +124,7 @@ try {
     $keep = $db->prepare(
         "UPDATE projects
             SET lifecycle = ?, lifecycle_locked = ?, commissioned_at = ?,
-                closed_at = ?, closed_by = ?, app_pushed_at = ?
+                pre_commissioned_at = ?, closed_at = ?, closed_by = ?, app_pushed_at = ?
           WHERE project_key = ?"
     );
 
@@ -147,6 +147,7 @@ try {
             $lifecycle,
             $locked,
             $to['commissioned_at'] ?: $from['commissioned_at'],
+            ($to['pre_commissioned_at'] ?? null) ?: ($from['pre_commissioned_at'] ?? null),
             $to['closed_at']       ?: $from['closed_at'],
             $to['closed_by']       ?: $from['closed_by'],
             $to['app_pushed_at']   ?: $from['app_pushed_at'],

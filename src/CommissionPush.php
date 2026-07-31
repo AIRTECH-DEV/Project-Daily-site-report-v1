@@ -1,8 +1,14 @@
 <?php
 /**
- * Pushes each newly-Commissioned project to the HVAC commissioning app backend
- * (a SEPARATE service — its own DB). This is the only outbound touch-point; it
- * never changes the report → sheet → PMS → PDF pipeline.
+ * Pushes each project that has cleared **Pre-Commissioning** to the HVAC
+ * commissioning app backend (a SEPARATE service — its own DB). This is the only
+ * outbound touch-point; it never changes the report → sheet → PMS → PDF pipeline.
+ *
+ * Hand-off point (changed): the technician gets the job as soon as the
+ * "Pre-Commissining" step is done — projects.pre_commissioned_at (stamped by the
+ * admin sync). lifecycle 'Commissioned'/'Closed' stays a fallback candidate so a
+ * manually-commissioned project (or one whose pre step was never reported) is
+ * still pushed and nothing is lost.
  *
  * Reliable + idempotent:
  *   - a project is pushed once — projects.app_pushed_at is stamped on success,
@@ -46,13 +52,14 @@ class CommissionPush
         if ($url === '') {
             return ['pushed' => 0, 'failed' => 0, 'note' => 'app_backend.url blank — push OFF'];
         }
-        $this->ensureColumn();
+        $this->ensureColumns();
 
         $rows = $this->db->query(
             "SELECT project_key, label, project_name, site_type, client_type, developer,
-                    building, flat_no, order_id, commissioned_at
+                    building, flat_no, order_id, commissioned_at, pre_commissioned_at
                FROM projects
-              WHERE lifecycle = 'Commissioned' AND app_pushed_at IS NULL
+              WHERE app_pushed_at IS NULL
+                AND (pre_commissioned_at IS NOT NULL OR lifecycle IN ('Commissioned','Closed'))
               LIMIT " . (int)$limit
         )->fetchAll(PDO::FETCH_ASSOC);
 
@@ -92,6 +99,14 @@ class CommissionPush
             ? (string)($this->cfg['email']['developer_emails'][$developer] ?? '')
             : $this->generalField($projectName, 'email');
 
+        // Hand-off timestamp: pre-commissioning is the trigger now, so that is what
+        // the queue is dated by. 'commissionedAt' keeps carrying it (the backend
+        // sorts/displays that field) while 'preCommissionedAt'/'stage' say what it
+        // really is for a backend that wants to tell the two apart.
+        $preAt  = $p['pre_commissioned_at'] ?? null;
+        $commAt = $p['commissioned_at'] ?? null;
+        $readyAt = $preAt ?: $commAt;
+
         return [
             'projectKey'     => $p['project_key'],
             'projectName'    => $projectName,
@@ -105,7 +120,9 @@ class CommissionPush
             'building'       => $p['building']   ?: null,
             'flatNo'         => $p['flat_no']    ?: null,
             'orderId'        => $p['order_id']   ?: null,
-            'commissionedAt' => $p['commissioned_at'] ? gmdate('c', strtotime((string)$p['commissioned_at'])) : null,
+            'stage'             => $commAt ? 'commissioned' : 'pre_commissioned',
+            'preCommissionedAt' => $preAt   ? gmdate('c', strtotime((string)$preAt))   : null,
+            'commissionedAt'    => $readyAt ? gmdate('c', strtotime((string)$readyAt)) : null,
         ];
     }
 
@@ -207,20 +224,30 @@ class CommissionPush
         return is_array($res) && !empty($res['success']);
     }
 
-    /** Add projects.app_pushed_at once (survives sync's ON DUPLICATE upsert). */
-    private function ensureColumn(): void
+    /**
+     * Add the bookkeeping columns once (they survive sync's ON DUPLICATE upsert):
+     *   app_pushed_at       — push ack stamp
+     *   pre_commissioned_at — hand-off trigger, normally stamped by Sync
+     */
+    private function ensureColumns(): void
     {
-        try {
-            $has = (int)$this->db->query(
-                "SELECT COUNT(*) FROM information_schema.columns
-                  WHERE table_schema = DATABASE() AND table_name = 'projects'
-                    AND column_name = 'app_pushed_at'"
-            )->fetchColumn();
-            if ($has === 0) {
-                $this->db->exec("ALTER TABLE projects ADD COLUMN app_pushed_at DATETIME NULL DEFAULT NULL");
+        $cols = [
+            'app_pushed_at'       => "ALTER TABLE projects ADD COLUMN app_pushed_at DATETIME NULL DEFAULT NULL",
+            'pre_commissioned_at' => "ALTER TABLE projects ADD COLUMN pre_commissioned_at DATETIME NULL DEFAULT NULL",
+        ];
+        foreach ($cols as $col => $ddl) {
+            try {
+                $has = (int)$this->db->query(
+                    "SELECT COUNT(*) FROM information_schema.columns
+                      WHERE table_schema = DATABASE() AND table_name = 'projects'
+                        AND column_name = '" . $col . "'"
+                )->fetchColumn();
+                if ($has === 0) {
+                    $this->db->exec($ddl);
+                }
+            } catch (Throwable $e) {
+                // if this fails the SELECT below will error and run() returns 0 pushed — safe
             }
-        } catch (Throwable $e) {
-            // if this fails the SELECT below will error and run() returns 0 pushed — safe
         }
     }
 }

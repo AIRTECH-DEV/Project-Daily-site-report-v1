@@ -356,7 +356,7 @@ Add:
 # PE-plan reminder — runs every 15 min, self-gates to send once/day at send_time.
 */15 * * * * /usr/bin/php /var/www/html/pms/scripts/pe_plan_send.php >> /var/www/html/pms/storage/logs/pe_plan_cron.log 2>&1
 
-# Commissioning push — sends newly-Commissioned projects to the HVAC/VAPL backend.
+# Commissioning push — sends projects past Pre-Commissioning to the HVAC/VAPL backend.
 */5 * * * * /usr/bin/php /var/www/html/pms/scripts/commission_push.php >> /var/www/html/pms/storage/logs/commission_cron.log 2>&1
 ```
 Check: `sudo crontab -u www-data -l`.
@@ -368,11 +368,14 @@ Check: `sudo crontab -u www-data -l`.
 **Commissioning push prerequisites** — without all three it is a silent no-op:
 1. `app_backend.url` + `api_key` set in `config/secrets.php` (see `secrets.example.php`).
    Blank url ⇒ the script exits with `note: app_backend.url blank — push OFF`.
-2. `projects.app_pushed_at` exists (fresh installs: `admin_ext_schema.sql`; older DBs:
-   `db/commission_push.sql`; the script also self-adds it when the DB user has ALTER).
-3. A project only becomes a candidate once the **rollup** flags it `lifecycle =
-   'Commissioned'` — that happens in the admin sync, which auto-runs on admin page
-   load. If nobody opens the panel, also schedule `*/10 * * * * … scripts/admin_sync.php`.
+2. `projects.app_pushed_at` + `projects.pre_commissioned_at` exist (fresh installs:
+   `admin_ext_schema.sql`; older DBs: `db/commission_push.sql`, which also backfills;
+   the code self-adds them when the DB user has ALTER).
+3. A project becomes a candidate once the **rollup** stamps `pre_commissioned_at` —
+   i.e. the "Pre-Commissining" step is reported done (final `lifecycle =
+   'Commissioned'`/`'Closed'` still qualifies as a fallback). That stamping happens in
+   the admin sync, which auto-runs on admin page load. If nobody opens the panel, also
+   schedule `*/10 * * * * … scripts/admin_sync.php`.
 
 Verify: `sudo -u www-data php scripts/commission_push.php` → `{"pushed":N,"failed":0,…}`.
 

@@ -34,7 +34,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $pr) {
     if (Admin::checkCsrf()) {
         $act = $_POST['lifecycle_action'] ?? '';
         if ($act === 'commission') {
-            $db->prepare("UPDATE projects SET lifecycle='Commissioned', lifecycle_locked=1, commissioned_at=COALESCE(commissioned_at,NOW()) WHERE id=?")->execute([$pr['id']]);
+            // pre_commissioned_at too: it is the HVAC app hand-off trigger, and a
+            // manual commission implies the pre step is behind us.
+            $db->prepare("UPDATE projects SET lifecycle='Commissioned', lifecycle_locked=1, commissioned_at=COALESCE(commissioned_at,NOW()), pre_commissioned_at=COALESCE(pre_commissioned_at,NOW()) WHERE id=?")->execute([$pr['id']]);
         } elseif ($act === 'close') {
             $db->prepare("UPDATE projects SET lifecycle='Closed', lifecycle_locked=1, closed_at=NOW(), closed_by=? WHERE id=?")->execute([Admin::user()['user'], $pr['id']]);
         } elseif ($act === 'reopen') {
