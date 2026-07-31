@@ -153,6 +153,16 @@ function isCommissioning(string $s): bool
     return strpos($k, 'commiss') !== false;
 }
 
+/**
+ * True for the "Pre-Commissining" step (the step BEFORE final commissioning).
+ * This is the hand-off point to the HVAC commissioning app — see CommissionPush.
+ */
+function isPreCommissioning(string $s): bool
+{
+    $k = stepKey($s);
+    return strncmp($k, 'pre', 3) === 0 && strpos($k, 'commiss') !== false;
+}
+
 /** Short one-line preview of a longer text value. */
 function snip($s, int $len = 60): string
 {

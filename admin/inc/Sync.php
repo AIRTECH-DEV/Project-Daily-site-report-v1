@@ -25,8 +25,31 @@ class Sync
         return array_merge($d, is_array($cfg['alert_rules'] ?? null) ? $cfg['alert_rules'] : []);
     }
 
+    /**
+     * Adds projects.pre_commissioned_at on DBs created before the HVAC hand-off
+     * moved to the Pre-Commissioning step. DDL before the transaction (MySQL
+     * implicitly commits DDL anyway). db/commission_push.sql does the same by hand.
+     */
+    private static function ensureSchema(PDO $db): void
+    {
+        try {
+            $has = (int)$db->query(
+                "SELECT COUNT(*) FROM information_schema.columns
+                  WHERE table_schema = DATABASE() AND table_name = 'projects'
+                    AND column_name = 'pre_commissioned_at'"
+            )->fetchColumn();
+            if ($has === 0) {
+                $db->exec("ALTER TABLE projects ADD COLUMN pre_commissioned_at DATETIME NULL DEFAULT NULL AFTER commissioned_at");
+            }
+        } catch (Throwable $e) {
+            // no ALTER grant -> rebuildProjects will surface the real error
+        }
+    }
+
     public static function run(PDO $db, array $cfg = []): array
     {
+        self::ensureSchema($db);
+
         $subs = $db->query(
             "SELECT id, site_type, client_type, developer, building, flat_no, project, order_id,
                     engineer, current_status, status, tentative_end, payload_json, created_at
@@ -211,13 +234,13 @@ class Sync
             $groups[projectKey($s)][] = $s;
         }
 
-        $sel = $db->prepare("SELECT id, lifecycle, lifecycle_locked, commissioned_at, closed_at, closed_by FROM projects WHERE project_key=?");
+        $sel = $db->prepare("SELECT id, lifecycle, lifecycle_locked, commissioned_at, pre_commissioned_at, closed_at, closed_by FROM projects WHERE project_key=?");
         $ins = $db->prepare(
             "INSERT INTO projects
               (project_key,label,site_type,client_type,developer,building,flat_no,project_name,order_id,primary_pe,
                report_count,steps_total,steps_done,current_step,hold_owner,hold_since,first_report_at,last_report_at,
-               next_plan_date,next_plan_steps,target_end,lifecycle,commissioned_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               next_plan_date,next_plan_steps,target_end,lifecycle,commissioned_at,pre_commissioned_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
              ON DUPLICATE KEY UPDATE
                label=VALUES(label),site_type=VALUES(site_type),client_type=VALUES(client_type),developer=VALUES(developer),
                building=VALUES(building),flat_no=VALUES(flat_no),project_name=VALUES(project_name),order_id=VALUES(order_id),
@@ -225,7 +248,8 @@ class Sync
                steps_done=VALUES(steps_done),current_step=VALUES(current_step),hold_owner=VALUES(hold_owner),
                hold_since=VALUES(hold_since),first_report_at=VALUES(first_report_at),last_report_at=VALUES(last_report_at),
                next_plan_date=VALUES(next_plan_date),next_plan_steps=VALUES(next_plan_steps),target_end=VALUES(target_end),
-               lifecycle=VALUES(lifecycle),commissioned_at=VALUES(commissioned_at)"
+               lifecycle=VALUES(lifecycle),commissioned_at=VALUES(commissioned_at),
+               pre_commissioned_at=VALUES(pre_commissioned_at)"
         );
 
         foreach ($groups as $pkey => $rows) {
@@ -278,9 +302,18 @@ class Sync
 
             // manual-lock aware lifecycle
             $sel->execute([$pkey]); $existing = $sel->fetch(PDO::FETCH_ASSOC);
-            $commissionedDone = false;
-            foreach ($doneKeys as $st) { if (isCommissioning($st)) { $commissionedDone = true; break; } }
+            $commissionedDone = false; $preCommissionedDone = false;
+            foreach ($doneKeys as $st) {
+                if (isCommissioning($st))    { $commissionedDone = true; }
+                if (isPreCommissioning($st)) { $preCommissionedDone = true; }
+            }
             $commissionedAt = $existing['commissioned_at'] ?? null;
+            // Pre-commissioning stamp = the HVAC app hand-off trigger (CommissionPush).
+            // Stamped once, independent of lifecycle/lock, and never cleared.
+            $preCommissionedAt = $existing['pre_commissioned_at'] ?? null;
+            if (($preCommissionedDone || $commissionedDone) && !$preCommissionedAt) {
+                $preCommissionedAt = date('Y-m-d H:i:s');
+            }
 
             if (!empty($existing['lifecycle_locked'])) {
                 $lifecycle = $existing['lifecycle'];   // manual Commissioned/Closed — leave it
@@ -295,6 +328,7 @@ class Sync
                 count($rows), $stepsTotal, $stepsDone, $curStep, $holdOwner, $holdSince,
                 $first['created_at'], $latest['created_at'], $nextDate,
                 (is_array($nextSteps) ? implode(', ', $nextSteps) : ''), $targetEnd, $lifecycle, $commissionedAt,
+                $preCommissionedAt,
             ]);
         }
 

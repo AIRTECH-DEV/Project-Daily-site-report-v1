@@ -1,11 +1,12 @@
 <?php
 /**
- * CLI: push newly-Commissioned projects to the HVAC commissioning app backend.
+ * CLI: push projects that cleared PRE-Commissioning to the HVAC commissioning app.
  *   php scripts/commission_push.php
  * Schedule alongside the report worker (e.g. every 2-5 min). Idempotent + retry:
- * only projects with lifecycle='Commissioned' AND app_pushed_at IS NULL are sent,
- * and app_pushed_at is stamped only on a successful ack. Read-mostly: it only
- * writes projects.app_pushed_at — it never touches the report pipeline.
+ * candidates are app_pushed_at IS NULL AND (pre_commissioned_at IS NOT NULL OR
+ * lifecycle IN ('Commissioned','Closed')), and app_pushed_at is stamped only on a
+ * successful ack. Read-mostly: it only writes projects.app_pushed_at — it never
+ * touches the report pipeline.
  */
 require __DIR__ . '/../src/GoogleAuth.php';
 require __DIR__ . '/../src/Bootstrap.php';

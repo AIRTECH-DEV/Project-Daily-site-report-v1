@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS `projects` (
   `lifecycle`        VARCHAR(30)  NOT NULL DEFAULT 'Not Started',
   `lifecycle_locked` TINYINT(1)   NOT NULL DEFAULT 0,   -- 1 = manual (Commissioned/Closed), sync won't override
   `commissioned_at`  DATETIME DEFAULT NULL,
+  `pre_commissioned_at` DATETIME DEFAULT NULL,   -- Pre-Commissining step done = HVAC app hand-off trigger
   `app_pushed_at`    DATETIME DEFAULT NULL,   -- stamped by commission_push.php on backend ack; NULL = still to push
   `closed_at`        DATETIME DEFAULT NULL,
   `closed_by`        VARCHAR(100) DEFAULT NULL,
