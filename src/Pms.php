@@ -339,10 +339,70 @@ class Pms
         'oduunitinstallation' => 'ODU Dismental',
     ];
 
+    /**
+     * SPLIT steps: one column GROUP that tracks two halves independently, each in
+     * its OWN status sub-column, so the group has no plain "Status" sub-header:
+     *
+     *   Pressure Testing     -> "LS Status"  + "IDU/ODU Status"
+     *   HS Material Delivery -> "IDU Status" + "ODU Status"
+     *
+     * Unlike a dismantle pair these are NOT mutually exclusive — both halves can
+     * reach Done — but they share the group's one Start/End Date pair, so the date
+     * is stamped by whichever half finishes first (same "only if empty" rule used
+     * everywhere else).
+     *
+     *   step display name (compact) => [group header text, status sub-header text]
+     */
+    private const SPLIT_STATUS_MAP = [
+        'lspressuretesting'     => ['Pressure Testing',     'LS Status'],
+        'iduodupressuretesting' => ['Pressure Testing',     'IDU/ODU Status'],
+        'hsmaterialdeliveryidu' => ['HS Material Delivery', 'IDU Status'],
+        'hsmaterialdeliveryodu' => ['HS Material Delivery', 'ODU Status'],
+    ];
+
     /** Base group header for a dismantle step name, or '' when it isn't one. */
     private function dismentalGroupFor(string $stepName): string
     {
         return self::DISMENTAL_MAP[Sheets::compactKey($stepName)] ?? '';
+    }
+
+    /** [group, status sub-header] for a split step, or [] when it isn't one. */
+    private function splitStatusFor(string $stepName): array
+    {
+        return self::SPLIT_STATUS_MAP[Sheets::compactKey($stepName)] ?? [];
+    }
+
+    /**
+     * Reverse of SPLIT_STATUS_MAP: the step a (group, sub-header) column pair
+     * represents, or '' when the pair isn't a split status column. Matching is on
+     * compactKey so header casing/punctuation drift ("End date", "IDU/ODU status")
+     * never breaks the lookup.
+     */
+    private function splitStepAt(string $groupName, string $subLabel): string
+    {
+        $g = Sheets::compactKey($groupName);
+        $s = Sheets::compactKey($subLabel);
+        if ($g === '' || $s === '') {
+            return '';
+        }
+        foreach (self::SPLIT_STATUS_MAP as $step => [$grp, $sub]) {
+            if (Sheets::compactKey($grp) === $g && Sheets::compactKey($sub) === $s) {
+                return $this->splitStepName($step);
+            }
+        }
+        return '';
+    }
+
+    /** Display name for a SPLIT_STATUS_MAP key (the map is keyed by compact name). */
+    private function splitStepName(string $compact): string
+    {
+        static $names = [
+            'lspressuretesting'     => 'LS Pressure Testing',
+            'iduodupressuretesting' => 'IDU/ODU Pressure Testing',
+            'hsmaterialdeliveryidu' => 'HS Material Delivery IDU',
+            'hsmaterialdeliveryodu' => 'HS Material Delivery ODU',
+        ];
+        return $names[$compact] ?? '';
     }
 
     /**
@@ -367,6 +427,15 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
             $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // Split status sub-col ("LS Status", "IDU/ODU Status", …) -> report the
+            // half it tracks, never the shared group name.
+            $splitStep = $this->splitStepAt($name, $sub);
+            if ($splitStep !== '') {
+                if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'done') {
+                    $add($splitStep);
+                }
+                continue;
+            }
             // "Dismental Status" sub-col -> report the dismantle step (own name), Done-only.
             if (strpos($sub, 'dismental') !== false) {
                 if (strpos($sub, 'status') !== false
@@ -418,6 +487,14 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
             $name = trim((string)($info['groupVals'][$i] ?? ''));
+            // Split status sub-col == "Not Required" -> hide only that half next visit.
+            $splitStep = $this->splitStepAt($name, $sub);
+            if ($splitStep !== '') {
+                if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
+                    $add($splitStep);
+                }
+                continue;
+            }
             // "Dismental Status" == "Not Required" -> hide the dismantle step next visit.
             if (strpos($sub, 'dismental') !== false) {
                 if (strpos($sub, 'status') !== false
@@ -650,6 +727,30 @@ class Pms
             if ($step === '' || $stat === '') {
                 continue;
             }
+            // Split steps (LS vs IDU/ODU pressure testing, IDU vs ODU HS delivery)
+            // -> their own status sub-col inside the shared group.
+            $split = $this->splitStatusFor($step);
+            if ($split) {
+                [$sgroup, $ssub] = $split;
+                $scol = $this->findGroupSubCol($info, $sgroup, $ssub);
+                if ($scol < 1) {
+                    continue;
+                }
+                $this->sheets->setCell($ssId, $title, $row, $scol, ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat);
+                if ($stat === 'Done') {
+                    $endCol = $this->findStepSubCol($info, $sgroup, 'End Date');
+                    if ($endCol > 0) {
+                        $cur = $this->cell($rows, $row, $endCol);
+                        if ($cur === '' || $cur === null) {
+                            $this->sheets->setCell($ssId, $title, $row, $endCol, $this->now());
+                        }
+                    }
+                } elseif ($stat === 'Hold') {
+                    $holdEntries[] = $e;
+                }
+                continue;
+            }
+
             // Dismantle steps -> the group's "Dismental Status" sub-col. The Done date
             // reuses the group's shared "End Date" (base + dismental never both hit Done).
             $dgroup = $this->dismentalGroupFor($step);
@@ -723,7 +824,9 @@ class Pms
                 if ($tStep === '') {
                     continue;
                 }
-                $tGroup = $this->dismentalGroupFor($tStep);
+                // Split and dismantle steps both plan against their GROUP's Start Date.
+                $tSplit = $this->splitStatusFor($tStep);
+                $tGroup = $tSplit ? $tSplit[0] : $this->dismentalGroupFor($tStep);
                 $startCol = $tGroup !== ''
                     ? $this->findStepSubCol($info, $tGroup, 'Start Date')
                     : $this->findStepSubCol($info, $tStep, 'Start Date');
@@ -796,7 +899,9 @@ class Pms
             $count = 0;
             for ($c = 0; $c < $lastCol; $c++) {
                 $t = Sheets::normalizeKey($rows[$r][$c] ?? '');
-                if ($t === 'status' || $t === 'start date' || $t === 'end date') {
+                // Same "by kind" rule as the fill below, so a sheet whose groups use
+                // named status columns is still recognised as the sub-header row.
+                if ($t === 'start date' || $t === 'end date' || strpos($t, 'status') !== false) {
                     $count++;
                 }
             }
@@ -815,9 +920,13 @@ class Pms
                 $lastGroup = $groupVals[$c];
             } else {
                 $s = Sheets::normalizeKey($subVals[$c]);
-                // Forward-fill the step name over its Status/Start/End AND the merged
-                // "Dismental Status" sub-cell (the latter is otherwise blank on read).
-                if (($s === 'status' || $s === 'start date' || $s === 'end date' || strpos($s, 'dismental') !== false) && $lastGroup !== '') {
+                // Forward-fill the step name across every sub-cell of its merged group
+                // (they read back blank). Matched by KIND, not by an exact whitelist, so
+                // a group that gains another status column — "LS Status", "IDU/ODU
+                // Status", "Dismental Status", … — still resolves without a code change.
+                $isGroupSub = $s === 'start date' || $s === 'end date'
+                    || strpos($s, 'status') !== false || strpos($s, 'dismental') !== false;
+                if ($isGroupSub && $lastGroup !== '') {
                     $groupVals[$c] = $lastGroup;
                 }
             }
@@ -866,6 +975,27 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             if (Sheets::compactKey($info['groupVals'][$i]) === $step
                 && Sheets::normalizeKey($info['subVals'][$i]) === $sub) {
+                return $i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * A group's sub-column, matched on compactKey for BOTH parts so header drift in
+     * spacing/case/punctuation ("End date", "IDU / ODU Status") still resolves.
+     * Used for split-status columns, whose sub-headers carry punctuation. 1-based, or -1.
+     */
+    private function findGroupSubCol(array $info, string $groupName, string $subLabel): int
+    {
+        $g = Sheets::compactKey($groupName);
+        $s = Sheets::compactKey($subLabel);
+        if ($g === '' || $s === '') {
+            return -1;
+        }
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            if (Sheets::compactKey($info['groupVals'][$i] ?? '') === $g
+                && Sheets::compactKey($info['subVals'][$i] ?? '') === $s) {
                 return $i + 1;
             }
         }

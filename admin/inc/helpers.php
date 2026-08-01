@@ -293,8 +293,8 @@ function parseSteps(array $payload): array
 /** Canonical ordered site steps (mirrors AppJs STATUS_STEPS) for a site type. */
 function canonicalSteps(string $siteType): array
 {
-    $vrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'];
-    $nonvrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'];
+    $vrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','LS Pressure Testing','IDU/ODU Pressure Testing','Main Ducting','Collar','Fresh Air - PVC PIPE / Duct','1st RA Measurement Submitted by PE','Underdake Insulation','HS Material Delivery IDU','HS Material Delivery ODU','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','FINAL RA Measurement Received','Pre-Commissining','Commissining'];
+    $nonvrv = ['LS Material Delivery','Marking','Civil Opening','Support','Copper Piping','Cable','Drain','LS Pressure Testing','IDU/ODU Pressure Testing','Main Ducting','Collar','PVC PIPE','Underdake Insulation','HS Material Delivery IDU','HS Material Delivery ODU','Indoor Installation','odu unit installation','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'];
     return strcasecmp(trim($siteType), 'VRV') === 0 ? $vrv : $nonvrv;
 }
 
