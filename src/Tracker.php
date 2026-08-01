@@ -109,6 +109,48 @@ class Tracker
         }
     }
 
+    /**
+     * Writes each flat's own Order ID back into payload flats[] (multi-flat visits).
+     *
+     * The submissions row has ONE order_id column but a multi-flat visit resolves an
+     * Order ID per flat in the developer sheet — see Pms::updateDeveloperFlats. The
+     * flat entry is where the admin panel reads a flat's identity from, so it is
+     * where the per-flat id has to land; the column keeps the first, as before.
+     *
+     * @param array<string,string> $byFlat flat no => order id
+     */
+    public function stampFlatOrderIds(array $byFlat): void
+    {
+        if (!$this->submissionId || !$byFlat) {
+            return;
+        }
+        $rows = $this->db->query("SELECT payload_json FROM submissions WHERE id = ?", [$this->submissionId]);
+        $p = json_decode((string)($rows[0]['payload_json'] ?? ''), true);
+        if (!is_array($p) || !is_array($p['flats'] ?? null)) {
+            return;
+        }
+        // Match on the same normalisation the sheet lookup used, so "A-101"/"a 101" pair up.
+        $norm = static fn($v) => strtolower(preg_replace('/[^a-z0-9]+/i', '', (string)$v));
+        $keyed = [];
+        foreach ($byFlat as $flatNo => $orderId) {
+            $keyed[$norm($flatNo)] = (string)$orderId;
+        }
+        $changed = false;
+        foreach ($p['flats'] as $i => $f) {
+            if (!is_array($f)) {
+                continue;
+            }
+            $oid = $keyed[$norm($f['flatNo'] ?? '')] ?? '';
+            if ($oid !== '' && ($f['orderId'] ?? '') !== $oid) {
+                $p['flats'][$i]['orderId'] = $oid;
+                $changed = true;
+            }
+        }
+        if ($changed) {
+            $this->updateSubmission(['payload_json' => json_encode($p, JSON_UNESCAPED_UNICODE)]);
+        }
+    }
+
     public function addAttachment(string $kind, array $meta): void
     {
         $this->db->insert('attachments', [

@@ -298,14 +298,19 @@ class Perf
         });
 
         /* --- pass 1: submissions → who first completed which step --- */
-        $subs = $db->query(
-            "SELECT id, engineer, project, order_id, developer, building, flat_no, client_type,
+        // expandVisits: a multi-flat developer visit is one row holding a full
+        // report per flat, and each flat is its own project — without the split a
+        // PE is credited for flat 1 only and the other flats' steps vanish.
+        $subs = expandVisits($db->query(
+            "SELECT id, engineer, project, order_id, developer, building, floor, flat_no, client_type,
                     payload_json, created_at, status
              FROM submissions ORDER BY id ASC"
-        )->fetchAll(PDO::FETCH_ASSOC);
+        )->fetchAll(PDO::FETCH_ASSOC));
 
         $seen = [];            // pkey|stepKey => 1 (first completion wins the credit)
-        $creditSteps = [];     // submission id => [stepKey => stepName]
+        // Keyed submission id|project key, not id alone: one visit now yields one
+        // entry per flat, and pass 2 joins visit_workers on the same pair.
+        $creditSteps = [];     // "submission id|pkey" => [stepKey => stepName]
         $pe = [];              // engineer => stats
         $reportDays = [];      // pkey => [Y-m-d => 1] — every report date, all time
         $pendingByPe = [];     // engineer => pkey => [stepKey => 1] left Pending/Hold
@@ -328,7 +333,7 @@ class Perf
                 $seen[$pkey . '|' . $k] = 1;
                 $fresh[$k] = $st;
             }
-            $creditSteps[$s['id']] = $fresh;
+            $creditSteps[$s['id'] . '|' . $pkey] = $fresh;
 
             if (!$inMonth) {
                 continue;
@@ -338,10 +343,14 @@ class Perf
                 continue;
             }
             if (!isset($pe[$eng])) {
-                $pe[$eng] = ['name' => $eng, 'reports' => 0, 'days' => [], 'projects' => [],
+                $pe[$eng] = ['name' => $eng, 'reports' => 0, 'visits' => [], 'days' => [], 'projects' => [],
                              'steps' => 0, 'holds' => 0, 'last' => ''];
             }
-            $pe[$eng]['reports']++;
+            // "reports" is discipline (did they file today), so it counts SUBMISSIONS —
+            // one multi-flat visit is one report however many flats it covers. Steps
+            // and projects below stay per flat, which is where the work actually is.
+            $pe[$eng]['visits'][(int)$s['visit_id']] = 1;
+            $pe[$eng]['reports'] = count($pe[$eng]['visits']);
             $pe[$eng]['days'][$date] = 1;
             $pe[$eng]['projects'][$pkey] = 1;
             $pe[$eng]['steps'] += count($fresh);
@@ -384,7 +393,7 @@ class Perf
             }
             $sid  = (int)$r['submission_id'];
             $pkey = (string)$r['project_key'];
-            $done = $creditSteps[$sid] ?? [];
+            $done = $creditSteps[$sid . '|' . $pkey] ?? [];
 
             // steps this person worked on that ALSO first-completed on this visit
             $mine = [];

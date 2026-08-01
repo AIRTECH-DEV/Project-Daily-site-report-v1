@@ -67,6 +67,19 @@ function payload_for_flat(array $payload, string $flatNo): array
     return $payload;
 }
 
+/**
+ * The per-flat reports inside a visit payload. A developer visit can cover many
+ * flats in one submission — each entry is a complete report of its own, and the
+ * row's own columns describe only the first of them.
+ */
+function report_flats(array $payload): array
+{
+    $flats = $payload['flats'] ?? null;
+    if (!is_array($flats)) return [];
+    $flats = array_values(array_filter($flats, 'is_array'));
+    return count($flats) > 1 ? $flats : [];
+}
+
 function step_entries(array $payload): array
 {
     $entries = [];
@@ -172,8 +185,32 @@ $attachments = [];
 $pipeline = [];
 $detailPayload = [];
 
+$detailFlats = [];
+$activeFlat = 0;
+
 if ($detail) {
-    $detailPayload = json_decode((string)$detail['payload_json'], true) ?: [];
+    $visitPayload = json_decode((string)$detail['payload_json'], true) ?: [];
+
+    // Multi-flat visit: read ONE flat at a time (?flat=…, default the first) so the
+    // steps, notes and timeline below all describe the same unit.
+    $detailFlats = report_flats($visitPayload);
+    if ($detailFlats) {
+        $wantFlat = trim((string)($_GET['flat'] ?? ''));
+        foreach ($detailFlats as $i => $f) {
+            if ($wantFlat !== '' && strcasecmp(trim((string)($f['flatNo'] ?? '')), $wantFlat) === 0) { $activeFlat = $i; break; }
+        }
+        $detailPayload = $detailFlats[$activeFlat];
+        // overlay the flat's own values onto the row the page renders from
+        foreach ([
+            'floor' => 'floor', 'flat_no' => 'flatNo', 'status' => 'status', 'people' => 'people',
+            'activity' => 'activity', 'next_plan' => 'nextPlan', 'current_status' => 'currentStatus',
+            'hold_reason' => 'holdReason', 'hold_reason_detail' => 'holdReasonDetail',
+        ] as $col => $key) {
+            if (array_key_exists($key, $detailPayload)) $detail[$col] = $detailPayload[$key];
+        }
+    } else {
+        $detailPayload = $visitPayload;
+    }
 
     $attachmentStatement = $db->prepare(
         'SELECT * FROM attachments WHERE submission_id = ? ORDER BY id'
@@ -265,6 +302,12 @@ if ($detail) {
     .filters{display:grid;grid-template-columns:220px 1fr auto;gap:10px;background:#fff;padding:14px;border:1px solid var(--line);border-radius:14px;margin-bottom:16px}.control{width:100%;min-height:44px;border:1px solid #dfe2e7;border-radius:10px;padding:0 12px;background:#fff;font:inherit;color:var(--ink)}.filter-btn{border:0;border-radius:10px;padding:0 18px;background:var(--red);color:#fff;font-weight:800;cursor:pointer}
     .summary{font-size:13px;color:var(--muted);margin:0 2px 10px}.report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.report-card{display:block;background:#fff;border:1px solid var(--line);border-radius:15px;padding:16px;text-decoration:none;box-shadow:0 2px 8px rgba(22,31,45,.03)}.report-card:active{transform:scale(.99)}.card-top{display:flex;gap:10px;align-items:flex-start}.card-title{font-size:15px;font-weight:850;line-height:1.35;flex:1}.code{font-size:11px;color:var(--muted);margin-top:4px}.badges{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:800;background:#eef0f3;color:#56606e}.badge.done{background:#e8f6ee;color:var(--green)}.badge.hold{background:#fff0f0;color:#bd2630}.badge.open{background:#fff5df;color:var(--amber)}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;color:var(--muted)}.meta b{display:block;color:#3c4654;margin-top:2px;font-size:12.5px}.snippet{border-top:1px solid #eff0f2;margin-top:12px;padding-top:11px;font-size:12px;color:#596271;line-height:1.45}
     .empty{background:#fff;border:1px dashed #ccd1d8;border-radius:14px;padding:40px 20px;text-align:center;color:var(--muted)}
+    .badge.flats{background:#e9eefb;color:#3160c8}
+    .flat-tabs{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+    .flat-tabs-lbl{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-right:2px}
+    .flat-tab{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:12.5px;font-weight:800;text-decoration:none;color:#3c4654;background:#fff;min-height:36px}
+    .flat-tab.done{border-color:#bfe4cd;color:var(--green)}.flat-tab.hold{border-color:#f0bcbc;color:#bd2630}.flat-tab.open{border-color:#f0d59a;color:var(--amber)}
+    .flat-tab.on{background:#1d2939;border-color:#1d2939;color:#fff}
     .back{display:inline-flex;gap:7px;align-items:center;text-decoration:none;font-size:13px;font-weight:750;color:var(--red);margin-bottom:12px}.detail-head{background:#fff;border:1px solid var(--line);border-radius:17px;padding:20px;box-shadow:var(--shadow);margin-bottom:14px}.detail-title-row{display:flex;gap:12px;align-items:flex-start}.detail-head h1{font-size:23px;margin:0 0 5px;line-height:1.25;flex:1}.detail-sub{font-size:12px;color:var(--muted)}.detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.fact{background:#f8f9fb;border-radius:11px;padding:11px}.fact span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}.fact b{font-size:13px;line-height:1.4;overflow-wrap:anywhere}
     .section{background:#fff;border:1px solid var(--line);border-radius:17px;margin-top:14px;overflow:hidden}.section-head{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}.section-head h2{font-size:16px;margin:0;flex:1}.section-head small{color:var(--muted)}.section-body{padding:16px 18px}.step-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.step-card{border:1px solid var(--line);border-left:4px solid #aeb5bf;border-radius:11px;padding:11px 12px}.step-card.done{border-left-color:var(--green);background:#fbfffc}.step-card.hold{border-left-color:#cf3440;background:#fffafa}.step-card.open{border-left-color:#e49a1f;background:#fffdf8}.step-name{font-size:13px;font-weight:850}.step-status{font-size:11px;font-weight:800;margin-top:5px}.step-card.done .step-status{color:var(--green)}.step-card.hold .step-status{color:#bd2630}.step-card.open .step-status{color:var(--amber)}.step-time,.step-note{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4}
     .timeline{position:relative;margin-left:7px;padding-left:22px}.timeline:before{content:"";position:absolute;left:3px;top:5px;bottom:8px;width:2px;background:#e3e6ea}.visit{position:relative;padding-bottom:20px}.visit:last-child{padding-bottom:0}.visit:before{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:var(--red);left:-24px;top:5px;box-shadow:0 0 0 4px #fdebed}.visit-date{font-size:12px;font-weight:850}.visit-who{color:var(--muted);font-size:11px;margin:3px 0 9px}.visit-box{background:#f8f9fb;border-radius:11px;padding:12px}.visit-row{font-size:12px;line-height:1.5;margin-bottom:8px}.visit-row:last-child{margin-bottom:0}.visit-row span{display:block;text-transform:uppercase;font-weight:800;font-size:9px;letter-spacing:.04em;color:var(--muted)}.event-list{display:flex;flex-wrap:wrap;gap:6px}.event{border-radius:999px;padding:5px 8px;font-size:10px;font-weight:800;background:#eceff3}.event.done{background:#e8f6ee;color:var(--green)}.event.hold{background:#fff0f0;color:#bd2630}.event.open{background:#fff5df;color:var(--amber)}
@@ -307,7 +350,13 @@ if ($detail) {
       <div class="report-grid">
       <?php foreach ($reports as $report):
         $payload = json_decode((string)$report['payload_json'], true) ?: [];
-        $entries = step_entries($payload);
+        // A multi-flat visit's own columns describe only its first flat — count the
+        // steps across every flat on it so the card isn't quietly under-reporting.
+        $cardFlats = report_flats($payload);
+        $entries = [];
+        foreach ($cardFlats ?: [$payload] as $cf) {
+            foreach (step_entries($cf) as $entry) $entries[] = $entry;
+        }
         $counts = ['done' => 0, 'hold' => 0, 'open' => 0];
         foreach ($entries as $entry) {
             $tone = step_tone($entry['status']);
@@ -315,12 +364,23 @@ if ($detail) {
         }
         $query = ['id' => $report['public_id']];
         if ($selectedEngineer !== '') $query['engineer'] = $selectedEngineer;
+        $cardLabel = $cardFlats
+            ? implode(' › ', array_filter([trim((string)$report['developer']), trim((string)$report['building'])]))
+            : report_label($report);
       ?>
         <a class="report-card" href="reports.php?<?= h(http_build_query($query)) ?>">
           <div class="card-top">
-            <div class="card-title"><?= h(report_label($report)) ?><div class="code"><?= h(report_code($report)) ?></div></div>
+            <div class="card-title"><?= h($cardLabel !== '' ? $cardLabel : report_label($report)) ?><div class="code"><?= h(report_code($report)) ?></div></div>
             <span class="badge <?= h(step_tone((string)$report['status'])) ?>"><?= h(step_text((string)$report['status'])) ?></span>
           </div>
+          <?php if ($cardFlats): ?>
+            <div class="badges">
+              <span class="badge flats"><?= count($cardFlats) ?> flats</span>
+              <?php foreach ($cardFlats as $cf): ?>
+                <span class="badge <?= h(step_tone((string)($cf['status'] ?? ''))) ?>"><?= h(trim((string)($cf['flatNo'] ?? '')) ?: '—') ?></span>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
           <div class="badges">
             <?php if ($counts['done']): ?><span class="badge done"><?= $counts['done'] ?> done</span><?php endif; ?>
             <?php if ($counts['open']): ?><span class="badge open"><?= $counts['open'] ?> open</span><?php endif; ?>
@@ -350,10 +410,23 @@ if ($detail) {
       <div class="detail-title-row">
         <div>
           <h1><?= h(report_label($detail)) ?></h1>
-          <div class="detail-sub"><?= h(report_code($detail)) ?> · <?= h(report_date($detail['created_at'])) ?></div>
+          <div class="detail-sub"><?= h(report_code($detail)) ?> · <?= h(report_date($detail['created_at'])) ?><?= $detailFlats ? ' · flat ' . ($activeFlat + 1) . ' of ' . count($detailFlats) : '' ?></div>
         </div>
         <span class="badge <?= h(step_tone((string)$detail['status'])) ?>"><?= h(step_text((string)$detail['status'])) ?></span>
       </div>
+      <?php if ($detailFlats): ?>
+        <div class="flat-tabs">
+          <span class="flat-tabs-lbl"><?= count($detailFlats) ?> flats in this visit — pick one:</span>
+          <?php foreach ($detailFlats as $fi => $f):
+            $fno = trim((string)($f['flatNo'] ?? '')) ?: ('Flat ' . ($fi + 1));
+            $q = ['id' => $detail['public_id'], 'flat' => $fno];
+            if ($selectedEngineer !== '') $q['engineer'] = $selectedEngineer;
+          ?>
+            <a class="flat-tab <?= $fi === $activeFlat ? 'on' : '' ?> <?= h(step_tone((string)($f['status'] ?? ''))) ?>"
+               href="reports.php?<?= h(http_build_query($q)) ?>"><?= h($fno) ?></a>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
       <div class="detail-grid">
         <div class="fact"><span>Engineer</span><b><?= h($detail['engineer'] ?: '—') ?></b></div>
         <div class="fact"><span>Site type</span><b><?= h($detail['site_type'] ?: '—') ?> · <?= h($detail['client_type'] ?: '—') ?></b></div>

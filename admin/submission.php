@@ -2,6 +2,12 @@
 /**
  * One site report in full: every captured field, the per-step pipeline timeline
  * (from process_log), attached photos/PDF, and the raw payload for auditing.
+ *
+ * A DEVELOPER visit can cover several flats in one submission — each flat a
+ * complete report of its own. This page therefore reads one FLAT at a time
+ * (?flat=<flat no>, default the first): every field, the work progress and the
+ * attachments below belong to the selected flat, and the "Flats in this visit"
+ * card shows where each of the others stands.
  */
 require __DIR__ . '/inc/bootstrap.php';
 Admin::requireAuth();
@@ -11,11 +17,11 @@ $db = Admin::db();
 $id = (int)($_GET['id'] ?? 0);
 $st = $db->prepare("SELECT * FROM submissions WHERE id = ?");
 $st->execute([$id]);
-$s = $st->fetch();
+$visit = $st->fetch();
 
 require __DIR__ . '/inc/layout.php';
 
-if (!$s) {
+if (!$visit) {
     Layout::head('Report not found', 'submissions');
     echo '<div class="alert2 bad"><i class="bi bi-exclamation-octagon"></i> Report #' . $id . ' not found.</div>';
     echo '<a class="btn btn-ghost" href="' . Admin::BASE . '/submissions.php"><i class="bi bi-arrow-left"></i> Back to reports</a>';
@@ -23,9 +29,24 @@ if (!$s) {
     exit;
 }
 
+// One row per flat this visit reported on; $s is the selected one.
+$flatRows  = expandVisits([$visit]);
+$flatCount = count($flatRows);
+$isMulti   = $flatCount > 1;
+$wantFlat  = trim((string)($_GET['flat'] ?? ''));
+$active    = 0;
+if ($wantFlat !== '') {
+    foreach ($flatRows as $i => $fr) {
+        if (strcasecmp(trim((string)$fr['flat_no']), $wantFlat) === 0) { $active = $i; break; }
+    }
+}
+$s = $flatRows[$active];
+
 $atts = $db->prepare("SELECT * FROM attachments WHERE submission_id = ? ORDER BY id ASC");
 $atts->execute([$id]);
-$atts = $atts->fetchAll();
+$allAtts = $atts->fetchAll();
+// Per-flat uploads are named "Flat<TAG>_…" by the pipeline — show only this flat's.
+$atts = $isMulti ? attachmentsForFlat($allAtts, (string)$s['flat_no']) : $allAtts;
 
 $photos = array_values(array_filter($atts, fn($a) => $a['kind'] === 'site_photo'));
 // drawing / measurement each accept several uploads -> keep every one.
@@ -37,6 +58,8 @@ foreach ($atts as $a) {
 }
 
 $payload = json_decode((string)$s['payload_json'], true) ?: [];
+$flatUrl = fn(array $r) => Admin::BASE . '/submission.php?id=' . (int)$id
+    . (trim((string)$r['flat_no']) !== '' ? '&flat=' . urlencode((string)$r['flat_no']) : '');
 
 // friendly report code (PPR-YYYY-MM-#####) from created date + id
 $reportCode = 'PPR-' . date('Y-m', strtotime((string)$s['created_at'])) . '-' . str_pad((string)$s['id'], 5, '0', STR_PAD_LEFT);
@@ -117,7 +140,13 @@ $flatSteps = function (array $payload, string $currentStatus): array {
 };
 
 $stepOrder = []; $stepStat = []; $stepDone = []; $stepHold = [];
-$allRows = $db->query("SELECT payload_json, current_status, created_at, client_type, developer, building, flat_no, project, order_id FROM submissions ORDER BY id ASC");
+// expandVisits: for a developer unit the project key ends in the flat number, so
+// multi-flat visits must be split before matching or this flat's history is lost
+// inside (and mixed with) its neighbours'.
+$allRows = expandVisits($db->query(
+    "SELECT payload_json, current_status, created_at, client_type, developer, building, floor, flat_no, project, order_id
+     FROM submissions ORDER BY id ASC"
+)->fetchAll());
 foreach ($allRows as $r) {
     if (projectKey($r) !== projectKey($s)) continue;
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
@@ -130,21 +159,37 @@ foreach ($allRows as $r) {
         else unset($stepHold[$nm]);
     }
 }
-$wpDone = 0; $wpHold = 0; $wpCur = [];
+// "Not Required" is work explicitly ruled out for this unit — it is neither done
+// nor outstanding, so it must not sit in "Currently on" (it read as in-progress
+// work that would never move) nor count against the completion total.
+$wpDone = 0; $wpHold = 0; $wpNr = 0; $wpCur = [];
 foreach ($stepOrder as $nm) {
     $stt = strtolower($stepStat[$nm] ?? '');
     if ($stt === 'done') $wpDone++;
+    elseif ($stt === 'not required') $wpNr++;
     elseif ($stt === 'hold') { $wpHold++; $wpCur[] = $nm; }
     else $wpCur[] = $nm;   // pending / in-progress
 }
-$wpTotal = count($stepOrder);
+$wpTotal = count($stepOrder) - $wpNr;
 $wpPct = $wpTotal > 0 ? round($wpDone * 100 / $wpTotal) : 0;
+
+// Per-flat rollup for the overview card: how far each flat of this visit has got
+// across ALL its visits (projects is rebuilt from the same reports by Sync).
+$flatMaster = [];
+if ($isMulti) {
+    $keys = array_map('projectKey', $flatRows);
+    $ph = implode(',', array_fill(0, count($keys), '?'));
+    $mq = $db->prepare("SELECT project_key, steps_done, steps_total, lifecycle, current_step, hold_owner FROM projects WHERE project_key IN ($ph)");
+    $mq->execute($keys);
+    foreach ($mq as $m) $flatMaster[$m['project_key']] = $m;
+}
 
 Layout::head('Report #' . $id, 'submissions', 'submission');
 ?>
 <div class="breadcrumb2">
   <a href="<?= Admin::BASE ?>/index.php"><i class="bi bi-house-door"></i></a> ›
   <a href="<?= Admin::BASE ?>/submissions.php">Site Reports</a> › Report #<?= (int)$id ?>
+  <?php if ($isMulti): ?> › <?= Admin::e(trim((string)$s['flat_no']) ?: 'flat ' . ($active + 1)) ?><?php endif; ?>
 </div>
 
 <div class="card2">
@@ -154,8 +199,9 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
       <h2><?= Admin::e(projectLabel($s)) ?>
         <?= Layout::statusBadge((string)$s['status']) ?>
         <?= Layout::pipelinePill((string)$s['overall_status']) ?>
+        <?php if ($isMulti): ?><span class="pill pill-type"><i class="bi bi-door-open"></i> <?= $flatCount ?> flats in this visit</span><?php endif; ?>
       </h2>
-      <div class="dh-sub"><span class="mono"><?= Admin::e($reportCode) ?></span> · submitted <?= Admin::e(ago($s['created_at'])) ?></div>
+      <div class="dh-sub"><span class="mono"><?= Admin::e($reportCode) ?></span> · submitted <?= Admin::e(ago($s['created_at'])) ?><?= $isMulti ? ' · showing flat ' . ($active + 1) . ' of ' . $flatCount : '' ?></div>
     </div>
     <div class="dh-actions">
       <?php if ($pdf): ?><a class="btn btn-primary btn-sm" href="<?= Admin::e($pdf['url']) ?>" target="_blank"><i class="bi bi-file-earmark-pdf"></i> View PDF</a><?php endif; ?>
@@ -171,41 +217,98 @@ Layout::head('Report #' . $id, 'submissions', 'submission');
       </div>
     </div>
   </div>
+  <?php if ($isMulti): ?>
+  <div class="card2-body" style="border-top:1px solid var(--line-soft);padding-top:14px">
+    <div class="wp-cur" style="margin:0">
+      <span class="lbl">Showing flat:</span>
+      <div class="sib-strip">
+        <?php foreach ($flatRows as $i => $fr): $stt = strtolower((string)$fr['status']);
+          $tone = $stt === 'done' ? 'ok' : ($stt === 'hold' ? 'bad' : 'warn'); ?>
+          <a class="sib<?= $i === $active ? ' on' : '' ?>" href="<?= Admin::e($flatUrl($fr)) ?>">
+            <span class="dot <?= $tone ?>"></span><?= Admin::e(trim((string)$fr['flat_no']) ?: 'Flat ' . ($i + 1)) ?>
+          </a>
+        <?php endforeach; ?>
+      </div>
+    </div>
+  </div>
+  <?php endif; ?>
   <div class="info-grid">
     <?php $renderCol($col1); $renderCol($col2); $renderCol($col3); ?>
   </div>
 </div>
 
 <?php
-// Multi-flat developer visit: one submission covers several flats (each its own steps).
-// The top row above shows the first flat; this card lists them all from the payload.
-$visitFlats = is_array($payload['flats'] ?? null) ? array_values(array_filter($payload['flats'], 'is_array')) : [];
-if (count($visitFlats) > 1):
+// Multi-flat developer visit: one submission, one PDF, one notification — but
+// several INDEPENDENT flat reports. This card is the per-flat answer to "which
+// flat is finished and which one is stuck", and links each to its own tracking.
+if ($isMulti):
 ?>
 <div class="card2">
   <div class="card2-head"><i class="bi bi-building text-primary"></i><h2>Flats in this visit</h2>
-    <span class="sub"><?= count($visitFlats) ?> flats · one consolidated report</span></div>
+    <span class="sub"><?= $flatCount ?> flats · each tracked as its own unit</span></div>
   <div class="card2-body">
-    <div class="info-grid">
-      <?php foreach ($visitFlats as $fi => $f):
-        $fno = trim((string)($f['flatNo'] ?? ''));
-        $ffl = trim((string)($f['floor'] ?? ''));
-        $steps = [];
-        foreach ((is_array($f['stepStatuses'] ?? null) ? $f['stepStatuses'] : []) as $eSt) {
+    <div class="flat-grid">
+      <?php foreach ($flatRows as $fi => $fr):
+        $fpl = json_decode((string)$fr['payload_json'], true) ?: [];
+        $fSteps = parseSteps($fpl);
+        // parseSteps only buckets done/pending/hold — collect the ruled-out steps too,
+        // so a flat that reported only "Not Required" doesn't look like it reported nothing.
+        $fNr = [];
+        foreach (($fpl['stepStatuses'] ?? []) as $eSt) {
             if (!is_array($eSt)) continue;
-            $st = trim((string)($eSt['step'] ?? ''));
-            if ($st !== '') $steps[] = $st . ' (' . trim((string)($eSt['status'] ?? '')) . ')';
+            if (strcasecmp(trim((string)($eSt['status'] ?? '')), 'Not Required') !== 0) continue;
+            $nm = trim((string)($eSt['step'] ?? ''));
+            if ($nm !== '') $fNr[] = $nm;
         }
-        $tent = trim((string)($f['tentativeEndDate'] ?? ''));
-        $work = trim((string)($f['workDoneBy'] ?? ''));
+        $fno = trim((string)$fr['flat_no']);
+        $ffl = trim((string)$fr['floor']);
+        $stt = (string)$fr['status'];
+        $cls = strcasecmp($stt, 'Hold') === 0 ? ' hold' : (strcasecmp($stt, 'Done') === 0 ? ' done' : '');
+        if ($fi === $active) $cls .= ' active';
+        $m = $flatMaster[projectKey($fr)] ?? null;
+        $mt = (int)($m['steps_total'] ?? 0); $md = (int)($m['steps_done'] ?? 0);
+        $pct = $mt > 0 ? (int)round($md * 100 / $mt) : 0;
+        $tent = trim((string)$fr['tentative_end']);
       ?>
-      <div class="info-col">
-        <div class="info-row"><div class="info-key"><i class="bi bi-door-open"></i>Flat <?= $fi + 1 ?></div>
-          <div class="info-val"><b><?= Admin::e($fno !== '' ? $fno : '—') ?></b><?= $ffl !== '' ? ' <span class="info-val soft">· ' . Admin::e($ffl) . '</span>' : '' ?></div></div>
-        <div class="info-row"><div class="info-key"><i class="bi bi-list-check"></i>Steps</div>
-          <div class="info-val"><?= $steps ? Admin::e(implode(', ', $steps)) : '<span class="info-val soft">—</span>' ?></div></div>
-        <?php if ($work !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-hammer"></i>Work by</div><div class="info-val soft"><?= Admin::e($work) ?></div></div><?php endif; ?>
-        <?php if ($tent !== ''): ?><div class="info-row"><div class="info-key"><i class="bi bi-calendar-event"></i>Tentative</div><div class="info-val"><?= Admin::e(fmtDate($tent) ?: $tent) ?></div></div><?php endif; ?>
+      <div class="flat-card<?= $cls ?>">
+        <div class="flat-head">
+          <span class="flat-no"><?= Admin::e($fno !== '' ? $fno : 'Flat ' . ($fi + 1)) ?></span>
+          <?php if ($ffl !== ''): ?><span class="flat-floor"><?= Admin::e($ffl) ?></span><?php endif; ?>
+          <span class="spacer" style="margin-left:auto"></span>
+          <?= Layout::statusBadge($stt) ?>
+        </div>
+
+        <?php if ($m): ?>
+        <div class="flat-prog">
+          <div class="bar-track"><div class="bar-fill" style="width:<?= max(2, $pct) ?>%"></div></div>
+          <span class="n"><?= $md ?>/<?= $mt ?> steps</span>
+        </div>
+        <div class="flat-note"><i class="bi bi-flag"></i><?= Admin::e((string)$m['lifecycle']) ?>
+          <?php if (trim((string)$m['current_step']) !== ''): ?> · now on <b><?= Admin::e($m['current_step']) ?></b><?php endif; ?>
+          <?php if (!empty($m['hold_owner'])): ?> · <span class="pill pill-<?= partyTone((string)$m['hold_owner']) ?>">stuck on <?= Admin::e($m['hold_owner']) ?></span><?php endif; ?>
+        </div>
+        <?php endif; ?>
+
+        <div class="flat-steps">
+          <?php foreach ($fSteps['done'] as $stp): ?><span class="pill pill-ok"><i class="bi bi-check-lg"></i> <?= Admin::e($stp) ?></span><?php endforeach; ?>
+          <?php foreach ($fSteps['pending'] as $stp): ?><span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> <?= Admin::e($stp) ?></span><?php endforeach; ?>
+          <?php foreach ($fSteps['hold'] as $hs): ?><span class="pill pill-bad"><i class="bi bi-pause"></i> <?= Admin::e($hs['step']) ?><?= $hs['party'] ? ' — ' . Admin::e($hs['party']) : '' ?></span><?php endforeach; ?>
+          <?php foreach ($fNr as $stp): ?><span class="pill pill-muted"><i class="bi bi-slash-circle"></i> <?= Admin::e($stp) ?></span><?php endforeach; ?>
+          <?php if (!$fSteps['done'] && !$fSteps['pending'] && !$fSteps['hold'] && !$fNr): ?><span class="info-val soft">No step updates in this visit.</span><?php endif; ?>
+        </div>
+
+        <?php foreach ($fSteps['hold'] as $hs): if ($hs['detail'] === '') continue; ?>
+          <div class="flat-note"><i class="bi bi-chat-left-quote"></i><?= Admin::e($hs['step']) ?>: <?= Admin::e($hs['detail']) ?></div>
+        <?php endforeach; ?>
+        <?php if (trim((string)$fr['activity']) !== ''): ?><div class="flat-note"><i class="bi bi-clipboard-check"></i><?= Admin::e(snip((string)$fr['activity'], 150)) ?></div><?php endif; ?>
+        <?php if (trim((string)$fr['next_plan']) !== ''): ?><div class="flat-note"><i class="bi bi-signpost-2"></i><?= Admin::e(snip((string)$fr['next_plan'], 150)) ?></div><?php endif; ?>
+        <?php if (trim((string)$fr['work_done_by']) !== ''): ?><div class="flat-note"><i class="bi bi-hammer"></i><?= Admin::e(snip((string)$fr['work_done_by'], 120)) ?></div><?php endif; ?>
+        <?php if ($tent !== ''): ?><div class="flat-note"><i class="bi bi-calendar-event"></i>Tentative end <?= Admin::e(fmtDate($tent) ?: $tent) ?></div><?php endif; ?>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <a class="btn btn-ghost btn-sm" href="<?= Admin::e($flatUrl($fr)) ?>"><i class="bi bi-eye"></i> This flat in this report</a>
+          <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/project.php?key=<?= urlencode(projectKey($fr)) ?>"><i class="bi bi-bar-chart-steps"></i> Full flat tracking</a>
+        </div>
       </div>
       <?php endforeach; ?>
     </div>
@@ -216,7 +319,7 @@ if (count($visitFlats) > 1):
 <?php if ($wpTotal > 0): ?>
 <div class="card2">
   <div class="card2-head"><i class="bi bi-bar-chart-steps text-primary"></i><h2>Work Progress</h2>
-    <span class="sub">site steps for this project</span></div>
+    <span class="sub">site steps for <?= $isMulti ? 'flat ' . Admin::e(trim((string)$s['flat_no']) ?: (string)($active + 1)) : 'this project' ?>, across every visit</span></div>
   <div class="card2-body">
     <div class="wp-summary">
       <div class="wp-count"><b><?= $wpDone ?></b> of <?= $wpTotal ?> steps done</div>
@@ -224,6 +327,7 @@ if (count($visitFlats) > 1):
         <span class="pill pill-ok"><span class="dot"></span><?= $wpDone ?> Done</span>
         <?php if (($wpTotal - $wpDone - $wpHold) > 0): ?><span class="pill pill-warn"><span class="dot"></span><?= $wpTotal - $wpDone - $wpHold ?> In progress</span><?php endif; ?>
         <?php if ($wpHold > 0): ?><span class="pill pill-bad"><span class="dot"></span><?= $wpHold ?> On hold</span><?php endif; ?>
+        <?php if ($wpNr > 0): ?><span class="pill pill-muted"><span class="dot"></span><?= $wpNr ?> Not required</span><?php endif; ?>
       </div>
     </div>
 
@@ -240,9 +344,10 @@ if (count($visitFlats) > 1):
 
     <div class="steps-grid">
       <?php foreach ($stepOrder as $nm): $stt = strtolower($stepStat[$nm] ?? '');
-        $tone = $stt === 'done' ? 'ok' : ($stt === 'hold' ? 'bad' : 'warn');
-        $ico  = $stt === 'done' ? 'bi-check-lg' : ($stt === 'hold' ? 'bi-pause' : 'bi-hourglass-split');
-        $cls  = $stt === 'done' ? '' : ($stt === 'hold' ? ' hold' : ' current'); ?>
+        $nr   = $stt === 'not required';
+        $tone = $stt === 'done' ? 'ok' : ($stt === 'hold' ? 'bad' : ($nr ? 'muted' : 'warn'));
+        $ico  = $stt === 'done' ? 'bi-check-lg' : ($stt === 'hold' ? 'bi-pause' : ($nr ? 'bi-slash-circle' : 'bi-hourglass-split'));
+        $cls  = ($stt === 'done' || $nr) ? '' : ($stt === 'hold' ? ' hold' : ' current'); ?>
         <div class="step-item<?= $cls ?>">
           <span class="si-dot <?= $tone ?>"><i class="bi <?= $ico ?>"></i></span>
           <div class="si-body">
@@ -250,6 +355,7 @@ if (count($visitFlats) > 1):
             <div class="si-meta">
               <?php if ($stt === 'done'): ?>Done · <?= Admin::e(fmtDate($stepDone[$nm] ?? '')) ?>
               <?php elseif ($stt === 'hold'): ?>On hold<?= isset($stepHold[$nm]) && $stepHold[$nm] !== '' ? ' ' . Admin::e($stepHold[$nm]) : '' ?>
+              <?php elseif ($nr): ?>Not required for this unit
               <?php else: ?>In progress<?php endif; ?>
             </div>
           </div>
@@ -262,7 +368,7 @@ if (count($visitFlats) > 1):
 
 <div class="card2">
     <div class="card2-head"><i class="bi bi-paperclip text-primary"></i><h2>Attachments</h2>
-      <span class="sub">(<?= count($photos) ?> photo<?= count($photos) === 1 ? '' : 's' ?>)</span></div>
+      <span class="sub">(<?= count($photos) ?> photo<?= count($photos) === 1 ? '' : 's' ?>)<?= $isMulti ? ' · this flat only — the PDF covers all ' . $flatCount . ' flats' : '' ?></span></div>
     <div class="card2-body">
       <?php if ($photos): ?>
         <div class="photo-grid">

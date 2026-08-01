@@ -510,6 +510,59 @@ textarea.inp { height: auto; padding: 10px 12px; resize: vertical; }
 .btn-add:hover { background: #f0f6ff; }
 .dev-name-in { font-weight: 700; max-width: 320px; }
 
+/* ---------------- Developer > Building > Flat tree ---------------- */
+.tree-dev { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 14px; background: #fff; overflow: hidden; }
+.tree-dev > summary, .tree-bld > summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 8px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.tree-dev > summary::-webkit-details-marker, .tree-bld > summary::-webkit-details-marker { display: none; }
+.tree-dev > summary { padding: 14px 18px; background: linear-gradient(180deg, #f8fafd, #f2f6fc); border-bottom: 1px solid var(--line-soft); }
+.tree-dev[open] > summary { border-bottom: 1px solid var(--line); }
+.tree-bld { border-top: 1px solid var(--line-soft); }
+.tree-bld:first-of-type { border-top: 0; }
+.tree-bld > summary { padding: 11px 18px 11px 30px; background: #fff; }
+.tree-bld > summary:hover, .tree-dev > summary:hover { background: #f6f9ff; }
+.tree-dev > summary .tw, .tree-bld > summary .tw { color: #94a3b8; font-size: 12px; transition: transform .15s ease; flex-shrink: 0; }
+.tree-dev[open] > summary .tw, .tree-bld[open] > summary .tw { transform: rotate(90deg); }
+.tree-ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex-shrink: 0;
+  background: var(--info-bg); color: var(--info); font-size: 16px; }
+.tree-ic.sm { width: 26px; height: 26px; border-radius: 8px; font-size: 13px; background: #eef2f8; color: #64748b; }
+.tree-name { font-weight: 700; font-size: 15px; color: #0f1b30; min-width: 0; overflow-wrap: anywhere; }
+.tree-bld .tree-name { font-size: 13.5px; }
+.tree-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tree-dev > summary .spacer, .tree-bld > summary .spacer { margin-left: auto; }
+.tree-bar { flex: 0 0 110px; height: 7px; }
+.tree-bld .table-wrap { border-top: 1px solid var(--line-soft); }
+.tree-bld .tbl thead th { background: #fbfcfe; }
+.unit-prog { display: flex; align-items: center; gap: 8px; min-width: 118px; }
+.unit-prog .bar-track { flex: 1 1 70px; min-width: 60px; }
+.unit-pct { font-size: 11.5px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.unit-sub { color: #94a3b8; font-size: 11.5px; margin-top: 2px; }
+
+/* ---------------- per-flat cards (report detail / project page) ---------------- */
+.flat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.flat-card { border: 1px solid var(--line); border-radius: 13px; padding: 14px 16px; background: #fff; }
+.flat-card.hold { border-color: #f3c0c0; background: #fff8f8; }
+.flat-card.done { border-color: #bfe4cd; background: #f9fefb; }
+.flat-card.active { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(60,90,160,.12); }
+.flat-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 10px; }
+.flat-no { font-weight: 800; font-size: 15px; color: #0f1b30; }
+.flat-floor { color: var(--muted); font-size: 12px; }
+.flat-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.flat-note { font-size: 12px; color: var(--ink-soft); margin-top: 9px; line-height: 1.45; }
+.flat-note i { color: #94a3b8; margin-right: 5px; }
+.flat-prog { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+.flat-prog .bar-track { height: 8px; }
+.flat-prog .n { font-size: 11.5px; font-weight: 700; color: var(--ink-soft); white-space: nowrap; }
+.sib-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.sib { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 12px; font-size: 12.5px; font-weight: 600; text-decoration: none; color: var(--ink-soft); background: #fff; }
+.sib:hover { border-color: var(--brand); color: #0f1b30; }
+.sib.on { background: #0f1b30; border-color: #0f1b30; color: #fff; }
+.sib .dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; flex-shrink: 0; }
+.sib .dot.ok { background: var(--ok); } .sib .dot.warn { background: var(--warn); } .sib .dot.bad { background: var(--bad); }
+
 /* ---------------- responsive ---------------- */
 @media (max-width: 900px) {
   .sidebar { position: fixed; left: 0; top: 0; z-index: 50; transform: translateX(-100%); transition: transform .22s ease; box-shadow: 0 0 50px rgba(0,0,0,.35); }

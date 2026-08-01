@@ -3,6 +3,11 @@
  * Site Reports — every daily-update submission, filterable and searchable.
  * Same filter set drives the CSV export (?export=csv). This is the raw ledger;
  * projects.php rolls it up per project.
+ *
+ * One DEVELOPER row can be a multi-flat visit: a single submission holding a
+ * complete report per flat. The list stays one row per report (that is what was
+ * submitted, mailed and PDF'd) but names every flat on it and links each straight
+ * to its own slice; search/filter/CSV all reach inside the flats too.
  */
 require __DIR__ . '/inc/bootstrap.php';
 Admin::requireAuth();
@@ -23,13 +28,17 @@ $from   = trim($_GET['from'] ?? '');
 $to     = trim($_GET['to'] ?? '');
 
 if ($q !== '') {
-    $where[] = "(project LIKE ? OR flat_no LIKE ? OR building LIKE ? OR engineer LIKE ? OR order_id LIKE ? OR developer LIKE ?)";
+    // flat_no only holds the FIRST flat of a multi-flat visit — the last term
+    // reaches the others through the payload so searching "1201" finds the report
+    // even when 1201 is the fourth flat on it.
+    $where[] = "(project LIKE ? OR flat_no LIKE ? OR building LIKE ? OR engineer LIKE ? OR order_id LIKE ? OR developer LIKE ? OR payload_json LIKE ?)";
     $like = "%$q%";
-    array_push($args, $like, $like, $like, $like, $like, $like);
+    array_push($args, $like, $like, $like, $like, $like, $like, '%"flatNo":"%' . $q . '%"%');
 }
 if ($site !== '')    { $where[] = "site_type = ?";      $args[] = $site; }
 if ($client !== '')  { $where[] = "client_type = ?";    $args[] = $client; }
-if ($status !== '')  { $where[] = "status = ?";         $args[] = $status; }
+// same reason: match the visit when ANY of its flats is in that state
+if ($status !== '')  { $where[] = "(status = ? OR payload_json LIKE ?)"; $args[] = $status; $args[] = '%"status":"' . $status . '"%'; }
 if ($overall !== '') { $where[] = "overall_status = ?"; $args[] = $overall; }
 if ($dev !== '')     { $where[] = "developer = ?";      $args[] = $dev; }
 if ($from !== '')    { $where[] = "created_at >= ?";    $args[] = $from . ' 00:00:00'; }
@@ -42,16 +51,20 @@ if (($_GET['export'] ?? '') === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="site_reports_' . date('Ymd_His') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['ID','Date','Site','Client','Developer','Building','Flat','Project','Order ID','Engineer','People','Step','Status','Hold Reason','Work Done By','Tentative End','Activity','Next Plan','Pipeline','PDF']);
+    // One line per FLAT: a 6-flat visit exported as one line hid five flats' work.
+    fputcsv($out, ['ID','Date','Site','Client','Developer','Building','Floor','Flat','Flat # of','Project','Order ID','Engineer','People','Step','Status','Hold Reason','Work Done By','Tentative End','Activity','Next Plan','Pipeline','PDF']);
     $rows = $db->prepare("SELECT * FROM submissions $wsql ORDER BY id DESC");
     $rows->execute($args);
     while ($r = $rows->fetch()) {
-        fputcsv($out, [
-            $r['id'], $r['created_at'], $r['site_type'], $r['client_type'], $r['developer'], $r['building'],
-            $r['flat_no'], $r['project'], $r['order_id'], $r['engineer'], $r['people'], $r['current_status'],
-            $r['status'], $r['hold_reason'], $r['work_done_by'], $r['tentative_end'], $r['activity'],
-            $r['next_plan'], $r['overall_status'], $r['pdf_url'],
-        ]);
+        foreach (expandVisit($r) as $fr) {
+            fputcsv($out, [
+                $fr['id'], $fr['created_at'], $fr['site_type'], $fr['client_type'], $fr['developer'], $fr['building'],
+                $fr['floor'], $fr['flat_no'], ($fr['flat_index'] + 1) . ' of ' . $fr['flat_count'],
+                $fr['project'], $fr['order_id'], $fr['engineer'], $fr['people'], $fr['current_status'],
+                $fr['status'], $fr['hold_reason'], $fr['work_done_by'], $fr['tentative_end'], $fr['activity'],
+                $fr['next_plan'], $fr['overall_status'], $fr['pdf_url'],
+            ]);
+        }
     }
     fclose($out);
     exit;
@@ -129,13 +142,40 @@ Layout::head('Site Reports', 'submissions');
       <thead><tr><th>#</th><th>Project / Unit</th><th>Type</th><th>Step</th><th>Status</th><th>Engineer</th><th>Order ID</th><th>Pipeline</th><th>Date</th><th></th></tr></thead>
       <tbody>
         <?php if (!$rows): ?><tr><td colspan="10" class="t-empty">No reports match these filters.</td></tr><?php endif; ?>
-        <?php foreach ($rows as $r): ?>
+        <?php foreach ($rows as $r):
+          $frs   = expandVisit($r);
+          $multi = count($frs) > 1;
+          // For a multi-flat visit the row's own step/status columns describe only
+          // its first flat, so summarise all of them instead.
+          $tally = ['Done' => 0, 'Pending' => 0, 'Hold' => 0];
+          foreach ($frs as $fr) { $k = (string)$fr['status']; if (isset($tally[$k])) $tally[$k]++; }
+        ?>
           <tr>
             <td class="mono">#<?= (int)$r['id'] ?></td>
-            <td><a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['id'] ?>"><?= Admin::e(projectLabel($r)) ?></a></td>
+            <td>
+              <a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['id'] ?>"><?= Admin::e($multi ? trim(implode(' › ', array_filter([$r['developer'], $r['building']]))) : projectLabel($r)) ?></a>
+              <?php if ($multi): ?>
+                <div class="flat-steps" style="margin-top:5px">
+                  <span class="pill pill-type"><i class="bi bi-door-open"></i> <?= count($frs) ?> flats</span>
+                  <?php foreach ($frs as $fr): $stt = strtolower((string)$fr['status']);
+                    $tone = $stt === 'done' ? 'ok' : ($stt === 'hold' ? 'bad' : 'warn'); ?>
+                    <a class="pill pill-<?= $tone ?>" style="text-decoration:none" title="<?= Admin::e(snip((string)$fr['current_status'], 90)) ?>"
+                       href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$r['id'] ?>&flat=<?= urlencode((string)$fr['flat_no']) ?>"><?= Admin::e(trim((string)$fr['flat_no']) ?: '—') ?></a>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
+            </td>
             <td><span class="pill pill-muted"><?= Admin::e($r['site_type']) ?></span> <?= Admin::e($r['client_type']) ?></td>
-            <td><?= Admin::e(snip($r['current_status'], 24)) ?: '—' ?></td>
-            <td><?= Layout::statusBadge((string)$r['status']) ?></td>
+            <td><?= Admin::e(snip($multi ? implode(', ', array_map(fn($f) => trim((string)$f['flat_no']) . ': ' . snip((string)$f['current_status'], 22), $frs)) : (string)$r['current_status'], 24)) ?: '—' ?></td>
+            <td>
+              <?php if ($multi): ?>
+                <?php foreach ($tally as $lbl => $n): if (!$n) continue; ?>
+                  <span class="pill pill-<?= $lbl === 'Done' ? 'ok' : ($lbl === 'Hold' ? 'bad' : 'warn') ?>"><?= $n ?> <?= strtolower($lbl) ?></span>
+                <?php endforeach; ?>
+              <?php else: ?>
+                <?= Layout::statusBadge((string)$r['status']) ?>
+              <?php endif; ?>
+            </td>
             <td><?= Admin::e($r['engineer']) ?: '—' ?></td>
             <td class="mono"><?= Admin::e($r['order_id']) ?: '—' ?></td>
             <td><?= Layout::statusBadge((string)$r['overall_status']) ?></td>

@@ -37,9 +37,11 @@ class PePlan
         // have work scheduled on several days across reports, so each (project,date)
         // is its own entry. The latest report for the same project+date wins.
         $plans = [];   // projectKey|date => plan
-        $sql = "SELECT id, project, order_id, developer, building, flat_no, client_type, engineer, created_at, payload_json
+        $sql = "SELECT id, project, order_id, developer, building, floor, flat_no, client_type, engineer, created_at, payload_json
                 FROM submissions ORDER BY id ASC";
-        foreach ($db->query($sql) as $r) {
+        // Split multi-flat developer visits first (see helpers.php expandVisits):
+        // each flat plans its own next day, so each needs its own line on the plan.
+        foreach ($this->expandVisits($db->query($sql)->fetchAll(PDO::FETCH_ASSOC)) as $r) {
             $pl = json_decode((string)$r['payload_json'], true) ?: [];
             $steps = $pl['tomorrowSteps'] ?? null;
             if (is_string($steps)) $steps = json_decode($steps, true);
@@ -78,6 +80,34 @@ class PePlan
         $n = 0;
         foreach ($groups as $g) $n += count($g['sites']);
         return $n;
+    }
+
+    /**
+     * Mirror of helpers.php expandVisits() — the admin helper file isn't loaded in
+     * the worker/CLI context this class runs in. A multi-flat developer visit is
+     * ONE submissions row carrying a full report per flat in payload flats[]; the
+     * row's own columns describe only the first of them.
+     */
+    private function expandVisits(array $rows): array
+    {
+        $out = [];
+        foreach ($rows as $r) {
+            $pl = json_decode((string)($r['payload_json'] ?? ''), true) ?: [];
+            $flats = is_array($pl['flats'] ?? null) ? array_values(array_filter($pl['flats'], 'is_array')) : [];
+            if (count($flats) < 2) {
+                $out[] = $r;
+                continue;
+            }
+            foreach ($flats as $f) {
+                $x = $r;
+                foreach (['floor' => 'floor', 'flat_no' => 'flatNo'] as $col => $key) {
+                    if (array_key_exists($key, $f)) { $x[$col] = $f[$key]; }
+                }
+                $x['payload_json'] = json_encode($f, JSON_UNESCAPED_UNICODE);
+                $out[] = $x;
+            }
+        }
+        return $out;
     }
 
     private function projectLabel(array $r): string

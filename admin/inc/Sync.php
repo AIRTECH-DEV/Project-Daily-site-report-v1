@@ -50,11 +50,14 @@ class Sync
     {
         self::ensureSchema($db);
 
-        $subs = $db->query(
-            "SELECT id, site_type, client_type, developer, building, flat_no, project, order_id,
+        // expandVisits: a multi-flat developer visit is ONE submissions row holding
+        // flats[] — every rollup below tracks a flat, so it must see one row per flat
+        // or only the first flat of the visit ever lands on the board.
+        $subs = expandVisits($db->query(
+            "SELECT id, site_type, client_type, developer, building, floor, flat_no, project, order_id,
                     engineer, current_status, status, tentative_end, payload_json, created_at
              FROM submissions ORDER BY id ASC"
-        )->fetchAll(PDO::FETCH_ASSOC);
+        )->fetchAll(PDO::FETCH_ASSOC));
 
         // One transaction for the whole rebuild. Without it every row INSERT is
         // its own commit — thousands of round trips that push a sync past the
@@ -405,9 +408,17 @@ class Sync
             }
         }
 
+        // Notification coverage and pipeline failures are per REPORT, not per flat —
+        // one multi-flat visit sends one email/PDF — so these stay one alert per
+        // submission. The label still says how many flats ride on it.
+        $visitLabel = static function (array $r): string {
+            $n = visitFlatCount($r);
+            return projectLabel($r) . ($n > 1 ? ' +' . ($n - 1) . ' more flat(s)' : '');
+        };
+
         // notification coverage: latest submission per project without an email/whatsapp done log
         $missing = $db->query(
-            "SELECT s.id, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT s.id, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer, s.payload_json
              FROM submissions s
              WHERE s.overall_status IN ('done','partial')
                AND NOT EXISTS (SELECT 1 FROM process_log p WHERE p.submission_id=s.id AND p.step IN ('email','whatsapp') AND p.status='done')
@@ -415,19 +426,19 @@ class Sync
         )->fetchAll(PDO::FETCH_ASSOC);
         foreach ($missing as $m) {
             $pk = projectKey($m);
-            $active["notify_missing|" . $m['id']] = compact_alert('notify_missing', 'warning', $pk, projectLabel($m),
+            $active["notify_missing|" . $m['id']] = compact_alert('notify_missing', 'warning', $pk, $visitLabel($m),
                 (string)$m['engineer'], 'No client notification logged', 'Report #' . $m['id'] . ' has no email/WhatsApp delivery record.', (int)$m['id']);
         }
 
         // pipeline failures
         $fails = $db->query(
-            "SELECT p.submission_id, p.step, p.message, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer
+            "SELECT p.submission_id, p.step, p.message, s.project, s.order_id, s.developer, s.building, s.flat_no, s.client_type, s.engineer, s.payload_json
              FROM process_log p JOIN submissions s ON s.id=p.submission_id
              WHERE p.status='failed' ORDER BY p.id DESC LIMIT 100"
         )->fetchAll(PDO::FETCH_ASSOC);
         foreach ($fails as $f) {
             $pk = projectKey($f);
-            $active["pipeline_fail|" . $f['submission_id'] . '|' . $f['step']] = compact_alert('pipeline_fail', 'critical', $pk, projectLabel($f),
+            $active["pipeline_fail|" . $f['submission_id'] . '|' . $f['step']] = compact_alert('pipeline_fail', 'critical', $pk, $visitLabel($f),
                 (string)$f['engineer'], 'Pipeline failure: ' . str_replace('_',' ',$f['step']), snip((string)$f['message'], 160), (int)$f['submission_id']);
         }
 

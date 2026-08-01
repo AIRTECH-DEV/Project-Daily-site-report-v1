@@ -256,6 +256,19 @@ Admin sync folds the report into projects / workers / contractors / alerts
 ### 5.4 Admin master-data sync
 Admin pages auto-sync (throttled) and `admin/sync.php` forces it: the sync **reads** `submissions` + `payload_json` and rebuilds `contractors`, `workers`, `visit_workers`, `projects`, `alerts`. It is **additive and read-only** over the pipeline — it can never affect a live submit.
 
+### 5.5 Multi-flat developer visits — one report, many tracked units
+A developer visit can cover several flats at once: the PE fills a **complete, independent report per flat** and submits them together, so **one `submissions` row** carries `payload_json.flats[]` (each entry a full report — own steps, status, hold, plan, photos, tentative end, Order ID). The row's own columns hold only `flats[0]`.
+
+The tracked unit, though, is the **flat**: `projectKey()` for a developer report is `D|developer|building|flat`. So every rollup calls **`expandVisits()`** (`admin/inc/helpers.php`) first, which explodes such a row into one virtual row per flat; General and single-flat reports pass through untouched. Anything that groups, counts, or keys submissions must go through it, or only the visit's first flat is tracked and the rest silently vanish.
+
+| Layer | What is per flat | What stays per visit |
+|---|---|---|
+| Tracking | project key, lifecycle, progress, current step, hold owner, target end, next plan, workforce credit | — |
+| Admin UI | Projects tree (Developer › Building › Flat), Project 360, holds, planner, calendar, PE performance, CSV export | the report row in Site Reports, its processing log |
+| Pipeline | response sheet row, PMS progress row, Order ID, photo/drawing/measurement uploads (named `Flat<TAG>_…`) | one consolidated PDF, one email, one WhatsApp |
+
+`admin/submission.php?id=<id>&flat=<flat no>` and `reports.php?id=<public id>&flat=<flat no>` open one flat's slice of a shared report; both default to the first flat and list the others with their state.
+
 ---
 
 ## 6. Database (`pms`)
@@ -407,6 +420,7 @@ The worker + PE-plan **cron jobs are unaffected by a deploy** (they run the fres
 - **Phase 2** — Email + WhatsApp delivery (ports of `sendReportEmail.js` / `sendReportwhatsapp.js`), fired after the PDF is ready, recorded in `process_log`; WhatsApp `document` delivery (real PDF via approved template) + PE-plan reminder image.
 - **Admin panel** — executive dashboard, submissions & pipeline health, Project 360, workforce/contractors, planner/calendar, alerts, and runtime settings (`overrides.json`).
 - **Async rework** — instant submit (`enqueue`) + background worker (`runCore` / `runNotifications`) + per-minute cron safety net.
+- **Per-flat tracking** — a multi-flat developer visit is now expanded to one tracked unit per flat everywhere in the panel (`expandVisits()`, §5.5): Projects is a Developer › Building › Flat tree, each flat has its own progress/lifecycle/holds/plan, and a shared report opens one flat at a time. Previously only the visit's first flat was tracked.
 
 ---
 

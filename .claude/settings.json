@@ -8,7 +8,9 @@
       "Bash(curl -sk -m 20 -o /dev/null -w \"%{http_code}\\\\n\" \"https://35.234.208.82/\")",
       "Bash(curl -sk -m 20 -o /dev/null -w \"%{http_code}\\\\n\" \"https://35.234.208.82/api/project_names.php?siteType=Non-VRV\")",
       "Bash(git push *)",
-      "Bash(timeout 150 ssh -i ~/.ssh/google_compute_engine -o StrictHostKeyChecking=no -o BatchMode=yes mis@35.234.208.82 \"cd /var/www/html/pms && until [ \\\\\"\\\\$\\(git rev-parse --short HEAD\\)\\\\\" = \\\\\"5250298\\\\\" ]; do sleep 5; done; echo DEPLOYED: \\\\$\\(git log --oneline -1\\)\")"
+      "Bash(timeout 150 ssh -i ~/.ssh/google_compute_engine -o StrictHostKeyChecking=no -o BatchMode=yes mis@35.234.208.82 \"cd /var/www/html/pms && until [ \\\\\"\\\\$\\(git rev-parse --short HEAD\\)\\\\\" = \\\\\"5250298\\\\\" ]; do sleep 5; done; echo DEPLOYED: \\\\$\\(git log --oneline -1\\)\")",
+      "Bash(curl -s -m 25 -H \"X-Api-Key: 13e11587bd42d2a9d3d297f975d3dbf2f4faca2823ce63f12de618f91bac6fdf\" \"https://service.vakhariaairtech.com/vapl/api/commissioning_api.php?action=health\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -m 25 \"https://service.vakhariaairtech.com/vapl/api/commissioning_api.php?action=health\")"
     ]
   }
 }

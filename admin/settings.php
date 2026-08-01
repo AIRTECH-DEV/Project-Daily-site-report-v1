@@ -43,8 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'delete_submission') {
             $db->beginTransaction();
 
             $find = $db->prepare(
-                "SELECT id, public_id, site_type, client_type, developer, building, flat_no, project, order_id,
-                        engineer, overall_status, created_at
+                "SELECT id, public_id, site_type, client_type, developer, building, floor, flat_no, project, order_id,
+                        engineer, overall_status, payload_json, created_at
                  FROM submissions WHERE id IN ($ph) FOR UPDATE"
             );
             $find->execute($ids);
@@ -93,11 +93,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'delete_submission') {
 
             // Remove a project master only if no surviving submission resolves to the
             // same project key; surviving projects are refreshed by the sync below.
-            $deletedProjectKeys = array_unique(array_map('projectKey', $targets));
-            $remaining = $db->query(
-                "SELECT site_type, client_type, developer, building, flat_no, project, order_id
+            // expandVisits both sides: a deleted multi-flat visit orphans a project
+            // row per flat, and a surviving one keeps several alive — comparing only
+            // the rows' own columns would leave every flat but the first stranded.
+            $deletedProjectKeys = array_unique(array_map('projectKey', expandVisits($targets)));
+            $remaining = expandVisits($db->query(
+                "SELECT site_type, client_type, developer, building, floor, flat_no, project, order_id, payload_json
                  FROM submissions"
-            )->fetchAll(PDO::FETCH_ASSOC);
+            )->fetchAll(PDO::FETCH_ASSOC));
             $survivingKeys = [];
             foreach ($remaining as $report) {
                 $survivingKeys[projectKey($report)] = true;
@@ -281,19 +284,25 @@ $subCount = 0;
 try {
     $deleteDb = Admin::db();
     $subCount = (int)$deleteDb->query("SELECT COUNT(*) FROM submissions")->fetchColumn();
+    // payload_json comes along so the picker can say how many flats a report covers
+    // (deleting one row can drop several tracked flats) and so a flat number that is
+    // not the visit's first one is still searchable.
     $deleteSql =
-        "SELECT id, public_id, site_type, client_type, developer, building, flat_no, project,
-                engineer, overall_status, created_at
+        "SELECT id, public_id, site_type, client_type, developer, building, floor, flat_no, project,
+                engineer, overall_status, payload_json, created_at
          FROM submissions";
     if ($deleteSearch !== '') {
         $deleteSql .=
             " WHERE CONCAT_WS(' ', id, public_id, site_type, client_type, developer, building,
                        flat_no, project, engineer, overall_status,
-                       DATE_FORMAT(created_at, '%d %b %Y %h:%i %p')) LIKE ?";
+                       DATE_FORMAT(created_at, '%d %b %Y %h:%i %p')) LIKE ?
+               OR payload_json LIKE ?";
     }
     $deleteSql .= " ORDER BY id DESC LIMIT 200";
     $deleteStmt = $deleteDb->prepare($deleteSql);
-    $deleteStmt->execute($deleteSearch !== '' ? ['%' . $deleteSearch . '%'] : []);
+    $deleteStmt->execute($deleteSearch !== ''
+        ? ['%' . $deleteSearch . '%', '%"flatNo":"%' . $deleteSearch . '%"%']
+        : []);
     $deleteRows = $deleteStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
 $deleteShown = count($deleteRows);
@@ -621,7 +630,9 @@ Layout::head('Settings', 'settings');
           <tbody>
           <?php foreach ($deleteRows as $report):
             $busy = in_array($report['overall_status'], ['received','queued','processing','awaiting_notify'], true);
-            $reportLabel = projectLabel($report);
+            $nFlats = visitFlatCount($report);
+            // Say it plainly: one multi-flat report carries several tracked flats with it.
+            $reportLabel = projectLabel($report) . ($nFlats > 1 ? ' (+' . ($nFlats - 1) . ' more flat(s))' : '');
           ?>
             <tr class="<?= $busy ? 'is-busy' : '' ?>">
               <td>

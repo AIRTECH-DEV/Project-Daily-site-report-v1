@@ -17,10 +17,12 @@ $tomorrow = date('Y-m-d', strtotime('+1 day'));
 $normDate = fn($v) => (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($v))) ? trim($v) : '';
 
 // ---- latest plan per project ------------------------------------------------
+// expandVisits: each flat of a multi-flat visit plans its own next day, so each
+// gets its own plan line instead of only the visit's first flat.
 $plans = [];   // project_key => plan (ascending id → latest report overwrites)
-foreach ($db->query(
-    "SELECT id, project, order_id, developer, building, flat_no, client_type, site_type, engineer, status, created_at, payload_json
-     FROM submissions ORDER BY id ASC") as $r) {
+foreach (expandVisits($db->query(
+    "SELECT id, project, order_id, developer, building, floor, flat_no, client_type, site_type, engineer, status, created_at, payload_json
+     FROM submissions ORDER BY id ASC")->fetchAll()) as $r) {
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
     $steps = $pl['tomorrowSteps'] ?? null;
     if (is_string($steps)) $steps = json_decode($steps, true);
@@ -38,6 +40,7 @@ foreach ($db->query(
         'explicit'   => $explicit !== '',
         'pe'         => trim((string)$r['engineer']) ?: '—',
         'id'         => (int)$r['id'],
+        'flat'       => (string)$r['flat_no'],
         'reportDate' => date('Y-m-d', strtotime((string)$r['created_at'])),
         'status'     => (string)$r['status'],
     ];
@@ -78,7 +81,7 @@ $planRow = function (array $p, bool $showPe = true) use ($tomorrow, $today) {
       <div class="up-steps" style="flex:1"><?php foreach ($p['steps'] as $st): ?><span class="pill pill-type"><?= Admin::e($st) ?></span><?php endforeach; ?></div>
       <?php if ($showPe): ?><span class="who"><i class="bi bi-person"></i> <?= Admin::e($p['pe']) ?></span><?php endif; ?>
       <span class="who"><i class="bi bi-calendar-event"></i> <?= Admin::e($when) ?><?= $p['explicit'] ? '' : ' (next day)' ?></span>
-      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= $p['id'] ?>">Open</a>
+      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= $p['id'] ?><?= trim((string)($p['flat'] ?? '')) !== '' ? '&flat=' . urlencode((string)$p['flat']) : '' ?>">Open</a>
     </div>
     <?php return ob_get_clean();
 };
@@ -116,7 +119,7 @@ $peBlock = function (array $grouped) use ($planRow) {
         <div class="up-steps" style="flex:1"><?php foreach ($p['steps'] as $st): ?><span class="pill pill-type"><?= Admin::e($st) ?></span><?php endforeach; ?></div>
         <span class="who"><i class="bi bi-person"></i> <?= Admin::e($p['pe']) ?></span>
         <span class="who"><i class="bi bi-calendar-event"></i> was <?= Admin::e(fmtDate($p['date'])) ?></span>
-        <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= $p['id'] ?>">Open</a>
+        <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= $p['id'] ?><?= trim((string)($p['flat'] ?? '')) !== '' ? '&flat=' . urlencode((string)$p['flat']) : '' ?>">Open</a>
       </div>
     <?php endforeach; ?>
   </div>

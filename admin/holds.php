@@ -10,10 +10,12 @@ Admin::requireAuth();
 require __DIR__ . '/inc/helpers.php';
 
 $db = Admin::db();
-$rows = $db->query("SELECT id, site_type, client_type, developer, building, floor, flat_no, project, order_id,
+// expandVisits: a developer visit can hold up flat 1204 while flat 1201 sails on —
+// only the per-flat rows can tell which unit is actually stuck.
+$rows = expandVisits($db->query("SELECT id, site_type, client_type, developer, building, floor, flat_no, project, order_id,
                            engineer, current_status, status, hold_reason, hold_reason_detail, tentative_end,
                            work_done_by, payload_json, created_at
-                    FROM submissions ORDER BY id DESC")->fetchAll();
+                    FROM submissions ORDER BY id DESC")->fetchAll());
 
 // group by project, latest first; collect full trail for step-completion history
 $groups = [];
@@ -96,7 +98,8 @@ Layout::head('On Hold', 'holds');
       <h2><?= Admin::e($h['label']) ?></h2>
       <span class="pill pill-muted"><?= Admin::e($s['site_type']) ?> · <?= Admin::e($s['client_type']) ?></span>
       <span class="spacer"></span>
-      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$s['id'] ?>"><i class="bi bi-eye"></i> Full report</a>
+      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/project.php?key=<?= urlencode(projectKey($s)) ?>"><i class="bi bi-bar-chart-steps"></i> Unit tracking</a>
+      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= (int)$s['id'] ?><?= trim((string)$s['flat_no']) !== '' ? '&flat=' . urlencode((string)$s['flat_no']) : '' ?>"><i class="bi bi-eye"></i> Full report</a>
     </div>
     <div class="card2-body">
       <div class="grid-2" style="gap:24px">

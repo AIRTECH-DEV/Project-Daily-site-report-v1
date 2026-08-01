@@ -42,7 +42,9 @@ if ($reportId > 0) {
         $q->execute([$reportId]); $rptLogs = $q->fetchAll();
     }
 }
-$pickList = $db->query("SELECT id, project, developer, building, flat_no, client_type, created_at FROM submissions ORDER BY id DESC LIMIT 50")->fetchAll();
+// payload_json so the picker can say how many flats a developer report covers —
+// the row's own flat_no names only the first of them.
+$pickList = $db->query("SELECT id, project, developer, building, flat_no, client_type, payload_json, created_at FROM submissions ORDER BY id DESC LIMIT 50")->fetchAll();
 
 require __DIR__ . '/inc/layout.php';
 Layout::head('Pipeline Health', 'pipeline');
@@ -59,8 +61,8 @@ Layout::head('Pipeline Health', 'pipeline');
     <span class="spacer"></span>
     <select class="card-select" onchange="if(this.value)location.href='?report='+this.value">
       <option value="">Select a report…</option>
-      <?php foreach ($pickList as $r): ?>
-        <option value="<?= (int)$r['id'] ?>" <?= $reportId === (int)$r['id'] ? 'selected' : '' ?>>#<?= (int)$r['id'] ?> · <?= Admin::e(snip(projectLabel($r), 32)) ?> · <?= Admin::e(fmtDate($r['created_at'])) ?></option>
+      <?php foreach ($pickList as $r): $nf = visitFlatCount($r); ?>
+        <option value="<?= (int)$r['id'] ?>" <?= $reportId === (int)$r['id'] ? 'selected' : '' ?>>#<?= (int)$r['id'] ?> · <?= Admin::e(snip(projectLabel($r), 32)) ?><?= $nf > 1 ? ' (+' . ($nf - 1) . ' flats)' : '' ?> · <?= Admin::e(fmtDate($r['created_at'])) ?></option>
       <?php endforeach; ?>
     </select>
   </div>

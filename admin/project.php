@@ -57,11 +57,14 @@ if (!$pr) {
     exit;
 }
 
-// all reports for this project (visit trail), oldest first
-$all = $db->query("SELECT * FROM submissions ORDER BY id ASC")->fetchAll();
+// All reports for this unit (visit trail), oldest first. expandVisits() first:
+// a developer visit can report on several flats at once, and only this flat's
+// slice of such a visit belongs on this page.
+$all = expandVisits($db->query("SELECT * FROM submissions ORDER BY id ASC")->fetchAll());
 $visits = array_values(array_filter($all, fn($r) => projectKey($r) === $key));
-$subIds = array_map(fn($r) => (int)$r['id'], $visits);
+$subIds = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $visits)));
 $inClause = $subIds ? implode(',', array_map('intval', $subIds)) : '0';
+$isDev = ($pr['client_type'] ?? '') === 'Developer';
 
 // ---- full-step aggregation across visits ----
 $canon = canonicalSteps((string)$pr['site_type']);
@@ -126,7 +129,8 @@ foreach ($visits as $v) {
 
     // remarks log
     $remarksLog[] = [
-        'date'=>$v['created_at'], 'id'=>(int)$v['id'], 'pe'=>$pe,
+        'date'=>$v['created_at'], 'id'=>(int)$v['id'], 'pe'=>$pe, 'flat'=>(string)($v['flat_no'] ?? ''),
+        'multi'=>((int)($v['flat_count'] ?? 1)) > 1,
         'activity'=>trim((string)$v['activity']), 'next'=>trim((string)$v['next_plan']),
         'hold'=>trim(trim((string)$v['hold_reason'] . ' — ' . (string)$v['hold_reason_detail'], ' —')),
         'status'=>(string)$v['status'],
@@ -144,9 +148,27 @@ foreach ($vw as $w) $vwByVisit[$w['submission_id']][] = $w;
 $deliv = $db->query("SELECT * FROM process_log WHERE submission_id IN ($inClause) AND step IN ('email','whatsapp') ORDER BY id DESC")->fetchAll();
 
 // ---- attachments ----
+// A multi-flat visit uploads every file under a "Flat<TAG>_" prefix, so keep only
+// this flat's files (plus untagged ones, which cover the whole visit).
 $atts = $db->query("SELECT * FROM attachments WHERE submission_id IN ($inClause) ORDER BY id DESC")->fetchAll();
+if ($isDev) {
+    $atts = attachmentsForFlat($atts, (string)$pr['flat_no']);
+}
 $photos = array_values(array_filter($atts, fn($a) => $a['kind'] === 'site_photo'));
 $docs   = array_values(array_filter($atts, fn($a) => $a['kind'] !== 'site_photo'));
+
+// ---- sibling flats in the same building (developer units only) ----
+$siblings = [];
+if ($isDev) {
+    $sib = $db->prepare(
+        "SELECT project_key, flat_no, steps_done, steps_total, lifecycle, hold_owner, current_step
+           FROM projects
+          WHERE client_type='Developer' AND COALESCE(developer,'')=? AND COALESCE(building,'')=?"
+    );
+    $sib->execute([(string)$pr['developer'], (string)$pr['building']]);
+    $siblings = $sib->fetchAll();
+    usort($siblings, fn($a, $b) => strnatcasecmp((string)$a['flat_no'], (string)$b['flat_no']));
+}
 
 // ---- amendments / drawings / measurements ----
 $flags = [];
@@ -173,7 +195,14 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
 ?>
 <div class="breadcrumb2">
   <a href="<?= Admin::BASE ?>/index.php"><i class="bi bi-house-door"></i></a> ›
-  <a href="<?= Admin::BASE ?>/projects.php">Projects</a> › <?= Admin::e($pr['label']) ?>
+  <a href="<?= Admin::BASE ?>/projects.php">Projects</a> ›
+  <?php if ($isDev): ?>
+    <a href="<?= Admin::BASE ?>/projects.php?q=<?= urlencode((string)$pr['developer']) ?>"><?= Admin::e($pr['developer']) ?></a> ›
+    <a href="<?= Admin::BASE ?>/projects.php?q=<?= urlencode((string)$pr['building']) ?>"><?= Admin::e($pr['building']) ?></a> ›
+    <?= Admin::e(trim((string)$pr['flat_no']) ?: '(no flat no.)') ?>
+  <?php else: ?>
+    <?= Admin::e($pr['label']) ?>
+  <?php endif; ?>
 </div>
 
 <div class="card2">
@@ -181,10 +210,10 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
     <div class="dh-ic"><i class="bi bi-buildings"></i></div>
     <div class="dh-titles">
       <h2><?= Admin::e($pr['label']) ?> <?= Layout::lifecyclePill((string)$pr['lifecycle']) ?><?= $pr['hold_owner'] ? ' ' . '<span class="pill pill-' . partyTone((string)$pr['hold_owner']) . '">stuck on ' . Admin::e($pr['hold_owner']) . '</span>' : '' ?></h2>
-      <div class="dh-sub"><?= Admin::e($pr['site_type']) ?> · <?= Admin::e($pr['client_type']) ?> · <?= (int)$pr['report_count'] ?> visit(s) · <span class="mono"><?= Admin::e($pr['order_id']) ?: '—' ?></span></div>
+      <div class="dh-sub"><?= Admin::e($pr['site_type']) ?> · <?= Admin::e($pr['client_type']) ?><?= $isDev ? ' · flat tracked on its own' : '' ?> · <?= (int)$pr['report_count'] ?> visit(s) · <span class="mono"><?= Admin::e($pr['order_id']) ?: '—' ?></span></div>
     </div>
     <div class="dh-actions">
-      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submissions.php?q=<?= urlencode($pr['project_name'] ?: $pr['developer']) ?>"><i class="bi bi-card-list"></i> Reports</a>
+      <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submissions.php?q=<?= urlencode($isDev ? ($pr['flat_no'] ?: $pr['developer']) : ($pr['project_name'] ?: $pr['developer'])) ?>"><i class="bi bi-card-list"></i> Reports</a>
       <?php if (!Admin::isViewer()): ?>
       <div class="kebab-wrap">
         <button class="btn btn-ghost btn-sm" id="lcBtn" type="button"><i class="bi bi-flag"></i> Lifecycle <i class="bi bi-chevron-down"></i></button>
@@ -207,6 +236,29 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
     </div>
   </div>
 </div>
+
+<?php if (count($siblings) > 1): ?>
+<div class="card2">
+  <div class="card2-head"><i class="bi bi-door-open text-primary"></i><h2>Flats in <?= Admin::e($pr['building']) ?></h2>
+    <span class="sub"><?= count($siblings) ?> flat(s) · each tracked separately</span></div>
+  <div class="card2-body">
+    <div class="sib-strip">
+      <?php foreach ($siblings as $sb):
+        $on = $sb['project_key'] === $key;
+        $lc = (string)$sb['lifecycle'];
+        $tone = $lc === 'On Hold' ? 'bad' : (in_array($lc, ['Commissioned','Closed'], true) ? 'ok' : ($lc === 'At Risk' ? 'bad' : 'warn'));
+        $sp = (int)$sb['steps_total'] > 0 ? round((int)$sb['steps_done'] * 100 / (int)$sb['steps_total']) : 0;
+      ?>
+        <a class="sib<?= $on ? ' on' : '' ?>" href="<?= Admin::BASE ?>/project.php?key=<?= urlencode((string)$sb['project_key']) ?>"
+           title="<?= Admin::e($lc . ' · ' . $sb['current_step'] . ($sb['hold_owner'] ? ' · stuck on ' . $sb['hold_owner'] : '')) ?>">
+          <span class="dot <?= $tone ?>"></span><?= Admin::e(trim((string)$sb['flat_no']) ?: '—') ?>
+          <span style="opacity:.7"><?= $sp ?>%</span>
+        </a>
+      <?php endforeach; ?>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
 
 <div class="proj-hero">
   <div class="phero g-purple"><div class="ph-v"><?= Admin::e($pr['primary_pe']) ?: '—' ?></div><div class="ph-l">Primary PE</div></div>
@@ -312,8 +364,9 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
           <strong style="font-size:13.5px"><?= Admin::e(fmtDateTime($rl['date'])) ?></strong>
           <?= Layout::statusBadge((string)$rl['status']) ?>
           <span class="info-val soft" style="font-size:12px">PE <?= Admin::e($rl['pe']) ?: '—' ?></span>
+          <?php if ($rl['multi']): ?><span class="pill pill-type"><i class="bi bi-door-open"></i> this flat's part of a multi-flat visit</span><?php endif; ?>
           <span class="spacer" style="margin-left:auto"></span>
-          <a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= $rl['id'] ?>">Report #<?= $rl['id'] ?> →</a>
+          <a class="row-link" href="<?= Admin::BASE ?>/submission.php?id=<?= $rl['id'] ?><?= $rl['flat'] !== '' ? '&flat=' . urlencode($rl['flat']) : '' ?>">Report #<?= $rl['id'] ?> →</a>
         </div>
         <?php if ($vwv): ?>
           <div class="up-steps" style="margin:0 0 8px">

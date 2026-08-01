@@ -25,7 +25,9 @@ $plans = [];      // key => event
 $endByProj = [];  // projectKey => event
 $normDate = fn($v) => (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($v))) ? trim($v) : '';
 
-foreach ($db->query("SELECT id, project, order_id, developer, building, flat_no, client_type, site_type, engineer, created_at, tentative_end, payload_json FROM submissions ORDER BY id ASC") as $r) {
+// expandVisits: per-flat plans and per-flat target-end dates — a multi-flat visit
+// carries a different schedule for every flat on it.
+foreach (expandVisits($db->query("SELECT id, project, order_id, developer, building, floor, flat_no, client_type, site_type, engineer, created_at, tentative_end, payload_json FROM submissions ORDER BY id ASC")->fetchAll()) as $r) {
     $pl = json_decode((string)$r['payload_json'], true) ?: [];
 
     // planned steps for the next working day
@@ -37,6 +39,7 @@ foreach ($db->query("SELECT id, project, order_id, developer, building, flat_no,
         $plans[projectKey($r) . '|' . $date] = [
             'date' => $date, 'type' => 'plan', 'label' => projectLabel($r),
             'steps' => $steps, 'engineer' => (string)$r['engineer'], 'id' => (int)$r['id'],
+            'flat' => (string)$r['flat_no'], 'key' => projectKey($r),
             'explicit' => $normDate($pl['nextStepStartDate'] ?? '') !== '',
         ];
     }
@@ -44,9 +47,14 @@ foreach ($db->query("SELECT id, project, order_id, developer, building, flat_no,
     // project target end date (latest report per project wins)
     $end = $normDate($r['tentative_end']);
     if ($end) {
-        $endByProj[projectKey($r)] = ['date' => $end, 'type' => 'end', 'label' => projectLabel($r), 'id' => (int)$r['id']];
+        $endByProj[projectKey($r)] = ['date' => $end, 'type' => 'end', 'label' => projectLabel($r),
+            'id' => (int)$r['id'], 'flat' => (string)$r['flat_no'], 'key' => projectKey($r)];
     }
 }
+
+/** Report link that lands on the right FLAT of a multi-flat visit. */
+$evLink = fn(array $e) => Admin::BASE . '/submission.php?id=' . (int)$e['id']
+    . (trim((string)($e['flat'] ?? '')) !== '' ? '&flat=' . urlencode((string)$e['flat']) : '');
 
 $byDate = [];   // Y-m-d => [events]
 foreach ($plans as $e)     $byDate[$e['date']][] = $e;
@@ -110,12 +118,12 @@ Layout::head('Calendar', 'calendar');
             <div class="cal-daynum"><?= (int)$cur->format('j') ?></div>
             <?php foreach ($evs as $k => $e): $extra = $k >= 3 ? ' cal-ev-extra' : ''; ?>
               <?php if ($e['type'] === 'plan'): ?>
-                <a class="cal-ev<?= $extra ?>" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="<?= Admin::e($e['label'] . ' — ' . implode(', ', $e['steps'])) ?>">
+                <a class="cal-ev<?= $extra ?>" href="<?= Admin::e($evLink($e)) ?>" title="<?= Admin::e($e['label'] . ' — ' . implode(', ', $e['steps'])) ?>">
                   <span class="evp"><?= Admin::e($e['label']) ?></span>
                   <span class="evs"><?= Admin::e(implode(', ', $e['steps'])) ?></span>
                 </a>
               <?php else: ?>
-                <a class="cal-ev end<?= $extra ?>" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" title="Target end — <?= Admin::e($e['label']) ?>">
+                <a class="cal-ev end<?= $extra ?>" href="<?= Admin::e($evLink($e)) ?>" title="Target end — <?= Admin::e($e['label']) ?>">
                   <span class="evp"><i class="bi bi-flag"></i> <?= Admin::e($e['label']) ?></span>
                   <span class="evs">Target end</span>
                 </a>
@@ -153,7 +161,7 @@ Layout::head('Calendar', 'calendar');
             <div class="up-proj"><i class="bi bi-flag text-warning"></i> <?= Admin::e($e['label']) ?> <span class="who">· target project end</span></div>
           <?php endif; ?>
         </div>
-        <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submission.php?id=<?= $e['id'] ?>" style="align-self:center">Open</a>
+        <a class="btn btn-ghost btn-sm" href="<?= Admin::e($evLink($e)) ?>" style="align-self:center">Open</a>
       </div>
     <?php endforeach; ?>
   </div>

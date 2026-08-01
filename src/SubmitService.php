@@ -172,6 +172,16 @@ class SubmitService
                 $tracker->updateSubmission(['order_id' => $res['order_id']]);
                 try { $writer->stampCell($tab, $rowNum, $headers, 'order id', $res['order_id']); } catch (Throwable $x) {}
             }
+            // Each flat of a multi-flat visit has its OWN Order ID; the single
+            // order_id column can only hold the first, so keep the rest on the flats.
+            if ($isMulti && !empty($res['order_ids']) && is_array($res['order_ids'])) {
+                $tracker->stampFlatOrderIds($res['order_ids']);
+                foreach ($rowsInfo as $ri => $info) {
+                    $oid = $res['order_ids'][trim((string)($reports[$ri]['flatNo'] ?? ''))] ?? '';
+                    if ($oid === '') { continue; }
+                    try { $writer->stampCell($info['tab'], $info['row'], $info['headers'], 'order id', $oid); } catch (Throwable $x) {}
+                }
+            }
             if ($res['updated']) { $tracker->stepDone($log, 'PMS row stamped'); }
             else { $tracker->stepSkipped($log, $res['warning'] ?: 'not updated'); $warnings[] = $res['warning']; }
         } catch (Throwable $e) {

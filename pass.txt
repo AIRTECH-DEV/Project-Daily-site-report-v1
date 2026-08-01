@@ -17,3 +17,6 @@ cd pms
 http://35.234.208.82/pms/
 
 http://35.234.208.82/pms/admin/setup.php
+
+
+gcloud compute ssh pms-vm --project vakos-project-module-dsu --zone asia-south1-c --command "date '+%H:%M:%S IST' -d '+5 hours 30 min'; sudo mysql -N -e \"SELECT project_key,lifecycle,steps_done,steps_total,commissioned_at,app_pushed_at,last_report_at FROM projects ORDER BY last_report_at DESC LIMIT 4\" pms; echo '--- sync log ---'; tail -3 /var/www/html/pms/storage/logs/admin_sync_cron.log; echo '--- push log ---'; tail -3 /var/www/html/pms/storage/logs/commission_cron.log" 2>&1 | tail -14
