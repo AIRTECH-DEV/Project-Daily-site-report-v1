@@ -347,17 +347,19 @@ class Pms
      *   HS Material Delivery -> "IDU Status" + "ODU Status"
      *
      * Unlike a dismantle pair these are NOT mutually exclusive — both halves can
-     * reach Done — but they share the group's one Start/End Date pair, so the date
-     * is stamped by whichever half finishes first (same "only if empty" rule used
-     * everywhere else).
+     * reach Done — so each half also gets its OWN End Date column where the sheet
+     * has one ("End date LS", "End Date IDU", "IDU End Date" — the wording varies
+     * per tab). Tabs not split yet still have a single shared End Date, which is
+     * the fallback. See findHalfDateCol().
      *
-     *   step display name (compact) => [group header text, status sub-header text]
+     *   step display name (compact)
+     *     => [group header text, status sub-header text, half qualifier]
      */
     private const SPLIT_STATUS_MAP = [
-        'lspressuretesting'     => ['Pressure Testing',     'LS Status'],
-        'iduodupressuretesting' => ['Pressure Testing',     'IDU/ODU Status'],
-        'hsmaterialdeliveryidu' => ['HS Material Delivery', 'IDU Status'],
-        'hsmaterialdeliveryodu' => ['HS Material Delivery', 'ODU Status'],
+        'lspressuretesting'     => ['Pressure Testing',     'LS Status',      'LS'],
+        'iduodupressuretesting' => ['Pressure Testing',     'IDU/ODU Status', 'IDU/ODU'],
+        'hsmaterialdeliveryidu' => ['HS Material Delivery', 'IDU Status',     'IDU'],
+        'hsmaterialdeliveryodu' => ['HS Material Delivery', 'ODU Status',     'ODU'],
     ];
 
     /** Base group header for a dismantle step name, or '' when it isn't one. */
@@ -731,14 +733,15 @@ class Pms
             // -> their own status sub-col inside the shared group.
             $split = $this->splitStatusFor($step);
             if ($split) {
-                [$sgroup, $ssub] = $split;
+                [$sgroup, $ssub, $shalf] = $split;
                 $scol = $this->findGroupSubCol($info, $sgroup, $ssub);
                 if ($scol < 1) {
                     continue;
                 }
                 $this->sheets->setCell($ssId, $title, $row, $scol, ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat);
                 if ($stat === 'Done') {
-                    $endCol = $this->findStepSubCol($info, $sgroup, 'End Date');
+                    // this half's own End Date where the tab has one, else the group's
+                    $endCol = $this->findHalfDateCol($info, $sgroup, $shalf, 'end');
                     if ($endCol > 0) {
                         $cur = $this->cell($rows, $row, $endCol);
                         if ($cur === '' || $cur === null) {
@@ -824,12 +827,17 @@ class Pms
                 if ($tStep === '') {
                     continue;
                 }
-                // Split and dismantle steps both plan against their GROUP's Start Date.
+                // A split step plans against its own Start Date when the tab has one
+                // (else the group's); a dismantle step always uses its base group's.
                 $tSplit = $this->splitStatusFor($tStep);
-                $tGroup = $tSplit ? $tSplit[0] : $this->dismentalGroupFor($tStep);
-                $startCol = $tGroup !== ''
-                    ? $this->findStepSubCol($info, $tGroup, 'Start Date')
-                    : $this->findStepSubCol($info, $tStep, 'Start Date');
+                if ($tSplit) {
+                    $startCol = $this->findHalfDateCol($info, $tSplit[0], $tSplit[2], 'start');
+                } else {
+                    $tGroup = $this->dismentalGroupFor($tStep);
+                    $startCol = $tGroup !== ''
+                        ? $this->findStepSubCol($info, $tGroup, 'Start Date')
+                        : $this->findStepSubCol($info, $tStep, 'Start Date');
+                }
                 if ($startCol < 1) {
                     continue;
                 }
@@ -922,9 +930,11 @@ class Pms
                 $s = Sheets::normalizeKey($subVals[$c]);
                 // Forward-fill the step name across every sub-cell of its merged group
                 // (they read back blank). Matched by KIND, not by an exact whitelist, so
-                // a group that gains another status column — "LS Status", "IDU/ODU
-                // Status", "Dismental Status", … — still resolves without a code change.
-                $isGroupSub = $s === 'start date' || $s === 'end date'
+                // a group that gains another dated or status column — "End date LS",
+                // "IDU End Date", "IDU/ODU Status", "Dismental Status", … — still
+                // resolves without a code change. Standalone columns are unaffected:
+                // their name sits in the GROUP row, so this branch never sees them.
+                $isGroupSub = strpos($s, 'date') !== false
                     || strpos($s, 'status') !== false || strpos($s, 'dismental') !== false;
                 if ($isGroupSub && $lastGroup !== '') {
                     $groupVals[$c] = $lastGroup;
@@ -979,6 +989,46 @@ class Pms
             }
         }
         return -1;
+    }
+
+    /**
+     * The Start/End DATE column belonging to one half of a split group.
+     *
+     * The sheets name these inconsistently — "End date LS", "End Date IDU",
+     * "IDU End Date" — and several tabs still carry only the group's one shared
+     * "End date". So the header is matched by its TOKENS, not its wording: strip
+     * "start"/"end"/"date" and whatever remains identifies the half ('' = the
+     * shared column). The half's own column wins; the shared one is the fallback,
+     * so a tab that has not been split yet keeps stamping exactly as before.
+     *
+     * @param string $which 'start' or 'end'
+     * @return int 1-based column, or -1 when the group has no such date column.
+     */
+    private function findHalfDateCol(array $info, string $groupName, string $half, string $which): int
+    {
+        $g = Sheets::compactKey($groupName);
+        $want = Sheets::compactKey($half);
+        if ($g === '') {
+            return -1;
+        }
+        $shared = -1;
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            if (Sheets::compactKey($info['groupVals'][$i] ?? '') !== $g) {
+                continue;
+            }
+            $sub = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            if (strpos($sub, 'date') === false || strpos($sub, $which) === false) {
+                continue;
+            }
+            $qual = Sheets::compactKey(str_replace(['start', 'end', 'date'], ' ', $sub));
+            if ($qual === $want) {
+                return $i + 1;                       // this half's own column
+            }
+            if ($qual === '' && $shared < 0) {
+                $shared = $i + 1;                    // the group's shared column
+            }
+        }
+        return $shared;
     }
 
     /**
