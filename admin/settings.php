@@ -217,6 +217,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'delete_submission') {
         if ($ptest !== '') $pp['test_to'] = $ptest;
         $ov['pe_plan'] = $pp;
 
+        // Weekly PE report (email, Saturday) — recipients come from team_contacts
+        $pw = is_array($ov['pe_weekly'] ?? null) ? $ov['pe_weekly'] : [];
+        $wm = strtoupper($_POST['pe_weekly_mode'] ?? '');
+        if (in_array($wm, ['OFF','TEST','LIVE'], true)) $pw['mode'] = $wm;
+        $wd = (int)($_POST['pe_weekly_day'] ?? 0);
+        if ($wd >= 1 && $wd <= 7) $pw['send_day'] = $wd;
+        $wt = trim($_POST['pe_weekly_time'] ?? '');
+        if (preg_match('/^\d{1,2}:\d{2}$/', $wt)) $pw['send_time'] = sprintf('%02d:%02d', ...array_map('intval', explode(':', $wt)));
+        $pw['test_to']       = trim($_POST['pe_weekly_test_to'] ?? '');
+        $pw['cc_manager']    = !empty($_POST['pe_weekly_cc']) ? 1 : 0;
+        $pw['include_empty'] = !empty($_POST['pe_weekly_empty']) ? 1 : 0;
+        $ov['pe_weekly'] = $pw;
+
         if (Admin::saveOverrides($ov)) {
             Admin::audit('update_settings', 'overrides', null, '', json_encode($ov));
             $flash = 'Settings saved. Applies to the next report the app or worker processes.';
@@ -277,6 +290,18 @@ $peTestTo   = $cfg['pe_plan']['test_to'] ?? '';
 $peTpl      = $cfg['pe_plan']['template_name'] ?? 'pe_plan_reminder';
 $peTestDate = date('Y-m-d', strtotime('+1 day'));   // test defaults to tomorrow (the real reminder day)
 
+// Weekly PE report prefill
+$pwMode   = $cfg['pe_weekly']['mode'] ?? 'OFF';
+$pwDay    = (int)($cfg['pe_weekly']['send_day'] ?? 6);
+$pwTime   = $cfg['pe_weekly']['send_time'] ?? '18:30';
+$pwTestTo = (string)($cfg['pe_weekly']['test_to'] ?? '');
+$pwCc     = !empty($cfg['pe_weekly']['cc_manager']);
+$pwEmpty  = !empty($cfg['pe_weekly']['include_empty']);
+// preview/test default to the week ending on the coming (or today's) send day
+$pwWeekEnd = date('Y-m-d', strtotime((int)date('N') === $pwDay ? 'today' : 'next ' . date('l', strtotime('Sunday +' . $pwDay . ' days'))));
+$pwNoEmail = [];
+foreach ($teamRows as $t) { if ($t['name'] !== '' && trim($t['email']) === '') $pwNoEmail[] = $t['name']; }
+
 // Danger Zone — database-backed report search for guarded deletion.
 $deleteRows = [];
 $deleteSearch = trim((string)($_GET['delete_q'] ?? ''));
@@ -307,11 +332,13 @@ try {
 } catch (Throwable $e) {}
 $deleteShown = count($deleteRows);
 
-// one-shot flash from the "Send test now" endpoint (pe_plan_test.php)
-if (!empty($_SESSION['pe_plan_flash'])) {
-    $flash = $_SESSION['pe_plan_flash']['msg'];
-    $flashType = $_SESSION['pe_plan_flash']['type'];
-    unset($_SESSION['pe_plan_flash']);
+// one-shot flash from the "Send test now" endpoints (pe_plan_test / pe_weekly_test)
+foreach (['pe_plan_flash', 'pe_weekly_flash'] as $fk) {
+    if (!empty($_SESSION[$fk])) {
+        $flash = $_SESSION[$fk]['msg'];
+        $flashType = $_SESSION[$fk]['type'];
+        unset($_SESSION[$fk]);
+    }
 }
 
 require __DIR__ . '/inc/layout.php';
@@ -520,6 +547,87 @@ Layout::head('Settings', 'settings');
         </table>
       </div>
       <p style="color:#94a3b8;font-size:12px;margin:10px 0 0"><i class="bi bi-info-circle"></i> Names auto-filled from project PEs. Critical alerts route to the owning PE's email + manager email when mode is LIVE.</p>
+    </div>
+  </div>
+
+  <div class="card2">
+    <div class="card2-head"><i class="bi bi-calendar-week text-primary"></i><h2>Weekly PE Report</h2>
+      <span class="sub">one email per engineer every Saturday — their whole week, site by site</span></div>
+    <div class="card2-body">
+      <p style="color:#5b6b82;margin:0 0 14px;font-size:13px">
+        Each engineer gets their own mail: every site they worked Mon→Sat day by day, steps completed, step
+        progress, what is blocking them, the plan they committed to next, target end dates, manpower deployed,
+        and how many days they filed a report. Addresses come from the <b>PE / Staff contacts</b> table above —
+        an engineer with no email is skipped.
+      </p>
+
+      <div class="grid-3" style="margin-bottom:10px">
+        <div>
+          <label class="form-lbl">Weekly report mode</label>
+          <select name="pe_weekly_mode" class="inp" style="width:100%;margin-top:6px">
+            <?php foreach (['OFF'=>'OFF — send nothing','TEST'=>'TEST — one sample to test inbox','LIVE'=>'LIVE — send to every PE'] as $v=>$t): ?>
+              <option value="<?= $v ?>" <?= $pwMode === $v ? 'selected' : '' ?>><?= $t ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div>
+          <label class="form-lbl">Send day</label>
+          <select name="pe_weekly_day" class="inp" style="width:100%;margin-top:6px">
+            <?php foreach ([1=>'Monday',2=>'Tuesday',3=>'Wednesday',4=>'Thursday',5=>'Friday',6=>'Saturday',7=>'Sunday'] as $v=>$t): ?>
+              <option value="<?= $v ?>" <?= $pwDay === $v ? 'selected' : '' ?>><?= $t ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div>
+          <label class="form-lbl">Send time</label>
+          <input class="inp" type="time" name="pe_weekly_time" value="<?= Admin::e($pwTime) ?>" style="width:100%;margin-top:6px">
+        </div>
+      </div>
+
+      <div class="grid-3" style="margin-bottom:6px">
+        <div>
+          <label class="form-lbl">Test inbox</label>
+          <input class="inp" type="text" name="pe_weekly_test_to" value="<?= Admin::e($pwTestTo) ?>"
+                 placeholder="<?= Admin::e($cfg['email']['test_to'] ?? '') ?>" style="width:100%;margin-top:6px">
+        </div>
+        <div>
+          <label class="form-lbl">Copy manager</label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:#5b6b82">
+            <input type="checkbox" name="pe_weekly_cc" value="1" <?= $pwCc ? 'checked' : '' ?>> CC the manager / ops email on every PE mail
+          </label>
+        </div>
+        <div>
+          <label class="form-lbl">Quiet weeks</label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:#5b6b82">
+            <input type="checkbox" name="pe_weekly_empty" value="1" <?= $pwEmpty ? 'checked' : '' ?>> Also mail PEs who filed nothing that week
+          </label>
+        </div>
+      </div>
+
+      <?php if ($pwNoEmail): ?>
+        <p style="color:#b45309;font-size:12px;margin:10px 0 0"><i class="bi bi-exclamation-triangle"></i>
+          No email set (will be skipped in LIVE): <b><?= Admin::e(implode(', ', $pwNoEmail)) ?></b></p>
+      <?php endif; ?>
+
+      <?php if (!Admin::isViewer()): ?>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:#5b6b82;display:flex;align-items:center;gap:6px">Week ending
+          <input class="inp" type="date" name="pe_weekly_date" value="<?= Admin::e($pwWeekEnd) ?>" style="width:170px">
+        </label>
+        <label style="font-size:13px;color:#5b6b82;display:flex;align-items:center;gap:6px">PE
+          <input class="inp" type="text" name="pe_weekly_pe" value="" placeholder="all engineers" style="width:150px">
+        </label>
+        <button class="btn btn-ghost" type="submit" formaction="<?= Admin::BASE ?>/pe_weekly_test.php" formmethod="post" formtarget="_blank"
+                name="pe_weekly_action" value="preview"><i class="bi bi-eye"></i> Preview mails</button>
+        <button class="btn btn-ghost" type="submit" formaction="<?= Admin::BASE ?>/pe_weekly_test.php" formmethod="post"
+                name="pe_weekly_action" value="send"><i class="bi bi-send"></i> Send test now</button>
+      </div>
+      <p style="font-size:12px;color:#8190a5;margin:8px 0 0">
+        <b>Preview</b> opens the real mails in a new tab and sends nothing. <b>Send test now</b> mails one sample
+        to the test inbox (ignores the mode + day/time gate). Scheduled job:
+        <span class="mono">php scripts/pe_weekly_send.php</span> — run it every 30 min; it fires once, on the day/time above.
+      </p>
+      <?php endif; ?>
     </div>
   </div>
 

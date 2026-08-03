@@ -151,6 +151,21 @@ $cfg = [
         'fonts'         => [],                 // optional TTF overrides: regular/semibold/bold
     ],
 
+    // ---- Weekly PE report (email, Saturday evening) ---------------------
+    // One email per Project Engineer: every site they worked Mon→Sat, step
+    // progress, blockers, next plan, target dates, and what needs chasing.
+    // Recipients come from the Team & Alerts "PE / Staff contacts" table
+    // (overrides.json -> team_contacts), never from client contacts.
+    // Runtime-tunable from admin/settings.php -> overrides.json ("pe_weekly").
+    'pe_weekly' => [
+        'mode'          => 'OFF',   // OFF | TEST (all to test_to) | LIVE (each PE)
+        'send_day'      => 6,       // 1=Mon … 7=Sun — 6 = Saturday
+        'send_time'     => '18:30', // HH:MM (24h)
+        'test_to'       => '',      // blank = fall back to email.test_to
+        'cc_manager'    => 1,       // CC alert_manager_email on every PE mail
+        'include_empty' => 0,       // also mail PEs with no activity that week
+    ],
+
     // ---- Project Engineers (site-report "Assigned Engineer" dropdown) ----
     // Seed roster. The admin panel (admin/users.php) writes the live roster to
     // config/overrides.json ("engineers"), which replaces this list. Entries may
@@ -257,6 +272,22 @@ if (is_file($overridesFile)) {
             if (!empty($p['test_to'])) {
                 $cfg['pe_plan']['test_to'] = (string)$p['test_to'];
             }
+        }
+        // Weekly PE report runtime settings (mode / day / time / test inbox).
+        if (isset($ov['pe_weekly']) && is_array($ov['pe_weekly'])) {
+            $p = $ov['pe_weekly'];
+            if (!empty($p['mode']) && in_array($p['mode'], ['OFF', 'TEST', 'LIVE'], true)) {
+                $cfg['pe_weekly']['mode'] = $p['mode'];
+            }
+            if (isset($p['send_day']) && (int)$p['send_day'] >= 1 && (int)$p['send_day'] <= 7) {
+                $cfg['pe_weekly']['send_day'] = (int)$p['send_day'];
+            }
+            if (!empty($p['send_time']) && preg_match('/^\d{1,2}:\d{2}$/', (string)$p['send_time'])) {
+                $cfg['pe_weekly']['send_time'] = sprintf('%02d:%02d', ...array_map('intval', explode(':', $p['send_time'])));
+            }
+            if (isset($p['test_to']))       { $cfg['pe_weekly']['test_to']       = (string)$p['test_to']; }
+            if (isset($p['cc_manager']))    { $cfg['pe_weekly']['cc_manager']    = (int)!empty($p['cc_manager']); }
+            if (isset($p['include_empty'])) { $cfg['pe_weekly']['include_empty'] = (int)!empty($p['include_empty']); }
         }
         // Project Engineer roster — admin panel owns it once it writes the key.
         if (isset($ov['engineers']) && is_array($ov['engineers']) && $ov['engineers']) {
