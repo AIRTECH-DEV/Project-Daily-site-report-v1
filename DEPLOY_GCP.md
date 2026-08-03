@@ -358,8 +358,18 @@ Add:
 
 # Commissioning push — sends projects past Pre-Commissioning to the HVAC/VAPL backend.
 */5 * * * * /usr/bin/php /var/www/html/pms/scripts/commission_push.php >> /var/www/html/pms/storage/logs/commission_cron.log 2>&1
+
+# Weekly PE report — runs every 30 min, self-gates to fire once a week on the
+# send_day/send_time set in admin Settings -> Weekly PE Report (default Sat 18:30).
+*/30 * * * * /usr/bin/php /var/www/html/pms/scripts/pe_weekly_send.php >> /var/www/html/pms/storage/logs/pe_weekly_cron.log 2>&1
 ```
 Check: `sudo crontab -u www-data -l`.
+
+> The weekly report is **OFF by default** and sends nothing until Settings → *Weekly PE
+> Report* is set to TEST/LIVE. In LIVE it mails each engineer at the address in the
+> *PE / Staff contacts* table — engineers with a blank email are skipped. Preview it
+> any time with the **Preview mails** button (sends nothing), or
+> `sudo -u www-data php scripts/pe_weekly_send.php --dry`.
 
 > The per-submit spawn handles instant processing; this cron is the safety net that
 > guarantees the queue drains and delayed notifications fire even if a spawn is missed.
