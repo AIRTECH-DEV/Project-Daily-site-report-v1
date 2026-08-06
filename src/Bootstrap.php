@@ -38,7 +38,7 @@ class Bootstrap
     {
         foreach ([
             'GoogleAuth', 'GoogleClient', 'Sheets', 'Orders', 'Drive', 'Db', 'Tracker',
-            'ResponseSheet', 'Pms', 'Pdf', 'PmsFpdf',
+            'ResponseSheet', 'Pms', 'Pdf', 'PmsFpdf', 'PreCommissioningPdf',
             'Smtp', 'Mailer', 'Whatsapp', 'NotificationService',
             'JobQueue', 'Spawn', 'SubmitService',
         ] as $c) {

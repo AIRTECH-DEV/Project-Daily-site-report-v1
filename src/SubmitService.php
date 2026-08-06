@@ -146,6 +146,50 @@ class SubmitService
             $warnings[] = 'Photo upload failed: ' . $e->getMessage();
         }
 
+        // Pre-commissioning report: either preserve uploaded Excel, or turn the
+        // in-app form into a PDF. Both become normal tracked attachments.
+        $log = $tracker->stepStart('precommissioning_report', $projectName);
+        $preCount = 0;
+        try {
+            $preDir = __DIR__ . '/../storage/precommissioning';
+            if (!is_dir($preDir)) { @mkdir($preDir, 0775, true); }
+            foreach ($reports as $ri => $rep) {
+                $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
+                $path = ''; $mime = ''; $name = '';
+                $file = $rep['preCommissioningFile'] ?? null;
+                if (is_array($file) && !empty($file['base64'])) {
+                    $bytes = base64_decode((string)$file['base64'], true);
+                    if ($bytes === false) { throw new RuntimeException('Invalid pre-commissioning workbook.'); }
+                    $ext = strtolower(pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION));
+                    if (!in_array($ext, ['xls', 'xlsx'], true)) { $ext = 'xls'; }
+                    $name = $tag . 'Pre_Commissioning_Report.' . $ext;
+                    $mime = $ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+                    $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
+                    file_put_contents($path, $bytes);
+                } elseif (!empty($rep['preCommissioningReport']) && is_array($rep['preCommissioningReport'])) {
+                    $name = $tag . 'Pre_Commissioning_Report.pdf';
+                    $mime = 'application/pdf';
+                    $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
+                    (new PreCommissioningPdf(__DIR__ . '/../assets'))->build($rep['preCommissioningReport'], $path);
+                }
+                if ($path === '' || !is_file($path)) { continue; }
+                $attachment = ['file_name' => $name, 'mime_type' => $mime, 'bytes' => filesize($path)];
+                if ($driveReady && $folderId) {
+                    $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
+                    $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
+                } else {
+                    $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
+                }
+                $tracker->addAttachment('pre_commissioning_report', $attachment);
+                $preCount++;
+            }
+            if ($preCount) $tracker->stepDone($log, $preCount . ' pre-commissioning report(s) attached');
+            else $tracker->stepSkipped($log, 'No pre-commissioning report required for this visit.');
+        } catch (Throwable $e) {
+            $tracker->stepFailed($log, $e->getMessage());
+            $warnings[] = 'Pre-commissioning report failed: ' . $e->getMessage();
+        }
+
         // 2) Response rows (one per flat)
         $writer = new ResponseSheet($this->sheets, $this->cfg);
         $rowsInfo = [];

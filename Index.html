@@ -125,6 +125,13 @@
     .status-apply { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
     .status-apply .apply-btn { align-self:flex-start; min-width:0; }
     .status-apply .apply-btn:disabled { opacity:.45; cursor:not-allowed; }
+    .precomm-box { margin-top:12px; border:1px solid #f0c8ca; background:#fff8f8; border-radius:9px; padding:13px; }
+    .precomm-box.ready { border-color:#cfe6d0; background:#f4fbf5; }
+    .precomm-title { font-size:12px; font-weight:800; color:#333; margin-bottom:4px; }
+    .precomm-note { font-size:11px; color:#777; line-height:1.45; margin-bottom:10px; }
+    .precomm-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .precomm-actions .btn { height:36px; }
+    .precomm-status { font-size:11px; font-weight:700; color:#27743a; }
     @media (max-width: 760px) { .step-check-list { grid-template-columns: 1fr; } }
 
     /* Developer multi-flat switcher (one visit, many flats, each its own report) */
