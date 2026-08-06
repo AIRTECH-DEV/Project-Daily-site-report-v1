@@ -155,7 +155,7 @@ class SubmitService
             if (!is_dir($preDir)) { @mkdir($preDir, 0775, true); }
             foreach ($reports as $ri => $rep) {
                 $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
-                $path = ''; $mime = ''; $name = '';
+                $artifacts = [];
                 $file = $rep['preCommissioningFile'] ?? null;
                 if (is_array($file) && !empty($file['base64'])) {
                     $bytes = base64_decode((string)$file['base64'], true);
@@ -166,22 +166,37 @@ class SubmitService
                     $mime = $ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
                     $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
                     file_put_contents($path, $bytes);
+                    $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => $mime];
                 } elseif (!empty($rep['preCommissioningReport']) && is_array($rep['preCommissioningReport'])) {
-                    $name = $tag . 'Pre_Commissioning_Report.pdf';
-                    $mime = 'application/pdf';
-                    $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
-                    (new PreCommissioningPdf(__DIR__ . '/../assets'))->build($rep['preCommissioningReport'], $path);
+                    $baseReport = $rep['preCommissioningReport'];
+                    $machineReports = !empty($baseReport['machineReports']) && is_array($baseReport['machineReports'])
+                        ? array_values(array_filter($baseReport['machineReports'], 'is_array'))
+                        : [$baseReport];
+                    $pdf = new PreCommissioningPdf(__DIR__ . '/../assets');
+                    foreach ($machineReports as $mi => $machineReport) {
+                        $payload = array_merge($baseReport, $machineReport);
+                        unset($payload['machineReports']);
+                        $system = $this->safeTag($machineReport['system'] ?? $machineReport['gasSystem'] ?? 'Machine');
+                        $machineTag = count($machineReports) > 1 ? ('Machine' . ($mi + 1) . '_' . $system . '_') : '';
+                        $name = $tag . $machineTag . 'Pre_Commissioning_Report.pdf';
+                        $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
+                        $pdf->build($payload, $path);
+                        $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => 'application/pdf'];
+                    }
                 }
-                if ($path === '' || !is_file($path)) { continue; }
-                $attachment = ['file_name' => $name, 'mime_type' => $mime, 'bytes' => filesize($path)];
-                if ($driveReady && $folderId) {
-                    $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
-                    $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
-                } else {
-                    $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
+                foreach ($artifacts as $artifact) {
+                    $path = $artifact['path']; $name = $artifact['name']; $mime = $artifact['mime'];
+                    if (!is_file($path)) { continue; }
+                    $attachment = ['file_name' => $name, 'mime_type' => $mime, 'bytes' => filesize($path)];
+                    if ($driveReady && $folderId) {
+                        $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
+                        $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
+                    } else {
+                        $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
+                    }
+                    $tracker->addAttachment('pre_commissioning_report', $attachment);
+                    $preCount++;
                 }
-                $tracker->addAttachment('pre_commissioning_report', $attachment);
-                $preCount++;
             }
             if ($preCount) $tracker->stepDone($log, $preCount . ' pre-commissioning report(s) attached');
             else $tracker->stepSkipped($log, 'No pre-commissioning report required for this visit.');

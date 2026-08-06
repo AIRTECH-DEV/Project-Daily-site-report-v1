@@ -1180,7 +1180,8 @@
       const generated = answers.preCommissioningReport;
       const uploaded = answers.preCommissioningFile;
       const ready = !!(generated || uploaded);
-      const label = generated ? ('Report created for ' + ((generated.units || []).length || 0) + ' unit(s)') : uploaded ? ('Excel uploaded: ' + uploaded.name) : '';
+      const machineCount = generated ? (Array.isArray(generated.machineReports) && generated.machineReports.length ? generated.machineReports.length : 1) : 0;
+      const label = generated ? (machineCount + ' machine report' + (machineCount === 1 ? '' : 's') + ' created') : uploaded ? ('Excel uploaded: ' + uploaded.name) : '';
       return `<div class="precomm-box ${ready ? 'ready' : ''}">
         <div class="precomm-title">Pre-Commissioning Report *</div>
         <div class="precomm-note">Create commissioning, pressure-test and refrigerant details now, or upload completed Excel workbook.</div>

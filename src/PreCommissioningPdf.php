@@ -79,10 +79,12 @@ class PreCommissioningPdf
         }
         $pdf->Ln(10);
         $gw = [128, 128, 128, 127];
-        $this->row($pdf, ['Liquid Pipe Size (mm)', 'Length (Rmt)', 'Factor (kg/m)', 'Quantity (kg)'], $gw, true, [], 21);
+        $this->row($pdf, ['Liquid Pipe Size (mm / inch)', 'Length (Rmt)', 'Factor (kg/m)', 'Quantity (kg)'], $gw, true, [], 21);
         $calculatedLength = 0.0; $calculatedQuantity = 0.0;
         foreach ((array)($r['pipes'] ?? []) as $p) {
-            $calculatedLength += (float)($p['length'] ?? 0);
+            $length = (float)($p['length'] ?? 0);
+            if ($length <= 0) { continue; }
+            $calculatedLength += $length;
             $calculatedQuantity += (float)($p['quantity'] ?? 0);
             $this->row($pdf, [$p['size'] ?? '', $p['length'] ?? '', $p['factor'] ?? '', number_format((float)($p['quantity'] ?? 0), 2)], $gw, false, [], 21);
         }
