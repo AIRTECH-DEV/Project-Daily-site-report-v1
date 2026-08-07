@@ -148,6 +148,14 @@
 
     /* Team-on-site: N teams (number-box), each team = members + ONE shared "work done" */
     .teams { display:flex; flex-direction:column; gap:14px; margin-top:12px; }
+    /* "No team working on site today" — ticking it freezes the whole block (read-only). */
+    .noteam-check { display:inline-flex; align-items:center; gap:9px; margin-bottom:12px; padding:8px 12px; border:1px solid #e2e2e2; border-radius:8px; background:#fff; cursor:pointer; font-size:13px; font-weight:600; color:#555; }
+    .noteam-check input { width:16px; height:16px; accent-color:var(--red); cursor:pointer; margin:0; }
+    .noteam-check.on { border-color:#f2c0c3; background:#fff5f5; color:var(--red); }
+    .teams.locked { opacity:.6; }
+    .teams.locked .field, .teams.locked .dropdown-field { background:#f7f7f8; color:#8a8a8a; cursor:not-allowed; }
+    .number-box .num-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .number-box .num-input:disabled { background:#f7f7f8; color:#8a8a8a; cursor:not-allowed; }
     .team-block { border:1px solid #e6e6e6; border-radius:10px; padding:12px; background:#fbfbfc; }
     .team-head { margin-bottom:8px; }
     .team-badge { display:inline-block; background:#fbeceb; color:var(--red); font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; padding:4px 10px; border-radius:12px; }

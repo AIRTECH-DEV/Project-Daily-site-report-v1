@@ -30,6 +30,12 @@
     };
     // Ventilation / Cold Storage / PACs-CRACs reuse the Non-VRV step list + sheets.
     STATUS_STEPS['Ventilation'] = STATUS_STEPS['Cold Storage'] = STATUS_STEPS['PAC/CRAC'] = STATUS_STEPS['Non-VRV'];
+    // Catch-all row in the Current Status checklist for work that is not one of the
+    // sheet steps. It has NO column in the progress sheet (server skips unknown steps),
+    // is never a "plan for tomorrow" item, and never produces an Activity Notes
+    // suggestion — the PE types what they did in Activity Notes themselves.
+    const OTHER_ACTIVITY = 'Other Activity';
+    function isOtherActivity(step) { return compact(step) === compact(OTHER_ACTIVITY); }
     // Site type cards (label + emoji logo + note). VRV/Non-VRV keep their old look.
     const SITE_TYPES = [
       { value: 'VRV',          icon: '🏢', name: 'VRV Site',      note: 'Variable Refrigerant Volume' },
@@ -356,23 +362,26 @@
         if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) m.push('Current Status — tick steps, pick a status, hit Apply');
         if (String(answers.tentativeEndDate || '').trim() === '') m.push('Tentative Project End Date');
         if (hasPreCommissioningDone() && !answers.preCommissioningReport && !answers.preCommissioningFile) m.push('Pre-Commissioning Report — create report or upload Excel');
-        const teamsList = Array.isArray(answers.teams) ? answers.teams : [];
-        if (teamsList.length < 1) m.push('Team on Site — add at least one team');
-        // If every work option is already locked (done in the sheet), the dropdown is empty —
-        // nothing to select — so don't require "work done" for that visit.
-        const workSelectable = availableWorkOptions().length > 0;
-        teamsList.forEach((team, t) => {
-          const ppl = Array.isArray(team.people) ? team.people : [];
-          if (ppl.length < 1) m.push('Team ' + (t + 1) + ' — add at least one member');
-          ppl.forEach((r, i) => {
-            const probs = [];
-            if (String(r.name || '').trim() === '') probs.push('name');
-            if (!r.techType) probs.push('type');
-            if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor company name');
-            if (probs.length) m.push('Team ' + (t + 1) + ' · Member ' + (i + 1) + ' — ' + probs.join(', '));
+        // "No team working" ticked -> the whole Team on Site block is read-only and skipped.
+        if (!answers.noTeam) {
+          const teamsList = Array.isArray(answers.teams) ? answers.teams : [];
+          if (teamsList.length < 1) m.push('Team on Site — add at least one team (or tick "No team working on site")');
+          // If every work option is already locked (done in the sheet), the dropdown is empty —
+          // nothing to select — so don't require "work done" for that visit.
+          const workSelectable = availableWorkOptions().length > 0;
+          teamsList.forEach((team, t) => {
+            const ppl = Array.isArray(team.people) ? team.people : [];
+            if (ppl.length < 1) m.push('Team ' + (t + 1) + ' — add at least one member');
+            ppl.forEach((r, i) => {
+              const probs = [];
+              if (String(r.name || '').trim() === '') probs.push('name');
+              if (!r.techType) probs.push('type');
+              if (r.techType === 'Contractor' && String(r.contractorName || '').trim() === '') probs.push('contractor company name');
+              if (probs.length) m.push('Team ' + (t + 1) + ' · Member ' + (i + 1) + ' — ' + probs.join(', '));
+            });
+            if (workSelectable && !(Array.isArray(team.workDone) && team.workDone.length > 0)) m.push('Team ' + (t + 1) + ' — pick the work done (shared)');
           });
-          if (workSelectable && !(Array.isArray(team.workDone) && team.workDone.length > 0)) m.push('Team ' + (t + 1) + ' — pick the work done (shared)');
-        });
+        }
         if (String(answers.activity || '').trim() === '') m.push('Activity Notes');
         if (!(Array.isArray(answers.photo) && answers.photo.length > 0)) m.push('Site Photos');
         if (!answers.amendment) m.push('Amendment Required?');
@@ -446,7 +455,10 @@
       const tentativeEndDate = answers.tentativeEndDate || '';
       const workDoneBy = answers.workDoneBy || '';
       const contractorName = answers.contractorName || '';
-      const statusSteps = STATUS_STEPS[siteType] || [];
+      const noTeam = !!answers.noTeam;
+      // "Other Activity" is appended to every site type's checklist (not part of
+      // STATUS_STEPS, so it stays out of the sheet mapping and tomorrow's plan).
+      const statusSteps = siteType ? (STATUS_STEPS[siteType] || []).concat(OTHER_ACTIVITY) : [];
       const lockedSet = new Set((answers.lockedSteps || []).map(compact));
       const doneSet = new Set((answers.doneSteps || []).map(compact));       // pending ticks
       const assignedMap = new Map((answers.stepStatuses || []).map(e => [compact(e.step), e]));
@@ -458,8 +470,10 @@
       // Steps marked "Not Required" on an earlier visit -> hidden from the checklist.
       const hiddenSet = new Set((answers.hiddenSteps || []).map(compact));
       // Activity Notes suggestions: skip steps held up by VAPL itself (internal hold) — only
-      // offer ready-made lines for Done/Pending and client-side holds.
-      const activitySuggestions = (answers.stepStatuses || []).filter(e => e.status !== 'Not Required' && !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
+      // offer ready-made lines for Done/Pending and client-side holds. "Other Activity" never
+      // gets a suggestion — the PE writes that line themselves.
+      const activitySuggestions = (answers.stepStatuses || []).filter(e => !isOtherActivity(e.step) && e.status !== 'Not Required' && !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
+      const otherActivityPicked = (answers.stepStatuses || []).some(e => isOtherActivity(e.step));
       return `
         <div class="panel">
           <div class="twocol">
@@ -546,13 +560,18 @@
                   ${iconAc()}
                   <div><div class="section-title">Team on Site</div><div class="section-sub">Set the number of teams, then fill each team's members and the work they did.</div></div>
                 </div>
+                <label class="noteam-check ${noTeam ? 'on' : ''}">
+                  <input type="checkbox" ${noTeam ? 'checked' : ''} onchange="setNoTeam(this.checked)">
+                  <span>No team working on site today</span>
+                </label>
+                ${noTeam ? `<div class="hint-note">Team details are read-only — this visit is submitted with no team, no members and no work done.</div>` : ''}
                 <div class="number-box">
-                  <button type="button" class="num-btn" aria-label="Fewer teams" onclick="adjustTeams(-1)">-</button>
-                  <input class="num-input" id="teamCountInput" type="number" min="0" value="${escapeHtml(String(teamCnt))}" oninput="setTeams(this.value)">
-                  <button type="button" class="num-btn" aria-label="More teams" onclick="adjustTeams(1)">+</button>
+                  <button type="button" class="num-btn" aria-label="Fewer teams" onclick="adjustTeams(-1)" ${noTeam ? 'disabled' : ''}>-</button>
+                  <input class="num-input" id="teamCountInput" type="number" min="0" value="${escapeHtml(String(teamCnt))}" oninput="setTeams(this.value)" ${noTeam ? 'disabled' : ''}>
+                  <button type="button" class="num-btn" aria-label="More teams" onclick="adjustTeams(1)" ${noTeam ? 'disabled' : ''}>+</button>
                 </div>
 
-                ${teamCnt > 0 ? `<div class="teams">
+                ${teamCnt > 0 ? `<div class="teams ${noTeam ? 'locked' : ''}">
                   ${teams.map((team, t) => {
                     const ppl = Array.isArray(team.people) ? team.people : [];
                     const works = Array.isArray(team.workDone) ? team.workDone : [];
@@ -565,31 +584,31 @@
                           return `<div class="person-block">
                             <div class="person-top ${type === 'Contractor' ? 'has-contractor' : ''}">
                               <div class="person-idx">${i + 1}</div>
-                              <input type="text" class="field" placeholder="Name" value="${escapeHtml(r.name || '')}" oninput="setPersonField(${t}, ${i}, 'name', this.value)" autocomplete="off">
-                              <select class="dropdown-field ${type ? '' : 'placeholder'}" onchange="setPersonField(${t}, ${i}, 'techType', this.value)">
+                              <input type="text" class="field" placeholder="Name" value="${escapeHtml(r.name || '')}" oninput="setPersonField(${t}, ${i}, 'name', this.value)" autocomplete="off" ${noTeam ? 'readonly' : ''}>
+                              <select class="dropdown-field ${type ? '' : 'placeholder'}" onchange="setPersonField(${t}, ${i}, 'techType', this.value)" ${noTeam ? 'disabled' : ''}>
                                 <option value="">Type</option>
                                 ${TECH_TYPES.map(tt => `<option value="${escapeHtml(tt)}" ${type === tt ? 'selected' : ''}>${escapeHtml(tt)}</option>`).join('')}
                               </select>
-                              ${ppl.length > 1 ? `<button type="button" class="person-remove" title="Remove member" onclick="removePerson(${t}, ${i})">&times;</button>` : `<span class="person-remove-spacer"></span>`}
-                              ${type === 'Contractor' ? `<input type="text" class="field contractor-name" placeholder="Contractor company name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${t}, ${i}, 'contractorName', this.value)" autocomplete="off">` : ''}
+                              ${(ppl.length > 1 && !noTeam) ? `<button type="button" class="person-remove" title="Remove member" onclick="removePerson(${t}, ${i})">&times;</button>` : `<span class="person-remove-spacer"></span>`}
+                              ${type === 'Contractor' ? `<input type="text" class="field contractor-name" placeholder="Contractor company name" value="${escapeHtml(r.contractorName || '')}" oninput="setPersonField(${t}, ${i}, 'contractorName', this.value)" autocomplete="off" ${noTeam ? 'readonly' : ''}>` : ''}
                             </div>
                           </div>`;
                         }).join('')}
                       </div>
-                      <button type="button" class="btn ghost add-person-btn" onclick="addPerson(${t})">+ Add Person</button>
+                      ${noTeam ? '' : `<button type="button" class="btn ghost add-person-btn" onclick="addPerson(${t})">+ Add Person</button>`}
                       <div class="team-work">
                         <div class="team-work-label">What work done <span>(shared by this team)</span></div>
-                        <select class="dropdown-field placeholder work-add" onchange="addTeamWork(${t}, this.value)">
+                        <select class="dropdown-field placeholder work-add" onchange="addTeamWork(${t}, this.value)" ${noTeam ? 'disabled' : ''}>
                           <option value="">${works.length ? '+ Add another work' : 'What work done'}</option>
                           ${rowOpts.map(w => `<option value="${escapeHtml(w)}">${escapeHtml(w)}</option>`).join('')}
                         </select>
                         ${works.length ? `<div class="chip-row work-chips">
-                          ${works.map(w => `<span class="work-chip">${escapeHtml(w)}<button type="button" title="Remove" onclick="removeTeamWork(${t}, '${escapeHtml(w)}')">&times;</button></span>`).join('')}
+                          ${works.map(w => `<span class="work-chip">${escapeHtml(w)}${noTeam ? '' : `<button type="button" title="Remove" onclick="removeTeamWork(${t}, '${escapeHtml(w)}')">&times;</button>`}</span>`).join('')}
                         </div>` : ''}
                       </div>
                     </div>`;
                   }).join('')}
-                </div>` : `<div class="hint-note">No teams yet. Use + to add a team.</div>`}
+                </div>` : `<div class="hint-note">${noTeam ? 'No team on site — nothing to fill here.' : 'No teams yet. Use + to add a team.'}</div>`}
               </div>
 
               <div class="hint-note">🛡️ All fields marked with * are mandatory.</div>
@@ -622,7 +641,7 @@
               <div class="section">
                 <div class="section-head">
                   ${iconProject()}
-                  <div><div class="section-title">Current Status</div><div class="section-sub">Tick the steps, pick a status, hit Apply. Repeat for steps with a different status. Already-done steps are locked.</div></div>
+                  <div><div class="section-title">Current Status</div><div class="section-sub">Tick the steps, pick a status, hit Apply. Repeat for steps with a different status. Already-done steps are locked. Work outside this list — tick <b>Other Activity</b> and describe it in Activity Notes.</div></div>
                 </div>
                 ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
                 ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
@@ -700,7 +719,8 @@
                     ${activitySuggestions.map(e => `<button type="button" class="plan-chip ${statusTagClass(e.status)}" onclick="addActivityStatement('${escapeHtml(e.step)}')">${escapeHtml(e.step)} · ${escapeHtml(e.status)}</button>`).join('')}
                   </div>
                 </div>` : ''}
-                <textarea class="textarea" id="activityInput" placeholder="Describe the work done, observations, issues noted, recommendations, etc." maxlength="1000">${escapeHtml(activity)}</textarea>
+                ${otherActivityPicked ? `<div class="hint-note" style="margin-bottom:10px;">You picked <b>Other Activity</b> — write that activity here in your own words.</div>` : ''}
+                <textarea class="textarea" id="activityInput" placeholder="${otherActivityPicked ? 'Write the other activity done on site today...' : 'Describe the work done, observations, issues noted, recommendations, etc.'}" maxlength="1000">${escapeHtml(activity)}</textarea>
               </div>
 
               <div class="photo-amend-grid">
@@ -893,7 +913,7 @@
               ${answers.clientType === 'Developer' ? reviewRow('Floor', answers.floor || '-') : ''}
               ${answers.clientType === 'Developer' ? reviewRow('Flat No', answers.flatNo || '-') : ''}
               ${reviewRow('Project', answers.project || '-')}
-              ${reviewRow('Team on Site', (Array.isArray(answers.teams) && answers.teams.length) ? (answers.teams.length + ' team(s) · ' + totalPeople() + ' people') : '-')}
+              ${reviewRow('Team on Site', answers.noTeam ? 'No team working on site' : ((Array.isArray(answers.teams) && answers.teams.length) ? (answers.teams.length + ' team(s) · ' + totalPeople() + ' people') : '-'))}
               ${reviewRow('Engineer', answers.engineer || '-')}
               ${reviewRow('Steps & Status', statusSummary || '-')}
               ${lockedList ? reviewRow('Already Done', lockedList) : ''}
@@ -909,7 +929,7 @@
             </div>
             <div class="review-card">
               <h4>Additional</h4>
-              ${reviewRow('Work Done By', workSummary || '-')}
+              ${reviewRow('Work Done By', answers.noTeam ? 'No team on site' : (workSummary || '-'))}
               ${reviewRow('Tentative End Date', answers.tentativeEndDate ? (fmtLongDate(answers.tentativeEndDate) + (daysLeftText(answers.tentativeEndDate) ? ' · ' + daysLeftText(answers.tentativeEndDate) : '')) : '-')}
               ${holdEntry ? reviewRow('Hold Reason', holdEntry.holdReason || '-') : ''}
               ${holdEntry ? reviewRow('Hold Detail', holdEntry.holdReasonDetail || '-') : ''}
@@ -1255,6 +1275,7 @@
     // Turns one applied step-status into a professional sentence for Activity Notes.
     function stepStatement(entry) {
       const step = entry.step;
+      if (isOtherActivity(step)) return '';   // never auto-write a line for "Other Activity"
       if (entry.status === 'Done') return step + ' completed today.';
       if (entry.status === 'Pending') return step + ' is currently pending.';
       if (entry.status === 'Not Required') return '';   // kept out of Activity Notes
@@ -1349,6 +1370,13 @@
       delete answers.teamWorkDone;
       delete answers.people;
     }
+    // "No team working on site today": whole section goes read-only and stops being
+    // mandatory. Whatever was typed stays visible but is NOT submitted (see
+    // buildReportPayload) — no phantom workers get credited for the visit.
+    function setNoTeam(on) {
+      answers.noTeam = !!on;
+      renderCurrentPage();
+    }
     function teamCount() { return (Array.isArray(answers.teams) ? answers.teams : []).length; }
     function totalPeople() {
       return (Array.isArray(answers.teams) ? answers.teams : []).reduce((sum, t) => sum + ((Array.isArray(t.people) ? t.people : []).length), 0);
@@ -1412,6 +1440,7 @@
       return WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
     }
     function teamsValid() {
+      if (answers.noTeam) return true;          // "No team working" -> whole section optional
       const teams = Array.isArray(answers.teams) ? answers.teams : [];
       if (teams.length < 1) return false;
       const workSelectable = availableWorkOptions().length > 0;
@@ -1510,11 +1539,11 @@
     // submits them together as payload.flats[]. General path stays single-report. Every
     // per-flat field lives top-level (so the whole existing form keeps working on the
     // "active" flat); switching flats just snapshots/restores these keys. =====
-    const PERFLAT_KEYS = ['flatNo','floor','teams','stepStatuses','doneSteps','status','holdReason','holdReasonDetail','lockedSteps','hiddenSteps','tentativeEndDate','tentativeLocked','activity','photo','tomorrowSteps','nextPlan','nextStepStartDate','amendment','amendmentWhy','drawingChange','drawingPhoto','measurement','measurementFile','preCommissioningReport','preCommissioningFile','generatedOrderId'];
+    const PERFLAT_KEYS = ['flatNo','floor','teams','noTeam','stepStatuses','doneSteps','status','holdReason','holdReasonDetail','lockedSteps','hiddenSteps','tentativeEndDate','tentativeLocked','activity','photo','tomorrowSteps','nextPlan','nextStepStartDate','amendment','amendmentWhy','drawingChange','drawingPhoto','measurement','measurementFile','preCommissioningReport','preCommissioningFile','generatedOrderId'];
     function isMultiFlat() { return answers.clientType === 'Developer'; }
     function snapshotPerFlat() { const s = {}; PERFLAT_KEYS.forEach(k => { s[k] = answers[k]; }); return s; }
     function blankFlat() {
-      return { flatNo:'', floor:'', teams:[], stepStatuses:[], doneSteps:[], status:'', holdReason:'', holdReasonDetail:'',
+      return { flatNo:'', floor:'', teams:[], noTeam:false, stepStatuses:[], doneSteps:[], status:'', holdReason:'', holdReasonDetail:'',
         lockedSteps:[], hiddenSteps:[], tentativeEndDate:'', tentativeLocked:false, activity:'', photo:[], tomorrowSteps:[],
         nextPlan:'', nextStepStartDate:'', amendment:'', amendmentWhy:'', drawingChange:'', drawingPhoto:[],
         measurement:'', measurementFile:[], preCommissioningReport:null, preCommissioningFile:null, generatedOrderId:'' };
@@ -1620,11 +1649,14 @@
         holdReason: holdEntry ? holdEntry.holdReason : '',
         holdReasonDetail: holdEntry ? holdEntry.holdReasonDetail : '',
         tentativeEndDate: answers.tentativeEndDate,
-        workDoneBy: peopleWorkSummary(),
+        // "No team working" -> submit an empty team block whatever is still typed in the
+        // (read-only) fields, so nobody is credited with labour they didn't do.
+        workDoneBy: answers.noTeam ? 'No team on site' : peopleWorkSummary(),
         contractorName: '',
-        teams: answers.teams || [],
+        noTeam: !!answers.noTeam,
+        teams: answers.noTeam ? [] : (answers.teams || []),
         project: answers.project,
-        people: totalPeople(),
+        people: answers.noTeam ? 0 : totalPeople(),
         engineer: answers.engineer,
         activity: answers.activity,
         nextPlan: tomorrowPlanText(),
@@ -1734,6 +1766,7 @@
       if (!Array.isArray(answers.lockedSteps)) answers.lockedSteps = [];
       if (!Array.isArray(answers.stepStatuses)) answers.stepStatuses = [];
       if (!Array.isArray(answers.teams)) answers.teams = [];
+      answers.noTeam = !!answers.noTeam;
       if (!Array.isArray(answers.tomorrowSteps)) answers.tomorrowSteps = [];
       if (!Array.isArray(answers.hiddenSteps)) answers.hiddenSteps = [];
       if (!Array.isArray(answers.flats)) answers.flats = [];
