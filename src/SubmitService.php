@@ -148,9 +148,13 @@ class SubmitService
 
         // Pre-commissioning report: either preserve uploaded Excel, or turn the
         // in-app form into a PDF. Both become normal tracked attachments.
-        $log = $tracker->stepStart('precommissioning_report', $projectName);
+        // stepStart() is INSIDE the try on purpose: it writes to process_log, and a
+        // schema that doesn't know this step name must degrade to a warning, never
+        // abort runCore() before the response-sheet write below.
+        $log = 0;
         $preCount = 0;
         try {
+            $log = $tracker->stepStart('precommissioning_report', $projectName);
             $preDir = __DIR__ . '/../storage/precommissioning';
             if (!is_dir($preDir)) { @mkdir($preDir, 0775, true); }
             foreach ($reports as $ri => $rep) {
@@ -191,6 +195,10 @@ class SubmitService
                     if ($driveReady && $folderId) {
                         $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
                         $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
+                        // Drive is the store, exactly like the report PDF: the local copy
+                        // was only the bridge to the upload, so drop it now instead of
+                        // letting storage/precommissioning grow forever.
+                        @unlink($path);
                     } else {
                         $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
                     }
@@ -201,7 +209,7 @@ class SubmitService
             if ($preCount) $tracker->stepDone($log, $preCount . ' pre-commissioning report(s) attached');
             else $tracker->stepSkipped($log, 'No pre-commissioning report required for this visit.');
         } catch (Throwable $e) {
-            $tracker->stepFailed($log, $e->getMessage());
+            if ($log) { $tracker->stepFailed($log, $e->getMessage()); }
             $warnings[] = 'Pre-commissioning report failed: ' . $e->getMessage();
         }
 

@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS `submissions` (
 CREATE TABLE IF NOT EXISTS `process_log` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `submission_id` BIGINT UNSIGNED NOT NULL,
-  `step`          ENUM('sheet_write','photo_save','pms_update','pdf','email','whatsapp')
+  `step`          ENUM('sheet_write','photo_save','pms_update','pdf','email','whatsapp',
+                       'precommissioning_report')
                   NOT NULL,
   `status`        ENUM('pending','running','done','failed','skipped')
                   NOT NULL DEFAULT 'pending',
@@ -78,7 +79,8 @@ CREATE TABLE IF NOT EXISTS `process_log` (
 CREATE TABLE IF NOT EXISTS `attachments` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `submission_id` BIGINT UNSIGNED NOT NULL,
-  `kind`          ENUM('site_photo','drawing','measurement','pdf') NOT NULL,
+  `kind`          ENUM('site_photo','drawing','measurement','pdf',
+                       'pre_commissioning_report') NOT NULL,
   `file_name`     VARCHAR(255)    DEFAULT NULL,
   `mime_type`     VARCHAR(120)    DEFAULT NULL,
   `drive_file_id` VARCHAR(120)    DEFAULT NULL,
