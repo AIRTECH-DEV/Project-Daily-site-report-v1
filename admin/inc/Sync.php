@@ -269,11 +269,19 @@ class Sync
             $doneKeys = [];
             foreach ($rows as $r) {
                 $pl = json_decode((string)$r['payload_json'], true) ?: [];
-                foreach (parseSteps($pl)['done'] as $st) $doneKeys[stepKey($st)] = $st;
+                // Retired split steps drive BOTH replacements — see canonicalAliases().
+                foreach (parseSteps($pl)['done'] as $st) {
+                    foreach (canonicalAliases($st) as $c) { $doneKeys[stepKey($c)] = $c; }
+                }
             }
             $canon = canonicalSteps((string)$latest['site_type']);
             $stepsTotal = count($canon);
-            $stepsDone  = count($doneKeys);
+            // Progress counts CANONICAL steps only. Dismantle steps and the "Other
+            // Activity" catch-all are real work with no slot in the checklist, so
+            // counting them pushed steps_done past steps_total (>100% near the end).
+            $canonKeys = [];
+            foreach ($canon as $c) { $canonKeys[stepKey($c)] = 1; }
+            $stepsDone = count(array_intersect_key($doneKeys, $canonKeys));
 
             $plLatest = json_decode((string)$latest['payload_json'], true) ?: [];
             $ps = parseSteps($plLatest);

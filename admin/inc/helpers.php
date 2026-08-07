@@ -309,6 +309,26 @@ function stepKey(string $s): string
 }
 
 /**
+ * The canonical step name(s) a REPORTED step name stands for.
+ *
+ * "Pressure Testing" and "HS Material Delivery" were each split into two halves.
+ * The retired name covered BOTH halves, so a report filed before the split counts
+ * as done for each replacement — otherwise the rollup reads the work as never
+ * done, sends the project's current step back to a finished stage, and
+ * under-counts its progress. Identity for every name that was not retired.
+ *
+ * @return string[] one name normally, two for a retired (split) step
+ */
+function canonicalAliases(string $step): array
+{
+    static $map = [
+        'pressuretesting'    => ['LS Pressure Testing', 'IDU/ODU Pressure Testing'],
+        'hsmaterialdelivery' => ['HS Material Delivery IDU', 'HS Material Delivery ODU'],
+    ];
+    return $map[stepKey($step)] ?? [$step];
+}
+
+/**
  * True when a step name is (or contains) the FINAL commissioning step.
  * "Pre-Commissining" is a separate, earlier step — it must NOT flip a project to
  * Commissioned, so anything prefixed "pre" is excluded.

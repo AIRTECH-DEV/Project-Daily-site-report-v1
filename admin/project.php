@@ -101,29 +101,34 @@ foreach ($visits as $v) {
 
     foreach (($pl['stepStatuses'] ?? []) as $e) {
         if (!is_array($e)) continue;
-        $nm = trim((string)($e['step'] ?? ''));
-        if ($nm === '') continue;
-        $k = stepKey($nm);
-        if (!isset($steps[$k])) $steps[$k] = ['name'=>$nm,'order'=>999,'status'=>'','actualStart'=>'','doneOn'=>'','planned'=>'','author'=>'','pe'=>'','remarks'=>[]];
-        $stt = ucfirst(strtolower(trim((string)($e['status'] ?? ''))));
-        if ($stt === '') continue;
+        $reported = trim((string)($e['step'] ?? ''));
+        if ($reported === '') continue;
 
-        if ($steps[$k]['actualStart'] === '') $steps[$k]['actualStart'] = $date;
-        $steps[$k]['status'] = $stt;
-        if ($stt === 'Done' && $steps[$k]['doneOn'] === '') { $steps[$k]['doneOn'] = $date; $steps[$k]['author'] = $author; $steps[$k]['pe'] = $pe; }
-        $reason = '';
-        if ($stt === 'Hold') {
-            $party = holdParty((string)($e['holdReason'] ?? ''));
-            $detail = trim((string)($e['holdReasonDetail'] ?? ''));
-            $reason = trim(($party ? "Stuck on $party" : 'On hold') . ($detail ? " — $detail" : ''));
-            if ($reason !== '') $lastHoldReason[$k] = $reason;
-            $steps[$k]['remarks'][] = trim(($party ? "Hold by $party" : 'Hold') . ($detail ? ": $detail" : ''));
-        }
-        if (($prevStatus[$k] ?? '') !== $stt) {
-            // moving OUT of hold keeps the earlier hold reason so the log never loses it
-            $resolved = (($prevStatus[$k] ?? '') === 'Hold' && $stt !== 'Hold') ? ($lastHoldReason[$k] ?? '') : '';
-            $changes[] = ['date'=>$v['created_at'], 'step'=>$nm, 'from'=>$prevStatus[$k] ?? '', 'to'=>$stt, 'author'=>$author, 'pe'=>$pe, 'reason'=>$reason, 'resolved'=>$resolved];
-            $prevStatus[$k] = $stt;
+        // A step retired by the split covers BOTH replacements, so one old report
+        // drives each new row — otherwise its half shows as never started.
+        foreach (canonicalAliases($reported) as $nm) {
+            $k = stepKey($nm);
+            if (!isset($steps[$k])) $steps[$k] = ['name'=>$nm,'order'=>999,'status'=>'','actualStart'=>'','doneOn'=>'','planned'=>'','author'=>'','pe'=>'','remarks'=>[]];
+            $stt = ucfirst(strtolower(trim((string)($e['status'] ?? ''))));
+            if ($stt === '') continue;
+
+            if ($steps[$k]['actualStart'] === '') $steps[$k]['actualStart'] = $date;
+            $steps[$k]['status'] = $stt;
+            if ($stt === 'Done' && $steps[$k]['doneOn'] === '') { $steps[$k]['doneOn'] = $date; $steps[$k]['author'] = $author; $steps[$k]['pe'] = $pe; }
+            $reason = '';
+            if ($stt === 'Hold') {
+                $party = holdParty((string)($e['holdReason'] ?? ''));
+                $detail = trim((string)($e['holdReasonDetail'] ?? ''));
+                $reason = trim(($party ? "Stuck on $party" : 'On hold') . ($detail ? " — $detail" : ''));
+                if ($reason !== '') $lastHoldReason[$k] = $reason;
+                $steps[$k]['remarks'][] = trim(($party ? "Hold by $party" : 'Hold') . ($detail ? ": $detail" : ''));
+            }
+            if (($prevStatus[$k] ?? '') !== $stt) {
+                // moving OUT of hold keeps the earlier hold reason so the log never loses it
+                $resolved = (($prevStatus[$k] ?? '') === 'Hold' && $stt !== 'Hold') ? ($lastHoldReason[$k] ?? '') : '';
+                $changes[] = ['date'=>$v['created_at'], 'step'=>$nm, 'from'=>$prevStatus[$k] ?? '', 'to'=>$stt, 'author'=>$author, 'pe'=>$pe, 'reason'=>$reason, 'resolved'=>$resolved];
+                $prevStatus[$k] = $stt;
+            }
         }
     }
 
