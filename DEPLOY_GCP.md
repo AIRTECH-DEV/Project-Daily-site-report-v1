@@ -362,6 +362,11 @@ Add:
 # Weekly PE report — runs every 30 min, self-gates to fire once a week on the
 # send_day/send_time set in admin Settings -> Weekly PE Report (default Sat 18:30).
 */30 * * * * /usr/bin/php /var/www/html/pms/scripts/pe_weekly_send.php >> /var/www/html/pms/storage/logs/pe_weekly_cron.log 2>&1
+
+# PMS-sheet scan — project start / actual end / target end / sales person, plus the
+# per-step date grid. Read-only over the sheets; nightly is plenty (a Marking start
+# date is typed by hand). 20:00 UTC = 01:30 IST — the VM stays on UTC by design.
+0 20 * * * /usr/bin/php /var/www/html/pms/scripts/perf_sync.php >> /var/www/html/pms/storage/logs/perf_sync_cron.log 2>&1
 ```
 Check: `sudo crontab -u www-data -l`.
 

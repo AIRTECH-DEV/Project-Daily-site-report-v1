@@ -65,6 +65,10 @@ $visits = array_values(array_filter($all, fn($r) => projectKey($r) === $key));
 $subIds = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $visits)));
 $inClause = $subIds ? implode(',', array_map('intval', $subIds)) : '0';
 $isDev = ($pr['client_type'] ?? '') === 'Developer';
+// Sales person comes off the GENERAL PMS tabs (Perf sheet sync fills it), so it
+// exists for General projects only — developer flats have no such column.
+// ?? '' : the column is added by Perf::ensureSchema, which may not have run yet.
+$salesPerson = $isDev ? '' : trim((string)($pr['sales_person'] ?? ''));
 
 // ---- full-step aggregation across visits ----
 $canon = canonicalSteps((string)$pr['site_type']);
@@ -215,7 +219,7 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
     <div class="dh-ic"><i class="bi bi-buildings"></i></div>
     <div class="dh-titles">
       <h2><?= Admin::e($pr['label']) ?> <?= Layout::lifecyclePill((string)$pr['lifecycle']) ?><?= $pr['hold_owner'] ? ' ' . '<span class="pill pill-' . partyTone((string)$pr['hold_owner']) . '">stuck on ' . Admin::e($pr['hold_owner']) . '</span>' : '' ?></h2>
-      <div class="dh-sub"><?= Admin::e($pr['site_type']) ?> · <?= Admin::e($pr['client_type']) ?><?= $isDev ? ' · flat tracked on its own' : '' ?> · <?= (int)$pr['report_count'] ?> visit(s) · <span class="mono"><?= Admin::e($pr['order_id']) ?: '—' ?></span></div>
+      <div class="dh-sub"><?= Admin::e($pr['site_type']) ?> · <?= Admin::e($pr['client_type']) ?><?= $isDev ? ' · flat tracked on its own' : '' ?> · <?= (int)$pr['report_count'] ?> visit(s) · <span class="mono"><?= Admin::e($pr['order_id']) ?: '—' ?></span><?php if ($salesPerson !== ''): ?> · <span class="pill pill-type" title="Sales person (PMS sheet)"><i class="bi bi-person-badge"></i> <?= Admin::e($salesPerson) ?></span><?php endif; ?></div>
     </div>
     <div class="dh-actions">
       <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submissions.php?q=<?= urlencode($isDev ? ($pr['flat_no'] ?: $pr['developer']) : ($pr['project_name'] ?: $pr['developer'])) ?>"><i class="bi bi-card-list"></i> Reports</a>

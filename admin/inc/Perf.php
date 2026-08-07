@@ -72,6 +72,7 @@ class Perf
                 'actual_end_date'  => 'DATE DEFAULT NULL',
                 'sheet_target_end' => 'DATE DEFAULT NULL',
                 'sheet_synced_at'  => 'DATETIME DEFAULT NULL',
+                'sales_person'     => 'VARCHAR(190) DEFAULT NULL',
             ];
             $have = [];
             $st = $db->query(
@@ -145,15 +146,27 @@ class Perf
 
             // Known project keys, plus a loosened key so a stray space or case
             // difference between sheet and report still lines up.
-            $known = [];
-            foreach ($db->query("SELECT project_key FROM projects") as $r) {
+            //
+            // ORDER ID is the third lookup, and the one General projects need:
+            // helpers.php projectKey() keys a general project "O|<order id>",
+            // while the sheet scan can only key its row "G|<project name>" — so
+            // name keys alone matched no general project at all.
+            $known = []; $byOrder = [];
+            foreach ($db->query("SELECT project_key, order_id FROM projects") as $r) {
                 $known[$r['project_key']] = $r['project_key'];
                 $known[self::looseKey($r['project_key'])] = $r['project_key'];
+                $oid = strtolower(trim((string)$r['order_id']));
+                if ($oid !== '') {
+                    $byOrder[$oid] = $r['project_key'];
+                }
             }
 
             $upProj = $db->prepare(
+                // sales_person: General tabs only. A blank keeps whatever is
+                // stored, so a developer flat (no such column) never wipes it.
                 "UPDATE projects
-                    SET start_date=?, start_source=?, actual_end_date=?, sheet_target_end=?, sheet_synced_at=NOW()
+                    SET start_date=?, start_source=?, actual_end_date=?, sheet_target_end=?,
+                        sales_person=COALESCE(NULLIF(?,''), sales_person), sheet_synced_at=NOW()
                   WHERE project_key=?"
             );
             $upStep = $db->prepare(
@@ -164,7 +177,8 @@ class Perf
             );
 
             foreach ($rows as $key => $row) {
-                $pkey = $known[$key] ?? ($known[self::looseKey($key)] ?? null);
+                $oid  = strtolower(trim((string)($row['order_id'] ?? '')));
+                $pkey = $known[$key] ?? ($known[self::looseKey($key)] ?? ($oid !== '' ? ($byOrder[$oid] ?? null) : null));
                 if ($pkey === null) {
                     continue;   // a sheet row nobody has reported on yet
                 }
@@ -174,7 +188,8 @@ class Perf
 
                 $upProj->execute([
                     $row['start_date'], $row['start_source'] ?: null,
-                    $row['end_date'], $row['target_end'], $pkey,
+                    $row['end_date'], $row['target_end'],
+                    substr(trim((string)($row['sales_person'] ?? '')), 0, 190), $pkey,
                 ]);
                 foreach ($row['steps'] as $s) {
                     if (!$s['start'] && !$s['end'] && trim((string)$s['status']) === '') {

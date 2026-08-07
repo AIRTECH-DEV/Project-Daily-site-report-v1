@@ -102,6 +102,10 @@
     .step-check-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .step-check.locked { cursor:default; background:#f5f7f5; border-color:#dfe6df; color:#5c6b5c; }
     .step-check.locked input { cursor:default; }
+    /* Greyed out because Other Activity and the real steps lock each other out. */
+    .step-check.blocked { cursor:not-allowed; background:#fafafa; border-color:#ececec; color:#b4b4b4; }
+    .step-check.blocked input { cursor:not-allowed; }
+    .step-check.blocked:hover { border-color:#ececec; }
     .step-done-tag {
       margin-left:auto; flex:0 0 auto; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
       color:#2f7d32; background:#e7f4e8; border:1px solid #cfe6d0; border-radius:4px; padding:1px 5px;

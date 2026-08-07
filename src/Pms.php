@@ -311,16 +311,17 @@ class Pms
     private const NON_STEP_COLS = [
         'timestamp', 'orderid', 'order id', 'project exective by', 'project executive by',
         'project name', 'tentitive project end date', 'tentative project end date',
-        'remarks', 'work done by', 'email address', 'email', 'shipping address',
+        'remarks', 'other activity remarks', 'work done by', 'email address', 'email',
+        'shipping address',
         'total order value', 'sales person', 'order type', 'floor', 'flat no',
     ];
 
     /**
      * Dismantle ("Dismental") pseudo-steps. Each shares its base step's column
-     * GROUP and is stamped into that group's "Dismental Status" sub-column (not
-     * the normal "Status"). Base + dismental are MUTUALLY EXCLUSIVE in the form
-     * (only one of a pair ever reaches Done), so the group's shared Start/End date
-     * columns never collide.
+     * GROUP but has its OWN sub-columns inside it: "Dismental Status" for the status
+     * and "Dismental End Date" for the Done date. Base + dismental are INDEPENDENT —
+     * both can reach Done on the same row — so the group's shared "End Date" belongs
+     * to the base step only and the dismantle date never touches it.
      *   display step name (compact) => base group header text.
      */
     private const DISMENTAL_MAP = [
@@ -754,8 +755,11 @@ class Pms
                 continue;
             }
 
-            // Dismantle steps -> the group's "Dismental Status" sub-col. The Done date
-            // reuses the group's shared "End Date" (base + dismental never both hit Done).
+            // Dismantle steps -> the group's "Dismental Status" sub-col, and its Done date
+            // -> the group's OWN "Dismental End Date". Base and dismantle are independent
+            // now (both can be Done), so the shared "End Date" belongs to the base step
+            // alone and is never used as a fallback here — writing there would either
+            // clobber the base step's date or silently steal its empty cell.
             $dgroup = $this->dismentalGroupFor($step);
             if ($dgroup !== '') {
                 $dcol = $this->findDismentalStatusCol($info, $dgroup);
@@ -764,7 +768,7 @@ class Pms
                 }
                 $this->sheets->setCell($ssId, $title, $row, $dcol, ($stat === 'Hold') ? ($e['holdReason'] ?: 'Hold') : $stat);
                 if ($stat === 'Done') {
-                    $endCol = $this->findStepSubCol($info, $dgroup, 'End Date');
+                    $endCol = $this->findDismentalDateCol($info, $dgroup);
                     if ($endCol > 0) {
                         $cur = $this->cell($rows, $row, $endCol);
                         if ($cur === '' || $cur === null) {
@@ -828,14 +832,18 @@ class Pms
                     continue;
                 }
                 // A split step plans against its own Start Date when the tab has one
-                // (else the group's); a dismantle step always uses its base group's.
+                // (else the group's). A dismantle step plans against its OWN
+                // "Dismental Start Date" and nothing else — the group's shared Start
+                // Date belongs to the base step, which runs independently now, so a
+                // planned dismantle must never stamp it. Tabs without that column
+                // simply record no start date for the dismantle.
                 $tSplit = $this->splitStatusFor($tStep);
                 if ($tSplit) {
                     $startCol = $this->findHalfDateCol($info, $tSplit[0], $tSplit[2], 'start');
                 } else {
                     $tGroup = $this->dismentalGroupFor($tStep);
                     $startCol = $tGroup !== ''
-                        ? $this->findStepSubCol($info, $tGroup, 'Start Date')
+                        ? $this->findDismentalDateCol($info, $tGroup, 'start')
                         : $this->findStepSubCol($info, $tStep, 'Start Date');
                 }
                 if ($startCol < 1) {
@@ -866,6 +874,34 @@ class Pms
             $remCol = $this->findNamedCol($info, 'Remarks');
             if ($remCol > 0) {
                 $this->sheets->setCell($ssId, $title, $row, $remCol, '');
+            }
+        }
+
+        // Other Activity: work with no project step behind it. The Activity Notes text
+        // lands in the sheet's "Other Activity Remarks" column, APPENDED with the date
+        // so repeat visits build a log instead of overwriting each other. It never
+        // touches a step column — the payload carries no step status for it at all.
+        //
+        // A tab that has not got the column yet falls back to the normal Remarks cell,
+        // but ONLY when the visit reported no steps: the block above rewrites Remarks
+        // from this visit's holds, so on a report carrying both the two would fight
+        // over one cell. There the note is dropped rather than corrupt the hold remark
+        // — add the "Other Activity Remarks" column and it is kept properly.
+        if (($p['otherActivity'] ?? '') === 'Yes') {
+            $note = trim((string)($p['otherActivityRemarks'] ?? ''));
+            if ($note !== '') {
+                $line = $this->today() . ': ' . $note;
+                $oaCol = $this->findNamedCol($info, 'Other Activity Remarks');
+                if ($oaCol < 1 && !$entries) {
+                    $oaCol = $this->findNamedCol($info, 'Remarks');
+                }
+                if ($oaCol > 0) {
+                    $prev = trim((string)$this->cell($rows, $row, $oaCol));
+                    // Same note re-sent (retry / re-submit) must not double up.
+                    if ($prev === '' || strpos($prev, $line) === false) {
+                        $this->sheets->setCell($ssId, $title, $row, $oaCol, $prev === '' ? $line : ($prev . "\n" . $line));
+                    }
+                }
             }
         }
 
@@ -1046,6 +1082,45 @@ class Pms
         for ($i = 0; $i < $info['lastCol']; $i++) {
             if (Sheets::compactKey($info['groupVals'][$i] ?? '') === $g
                 && Sheets::compactKey($info['subVals'][$i] ?? '') === $s) {
+                return $i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The dismantle step's OWN date column inside its base group — "Dismental End Date"
+     * (the Done date) or "Dismental Start Date" (the planned date), separate from the
+     * base step's shared Start/End Date. Matched by TOKENS, never exact wording, so
+     * "Dismental End Date" / "Dismantle End date" / "End Date Dismental" all resolve.
+     *
+     * Returns -1 when the tab has no such column; the caller then stamps the status
+     * only and leaves the dates alone. It must NOT fall back to the group's shared
+     * date columns — those belong to the base step, which can now be Done in the very
+     * same row, so borrowing them would either clobber the base's date or quietly eat
+     * the empty cell the base step is still waiting for.
+     *
+     * @param string $which 'end' or 'start'
+     */
+    private function findDismentalDateCol(array $info, string $groupName, string $which = 'end'): int
+    {
+        $g = Sheets::compactKey($groupName);
+        if ($g === '') {
+            return -1;
+        }
+        for ($i = 0; $i < $info['lastCol']; $i++) {
+            if (Sheets::compactKey($info['groupVals'][$i]) !== $g) {
+                continue;
+            }
+            $s = Sheets::normalizeKey($info['subVals'][$i] ?? '');
+            if (strpos($s, 'dismental') === false || strpos($s, 'status') !== false) {
+                continue;
+            }
+            $isStart = strpos($s, 'start') !== false;
+            // A bare "Dismental Date" counts as the END date — that is the Done stamp
+            // the sheets have always carried; only an explicit "start" is a start date.
+            $hit = $which === 'start' ? $isStart : (!$isStart && (strpos($s, 'end') !== false || strpos($s, 'date') !== false));
+            if ($hit) {
                 return $i + 1;
             }
         }

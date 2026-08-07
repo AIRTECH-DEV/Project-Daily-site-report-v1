@@ -151,66 +151,74 @@ class SubmitService
         // stepStart() is INSIDE the try on purpose: it writes to process_log, and a
         // schema that doesn't know this step name must degrade to a warning, never
         // abort runCore() before the response-sheet write below.
+        // Only a visit that actually reached Pre-Commissioning (or already carries a
+        // report) belongs in the pipeline at all. Without this the step logged a
+        // "skipped — no report required" row on EVERY submit, which reads like a
+        // missing deliverable on reports that never had one to give.
         $log = 0;
         $preCount = 0;
-        try {
-            $log = $tracker->stepStart('precommissioning_report', $projectName);
-            $preDir = __DIR__ . '/../storage/precommissioning';
-            if (!is_dir($preDir)) { @mkdir($preDir, 0775, true); }
-            foreach ($reports as $ri => $rep) {
-                $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
-                $artifacts = [];
-                $file = $rep['preCommissioningFile'] ?? null;
-                if (is_array($file) && !empty($file['base64'])) {
-                    $bytes = base64_decode((string)$file['base64'], true);
-                    if ($bytes === false) { throw new RuntimeException('Invalid pre-commissioning workbook.'); }
-                    $ext = strtolower(pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION));
-                    if (!in_array($ext, ['xls', 'xlsx'], true)) { $ext = 'xls'; }
-                    $name = $tag . 'Pre_Commissioning_Report.' . $ext;
-                    $mime = $ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
-                    $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
-                    file_put_contents($path, $bytes);
-                    $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => $mime];
-                } elseif (!empty($rep['preCommissioningReport']) && is_array($rep['preCommissioningReport'])) {
-                    $baseReport = $rep['preCommissioningReport'];
-                    $machineReports = !empty($baseReport['machineReports']) && is_array($baseReport['machineReports'])
-                        ? array_values(array_filter($baseReport['machineReports'], 'is_array'))
-                        : [$baseReport];
-                    $pdf = new PreCommissioningPdf(__DIR__ . '/../assets');
-                    foreach ($machineReports as $mi => $machineReport) {
-                        $payload = array_merge($baseReport, $machineReport);
-                        unset($payload['machineReports']);
-                        $system = $this->safeTag($machineReport['system'] ?? $machineReport['gasSystem'] ?? 'Machine');
-                        $machineTag = count($machineReports) > 1 ? ('Machine' . ($mi + 1) . '_' . $system . '_') : '';
-                        $name = $tag . $machineTag . 'Pre_Commissioning_Report.pdf';
+        if ($this->preCommissioningExpected($reports)) {
+            try {
+                $log = $tracker->stepStart('precommissioning_report', $projectName);
+                $preDir = __DIR__ . '/../storage/precommissioning';
+                if (!is_dir($preDir)) { @mkdir($preDir, 0775, true); }
+                foreach ($reports as $ri => $rep) {
+                    $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
+                    $artifacts = [];
+                    $file = $rep['preCommissioningFile'] ?? null;
+                    if (is_array($file) && !empty($file['base64'])) {
+                        $bytes = base64_decode((string)$file['base64'], true);
+                        if ($bytes === false) { throw new RuntimeException('Invalid pre-commissioning workbook.'); }
+                        $ext = strtolower(pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION));
+                        if (!in_array($ext, ['xls', 'xlsx'], true)) { $ext = 'xls'; }
+                        $name = $tag . 'Pre_Commissioning_Report.' . $ext;
+                        $mime = $ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
                         $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
-                        $pdf->build($payload, $path);
-                        $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => 'application/pdf'];
+                        file_put_contents($path, $bytes);
+                        $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => $mime];
+                    } elseif (!empty($rep['preCommissioningReport']) && is_array($rep['preCommissioningReport'])) {
+                        $baseReport = $rep['preCommissioningReport'];
+                        $machineReports = !empty($baseReport['machineReports']) && is_array($baseReport['machineReports'])
+                            ? array_values(array_filter($baseReport['machineReports'], 'is_array'))
+                            : [$baseReport];
+                        $pdf = new PreCommissioningPdf(__DIR__ . '/../assets');
+                        foreach ($machineReports as $mi => $machineReport) {
+                            $payload = array_merge($baseReport, $machineReport);
+                            unset($payload['machineReports']);
+                            $system = $this->safeTag($machineReport['system'] ?? $machineReport['gasSystem'] ?? 'Machine');
+                            $machineTag = count($machineReports) > 1 ? ('Machine' . ($mi + 1) . '_' . $system . '_') : '';
+                            $name = $tag . $machineTag . 'Pre_Commissioning_Report.pdf';
+                            $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
+                            $pdf->build($payload, $path);
+                            $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => 'application/pdf'];
+                        }
+                    }
+                    foreach ($artifacts as $artifact) {
+                        $path = $artifact['path']; $name = $artifact['name']; $mime = $artifact['mime'];
+                        if (!is_file($path)) { continue; }
+                        $attachment = ['file_name' => $name, 'mime_type' => $mime, 'bytes' => filesize($path)];
+                        if ($driveReady && $folderId) {
+                            $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
+                            $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
+                            // Drive is the store, exactly like the report PDF: the local copy
+                            // was only the bridge to the upload, so drop it now instead of
+                            // letting storage/precommissioning grow forever.
+                            @unlink($path);
+                        } else {
+                            $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
+                        }
+                        $tracker->addAttachment('pre_commissioning_report', $attachment);
+                        $preCount++;
                     }
                 }
-                foreach ($artifacts as $artifact) {
-                    $path = $artifact['path']; $name = $artifact['name']; $mime = $artifact['mime'];
-                    if (!is_file($path)) { continue; }
-                    $attachment = ['file_name' => $name, 'mime_type' => $mime, 'bytes' => filesize($path)];
-                    if ($driveReady && $folderId) {
-                        $up = $this->drive->uploadBytes($folderId, $name, $mime, file_get_contents($path));
-                        $attachment['drive_file_id'] = $up['id']; $attachment['url'] = $up['url'];
-                        // Drive is the store, exactly like the report PDF: the local copy
-                        // was only the bridge to the upload, so drop it now instead of
-                        // letting storage/precommissioning grow forever.
-                        @unlink($path);
-                    } else {
-                        $attachment['url'] = rtrim((string)($meta['base_url'] ?? ''), '/') . '/storage/precommissioning/' . rawurlencode(basename($path));
-                    }
-                    $tracker->addAttachment('pre_commissioning_report', $attachment);
-                    $preCount++;
-                }
+                if ($preCount) $tracker->stepDone($log, $preCount . ' pre-commissioning report(s) attached');
+                // Reached only when Pre-Commissioning IS done but nothing came through —
+                // a real gap worth showing, unlike the old blanket "not required" row.
+                else $tracker->stepSkipped($log, 'Pre-Commissioning marked Done but no report was attached.');
+            } catch (Throwable $e) {
+                if ($log) { $tracker->stepFailed($log, $e->getMessage()); }
+                $warnings[] = 'Pre-commissioning report failed: ' . $e->getMessage();
             }
-            if ($preCount) $tracker->stepDone($log, $preCount . ' pre-commissioning report(s) attached');
-            else $tracker->stepSkipped($log, 'No pre-commissioning report required for this visit.');
-        } catch (Throwable $e) {
-            if ($log) { $tracker->stepFailed($log, $e->getMessage()); }
-            $warnings[] = 'Pre-commissioning report failed: ' . $e->getMessage();
         }
 
         // 2) Response rows (one per flat)
@@ -305,6 +313,22 @@ class SubmitService
         $core = $job['core'] ?? [];
         $tracker = new Tracker($this->app->db());
         $tracker->bind((int)$job['submission_id']);
+
+        // Nothing but Other Activity in this visit: the PDF is built and filed as usual,
+        // but the client hears nothing — there is no project progress to report. Both
+        // steps are still logged (as skipped) so the pipeline shows the report was
+        // deliberately held, never that a send silently went missing.
+        if ($this->holdFromClient($job['payload'] ?? [])) {
+            $reason = 'Other Activity visit — report kept in-house, not sent to the client.';
+            $tracker->stepSkipped($tracker->stepStart('email'), $reason);
+            $tracker->stepSkipped($tracker->stepStart('whatsapp'), $reason);
+            $localPdf = $core['pdf_path'] ?? '';
+            if ($localPdf !== '' && !empty($core['pdf_drive_id']) && is_file($localPdf)) {
+                @unlink($localPdf);
+            }
+            $tracker->updateSubmission(['overall_status' => 'done']);
+            return [];
+        }
 
         $tab = $core['tab'] ?? '';
         $row = (int)($core['row'] ?? 0);
@@ -403,8 +427,18 @@ class SubmitService
     /** Consolidated multi-flat PDF: one section per flat, reusing each flat's response row. */
     private function buildMultiPdf(string $projectName, string $publicId, array $reports, array $rowsInfo): string
     {
+        // A flat that recorded ONLY other activity did no project work, so it is left OUT
+        // of the client's PDF — the visit still goes out for the flats that did progress.
+        // A flat with both keeps its place: it has real steps to show. Nothing is lost
+        // either way — every flat keeps its sheet row, its Other Activity Remarks and its
+        // full entry in the admin panel. If EVERY flat is other-activity-only there is
+        // nothing to drop to, so the PDF keeps them all — and runNotifications() holds
+        // that report back from the client entirely.
+        $forClient = array_filter($reports, fn($r) => !$this->isOtherActivityOnly($r));
+        $pdfReports = $forClient ?: $reports;
+
         $flatsCtx = [];
-        foreach ($reports as $ri => $rep) {
+        foreach ($pdfReports as $ri => $rep) {
             $photos = [];
             foreach (($rep['photos'] ?? []) as $f) {
                 $bytes = $this->decode($f);
@@ -453,6 +487,80 @@ class SubmitService
     {
         $t = preg_replace('/[^A-Za-z0-9]+/', '', (string)$v);
         return $t !== '' ? $t : 'x';
+    }
+
+    /**
+     * True when this visit should be tracked for a pre-commissioning report: the
+     * Pre-Commissioning step was marked Done, or a report already came with the
+     * payload. Every other visit skips the step entirely — no pipeline row at all,
+     * because "no report" is the normal state, not a missing deliverable.
+     */
+    private function preCommissioningExpected(array $reports): bool
+    {
+        foreach ($reports as $rep) {
+            if (!is_array($rep)) { continue; }
+            if (!empty($rep['preCommissioningFile']) || !empty($rep['preCommissioningReport'])) {
+                return true;
+            }
+            foreach (($rep['stepStatuses'] ?? []) as $e) {
+                if (!is_array($e)) { continue; }
+                if (Sheets::compactKey($e['step'] ?? '') === Sheets::compactKey('Pre-Commissining')
+                    && trim((string)($e['status'] ?? '')) === 'Done') {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * One report (a General visit, or one flat of a developer visit) that recorded an
+     * Other Activity note and NOTHING else. A report that also carries real step
+     * progress is a normal report — it goes to the client with the note riding along.
+     * Only "other activity only" has nothing in it for the client to see.
+     */
+    private function isOtherActivityOnly(array $rep): bool
+    {
+        if (($rep['otherActivity'] ?? '') !== 'Yes') {
+            return false;
+        }
+        foreach (($rep['stepStatuses'] ?? []) as $e) {
+            if (is_array($e)
+                && trim((string)($e['step'] ?? '')) !== ''
+                && trim((string)($e['status'] ?? '')) !== '') {
+                return false;                       // real progress -> a normal report
+            }
+        }
+        return true;
+    }
+
+    /** The individual reports in a visit: one per flat for a developer visit, else just the one. */
+    private function reportsOf(array $p): array
+    {
+        $flats = (!empty($p['flats']) && is_array($p['flats']))
+            ? array_values(array_filter($p['flats'], 'is_array'))
+            : [];
+        return $flats ?: [$p];
+    }
+
+    /**
+     * True when NOTHING in this visit may go to the client — i.e. every report in it
+     * recorded other activity and no project step at all.
+     *
+     * Any real progress anywhere sends the visit. A developer visit mixing the two
+     * still goes out: the other-activity-only flats are dropped from the client PDF
+     * (see buildMultiPdf) and the rest is delivered normally, so one idle flat can
+     * never bury real progress on the others. Every flat, dropped or not, is still
+     * written to the sheets and kept in full in the admin panel.
+     */
+    private function holdFromClient(array $p): bool
+    {
+        foreach ($this->reportsOf($p) as $rep) {
+            if (!$this->isOtherActivityOnly($rep)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
