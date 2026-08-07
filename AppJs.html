@@ -302,15 +302,24 @@
       return !!answers.developer && !!answers.building && String(answers.flatNo||'').trim() !== '';
     }
 
+    // General projects are valid only after an item was explicitly selected from
+    // the server-provided dropdown. Free-typed text must never pass validation.
+    function isGeneralProjectValid() {
+      if (answers.clientType === 'Developer') return true;
+      const selected = String(answers.project || '').trim();
+      return answers.projectSelected === true && projectList.some(name => name === selected);
+    }
+
     function isStatusPathValid() {
       // At least one step must be assigned a status (Done/Pending/Hold) this visit.
       if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) return false;
       if (String(answers.tentativeEndDate||'').trim() === '') return false;
+      if (hasPreCommissioningDone() && !answers.preCommissioningReport && !answers.preCommissioningFile) return false;
       return true;
     }
 
     function isStep1Valid() {
-      return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && teamsValid() && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
+      return !!answers.siteType && !!answers.clientType && isDeveloperPathValid() && isGeneralProjectValid() && isStatusPathValid() && String(answers.project||'').trim() !== '' && teamsValid() && !!answers.engineer && String(answers.activity||'').trim() !== '' && Array.isArray(answers.photo) && answers.photo.length > 0 && !!answers.amendment;
     }
     function isStep2Valid() {
       const amendOk = answers.amendment === 'Yes' ? String(answers.amendmentWhy || '').trim() !== '' : true;
@@ -340,12 +349,13 @@
           if (!answers.developer) m.push('Developer');
           if (!answers.building) m.push('Building');
           if (String(answers.flatNo || '').trim() === '') m.push('Flat No (select from list)');
-        } else if (String(answers.project || '').trim() === '') {
-          m.push('Project / Client');
+        } else if (!isGeneralProjectValid()) {
+          m.push('Project / Client — select a name from the dropdown');
         }
         if (!answers.engineer) m.push('Assigned Engineer');
         if (!Array.isArray(answers.stepStatuses) || answers.stepStatuses.length === 0) m.push('Current Status — tick steps, pick a status, hit Apply');
         if (String(answers.tentativeEndDate || '').trim() === '') m.push('Tentative Project End Date');
+        if (hasPreCommissioningDone() && !answers.preCommissioningReport && !answers.preCommissioningFile) m.push('Pre-Commissioning Report — create report or upload Excel');
         const teamsList = Array.isArray(answers.teams) ? answers.teams : [];
         if (teamsList.length < 1) m.push('Team on Site — add at least one team');
         // If every work option is already locked (done in the sheet), the dropdown is empty —
@@ -663,6 +673,7 @@
 
                   <button type="button" class="btn primary apply-btn" onclick="applyStepStatus()" ${canApplyStatus() ? '' : 'disabled'}>Apply status to ticked steps</button>
                 </div>`}
+                ${hasPreCommissioningDone() ? renderPreCommissioningBox() : ''}
               </div>
 
               <div class="section">
@@ -905,6 +916,7 @@
               ${reviewRow('Drawing Photo', fileArr(answers.drawingPhoto).map(f => f.name).join(', ') || '-')}
               ${reviewRow('Measurement Created', answers.measurement || '-')}
               ${reviewRow('Measurement File', fileArr(answers.measurementFile).map(f => f.name).join(', ') || '-')}
+              ${hasPreCommissioningDone() ? reviewRow('Pre-Commissioning Report', answers.preCommissioningFile ? answers.preCommissioningFile.name : (answers.preCommissioningReport ? 'Created in app' : '-')) : ''}
             </div>
             <div class="review-card">
               <h4>Ready to Submit</h4>
@@ -948,7 +960,7 @@
     function bindProjectSearch() {
       const input = document.getElementById('field-project');
       if (!input) return;
-      input.addEventListener('input', function(e) { answers.project = e.target.value; onProjectSearch(e); updatePrimaryButton(); });
+      input.addEventListener('input', function(e) { answers.project = e.target.value; answers.projectSelected = false; onProjectSearch(e); updatePrimaryButton(); });
       input.addEventListener('focus', function(e) { onProjectSearch(e); });
     }
 
@@ -1035,6 +1047,7 @@
 
     function selectProject(name) {
       answers.project = name;
+      answers.projectSelected = true;
       const input = document.getElementById('field-project');
       if (input) input.value = name;
       const resultsEl = document.getElementById('searchResults');
@@ -1049,6 +1062,7 @@
     function selectSiteType(value) {
       answers.siteType = value;
       answers.project = '';
+      answers.projectSelected = false;
       answers.currentStatus = '';
       answers.doneSteps = [];
       resetProgressState();
@@ -1063,6 +1077,7 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = '';
+      answers.projectSelected = false;
       answers.doneSteps = [];
       answers.flats = [];                 // fresh flat set for the developer path
       answers.activeFlat = 0;
@@ -1075,6 +1090,7 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = '';
+      answers.projectSelected = false;
       answers.doneSteps = [];
       resetProgressState();
       renderCurrentPage();
@@ -1084,6 +1100,7 @@
       answers.floor = '';
       answers.flatNo = '';
       answers.project = value;
+      answers.projectSelected = false;
       answers.doneSteps = [];
       resetProgressState();
       loadFlatList(answers.developer, value);   // re-renders
@@ -1126,6 +1143,7 @@
     function applyStepStatus() {
       if (!canApplyStatus()) return;
       const st = answers.status;
+      const openPreCommissioning = st === 'Done' && (answers.doneSteps || []).some(step => compact(step) === compact('Pre-Commissining'));
       const hr = st === 'Hold' ? (answers.holdReason || '') : '';
       const hd = st === 'Hold' ? (answers.holdReasonDetail || '') : '';
       answers.stepStatuses = answers.stepStatuses || [];
@@ -1140,10 +1158,62 @@
       answers.holdReason = '';
       answers.holdReasonDetail = '';
       renderCurrentPage();
+      if (openPreCommissioning) openPreCommissioningReport();
+    }
+
+    function hasPreCommissioningDone() {
+      return (answers.stepStatuses || []).some(e => compact(e.step) === compact('Pre-Commissining') && e.status === 'Done');
+    }
+    function preCommissioningContext() {
+      const place = answers.clientType === 'Developer'
+        ? [answers.developer, answers.building, answers.flatNo ? 'Flat ' + answers.flatNo : ''].filter(Boolean).join(', ')
+        : (answers.project || '');
+      return { customer:answers.clientType === 'Developer' ? (answers.developer || '') : (answers.project || ''), address:place, project:place, system:answers.siteType || '', engineer:answers.engineer || '', flatIndex:isMultiFlat() ? answers.activeFlat : -1 };
+    }
+    function openPreCommissioningReport() {
+      if (isMultiFlat()) saveActiveFlat();
+      try { localStorage.setItem('vakhariaSiteVisitDraft', JSON.stringify(answers)); } catch (e) {}
+      const q = new URLSearchParams(preCommissioningContext()).toString();
+      window.location.href = 'precommissioning-report.php?' + q;
+    }
+    function renderPreCommissioningBox() {
+      const generated = answers.preCommissioningReport;
+      const uploaded = answers.preCommissioningFile;
+      const ready = !!(generated || uploaded);
+      const machineCount = generated ? (Array.isArray(generated.machineReports) && generated.machineReports.length ? generated.machineReports.length : 1) : 0;
+      const label = generated ? (machineCount + ' machine report' + (machineCount === 1 ? '' : 's') + ' created') : uploaded ? ('Excel uploaded: ' + uploaded.name) : '';
+      return `<div class="precomm-box ${ready ? 'ready' : ''}">
+        <div class="precomm-title">Pre-Commissioning Report *</div>
+        <div class="precomm-note">Create commissioning, pressure-test and refrigerant details now, or upload completed Excel workbook.</div>
+        <div class="precomm-actions">
+          <button type="button" class="btn ${ready ? 'ghost' : 'primary'}" onclick="openPreCommissioningReport()">${generated ? 'Edit / View Report' : 'Create Report'}</button>
+          <button type="button" class="btn ghost" onclick="document.getElementById('preCommissioningInput').click()">Upload Excel</button>
+          <input type="file" id="preCommissioningInput" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="handlePreCommissioningUpload(this.files)">
+          ${ready ? `<span class="precomm-status">✓ ${escapeHtml(label)}</span><button type="button" class="step-remove" title="Remove report" onclick="removePreCommissioningReport()">&times;</button>` : ''}
+        </div>
+      </div>`;
+    }
+    async function handlePreCommissioningUpload(files) {
+      const f = files && files[0];
+      if (!f) return;
+      if (f.size > 10 * 1024 * 1024) { alert('Excel file must be 10 MB or smaller.'); return; }
+      if (!/\.(xls|xlsx)$/i.test(f.name)) { alert('Please select an Excel .xls or .xlsx file.'); return; }
+      answers.preCommissioningFile = { name:f.name, mimeType:f.type || 'application/vnd.ms-excel', base64:await fileToBase64(f) };
+      answers.preCommissioningReport = null;
+      renderCurrentPage();
+    }
+    function removePreCommissioningReport() {
+      answers.preCommissioningFile = null;
+      answers.preCommissioningReport = null;
+      renderCurrentPage();
     }
     function removeStepStatus(step) {
       const key = compact(step);
       answers.stepStatuses = (answers.stepStatuses || []).filter(e => compact(e.step) !== key);
+      if (key === compact('Pre-Commissining')) {
+        answers.preCommissioningReport = null;
+        answers.preCommissioningFile = null;
+      }
       renderCurrentPage();
     }
 
@@ -1440,14 +1510,14 @@
     // submits them together as payload.flats[]. General path stays single-report. Every
     // per-flat field lives top-level (so the whole existing form keeps working on the
     // "active" flat); switching flats just snapshots/restores these keys. =====
-    const PERFLAT_KEYS = ['flatNo','floor','teams','stepStatuses','doneSteps','status','holdReason','holdReasonDetail','lockedSteps','hiddenSteps','tentativeEndDate','tentativeLocked','activity','photo','tomorrowSteps','nextPlan','nextStepStartDate','amendment','amendmentWhy','drawingChange','drawingPhoto','measurement','measurementFile','generatedOrderId'];
+    const PERFLAT_KEYS = ['flatNo','floor','teams','stepStatuses','doneSteps','status','holdReason','holdReasonDetail','lockedSteps','hiddenSteps','tentativeEndDate','tentativeLocked','activity','photo','tomorrowSteps','nextPlan','nextStepStartDate','amendment','amendmentWhy','drawingChange','drawingPhoto','measurement','measurementFile','preCommissioningReport','preCommissioningFile','generatedOrderId'];
     function isMultiFlat() { return answers.clientType === 'Developer'; }
     function snapshotPerFlat() { const s = {}; PERFLAT_KEYS.forEach(k => { s[k] = answers[k]; }); return s; }
     function blankFlat() {
       return { flatNo:'', floor:'', teams:[], stepStatuses:[], doneSteps:[], status:'', holdReason:'', holdReasonDetail:'',
         lockedSteps:[], hiddenSteps:[], tentativeEndDate:'', tentativeLocked:false, activity:'', photo:[], tomorrowSteps:[],
         nextPlan:'', nextStepStartDate:'', amendment:'', amendmentWhy:'', drawingChange:'', drawingPhoto:[],
-        measurement:'', measurementFile:[], generatedOrderId:'' };
+        measurement:'', measurementFile:[], preCommissioningReport:null, preCommissioningFile:null, generatedOrderId:'' };
     }
     function ensureFlats() {
       if (!Array.isArray(answers.flats)) answers.flats = [];
@@ -1566,7 +1636,9 @@
         drawingChange: answers.drawingChange,
         drawingPhoto: fileArr(answers.drawingPhoto),
         measurement: answers.measurement,
-        measurementFile: fileArr(answers.measurementFile)
+        measurementFile: fileArr(answers.measurementFile),
+        preCommissioningReport: answers.preCommissioningReport || null,
+        preCommissioningFile: answers.preCommissioningFile || null
       };
     }
 
@@ -1668,6 +1740,30 @@
       if (typeof answers.activeFlat !== 'number' || answers.activeFlat < 0) answers.activeFlat = 0;
       syncTeams();
       document.addEventListener('click', onDocProjectClick, true);   // close search dropdowns on outside click
+      window.addEventListener('message', function (event) {
+        if (event.origin !== window.location.origin || !event.data) return;
+        const targetFlat = Number(event.data.flatIndex);
+        if (isMultiFlat() && Number.isInteger(targetFlat) && targetFlat >= 0 && targetFlat !== answers.activeFlat && answers.flats && answers.flats[targetFlat]) {
+          if (event.data.type === 'pms-precommissioning-report') {
+            answers.flats[targetFlat].preCommissioningReport = event.data.report || null;
+            answers.flats[targetFlat].preCommissioningFile = null;
+          } else if (event.data.type === 'pms-precommissioning-upload') {
+            answers.flats[targetFlat].preCommissioningFile = event.data.file || null;
+            answers.flats[targetFlat].preCommissioningReport = null;
+          } else return;
+          try { localStorage.setItem('vakhariaSiteVisitDraft', JSON.stringify(answers)); } catch (e) {}
+          return;
+        }
+        if (event.data.type === 'pms-precommissioning-report') {
+          answers.preCommissioningReport = event.data.report || null;
+          answers.preCommissioningFile = null;
+        } else if (event.data.type === 'pms-precommissioning-upload') {
+          answers.preCommissioningFile = event.data.file || null;
+          answers.preCommissioningReport = null;
+        } else return;
+        try { localStorage.setItem('vakhariaSiteVisitDraft', JSON.stringify(answers)); } catch (e) {}
+        renderCurrentPage();
+      });
       renderCurrentPage();
       if (answers.siteType) loadProjectList(answers.siteType);
       // Refresh "already done" steps for a restored draft that already has an identity.

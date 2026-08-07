@@ -13,5 +13,6 @@ config/overrides.json
 storage/tokens/
 storage/uploads/
 storage/reports/
+storage/precommissioning/
 storage/logs/
 storage/queue/

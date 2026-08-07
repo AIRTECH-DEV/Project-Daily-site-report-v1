@@ -184,7 +184,7 @@ class Tracker
     /** Replaces base64 file blobs with just {name,mimeType} in one report-shaped array. */
     private function stripReportFiles(array $r): array
     {
-        foreach (['photos', 'drawingPhoto', 'measurementFile'] as $k) {
+        foreach (['photos', 'drawingPhoto', 'measurementFile', 'preCommissioningFile'] as $k) {
             if (!isset($r[$k]) || !is_array($r[$k])) {
                 continue;
             }
