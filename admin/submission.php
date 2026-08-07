@@ -260,6 +260,10 @@ if ($isMulti):
             $nm = trim((string)($eSt['step'] ?? ''));
             if ($nm !== '') $fNr[] = $nm;
         }
+        // Other activity WITH steps rides along in the client PDF; other activity on its
+        // own has nothing for the client, so that flat is dropped from it.
+        $fOther = ($fpl['otherActivity'] ?? '') === 'Yes';
+        $fOtherOnly = $fOther && !$fSteps['done'] && !$fSteps['pending'] && !$fSteps['hold'] && !$fNr;
         $fno = trim((string)$fr['flat_no']);
         $ffl = trim((string)$fr['floor']);
         $stt = (string)$fr['status'];
@@ -275,6 +279,7 @@ if ($isMulti):
           <span class="flat-no"><?= Admin::e($fno !== '' ? $fno : 'Flat ' . ($fi + 1)) ?></span>
           <?php if ($ffl !== ''): ?><span class="flat-floor"><?= Admin::e($ffl) ?></span><?php endif; ?>
           <span class="spacer" style="margin-left:auto"></span>
+          <?php if ($fOther): ?><span class="pill pill-muted"><i class="bi bi-pin-angle"></i> Other Activity</span><?php endif; ?>
           <?= Layout::statusBadge($stt) ?>
         </div>
 
@@ -294,8 +299,13 @@ if ($isMulti):
           <?php foreach ($fSteps['pending'] as $stp): ?><span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> <?= Admin::e($stp) ?></span><?php endforeach; ?>
           <?php foreach ($fSteps['hold'] as $hs): ?><span class="pill pill-bad"><i class="bi bi-pause"></i> <?= Admin::e($hs['step']) ?><?= $hs['party'] ? ' — ' . Admin::e($hs['party']) : '' ?></span><?php endforeach; ?>
           <?php foreach ($fNr as $stp): ?><span class="pill pill-muted"><i class="bi bi-slash-circle"></i> <?= Admin::e($stp) ?></span><?php endforeach; ?>
-          <?php if (!$fSteps['done'] && !$fSteps['pending'] && !$fSteps['hold'] && !$fNr): ?><span class="info-val soft">No step updates in this visit.</span><?php endif; ?>
+          <?php if (!$fSteps['done'] && !$fSteps['pending'] && !$fSteps['hold'] && !$fNr): ?><span class="info-val soft"><?= $fOther ? 'No project step — other activity only.' : 'No step updates in this visit.' ?></span><?php endif; ?>
         </div>
+        <?php if ($fOtherOnly): ?>
+          <div class="flat-note"><i class="bi bi-envelope-slash"></i>Left out of the client PDF — kept here and in the sheet's Other Activity Remarks.</div>
+        <?php elseif ($fOther): ?>
+          <div class="flat-note"><i class="bi bi-pin-angle"></i>Other activity recorded alongside the steps — sent to the client with this report.</div>
+        <?php endif; ?>
 
         <?php foreach ($fSteps['hold'] as $hs): if ($hs['detail'] === '') continue; ?>
           <div class="flat-note"><i class="bi bi-chat-left-quote"></i><?= Admin::e($hs['step']) ?>: <?= Admin::e($hs['detail']) ?></div>

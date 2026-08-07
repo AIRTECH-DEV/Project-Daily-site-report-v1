@@ -36,6 +36,36 @@
     // suggestion — the PE types what they did in Activity Notes themselves.
     const OTHER_ACTIVITY = 'Other Activity';
     function isOtherActivity(step) { return compact(step) === compact(OTHER_ACTIVITY); }
+    // One report may carry BOTH real step progress and an Other Activity note. What it
+    // may not do is mix them in the SAME Apply click: the status picker applies one
+    // status to everything ticked, and Other Activity only ever means "Done". So tick
+    // Other Activity on its own, Apply, then tick your steps and Apply again — both end
+    // up in the one report. Delivery then follows the steps: a report holding any real
+    // step goes to the client as normal; only an Other-Activity-ONLY report is held back.
+    function otherActivityAssigned() { return (answers.stepStatuses || []).some(e => isOtherActivity(e.step)); }
+    function otherActivityTicked()   { return (answers.doneSteps || []).some(s => isOtherActivity(s)); }
+    function realStepsTicked()       { return (answers.doneSteps || []).some(s => !isOtherActivity(s)); }
+    // True when this checklist row is greyed out for THIS Apply click only.
+    function stepBlockedByOther(step) {
+      return isOtherActivity(step) ? realStepsTicked() : otherActivityTicked();
+    }
+    // Does this report carry real project progress (i.e. is it sent to the client)?
+    function hasRealProgress() { return realStepStatuses().length > 0; }
+    // Step statuses minus Other Activity — what actually counts as project progress and
+    // is the ONLY thing sent to the sheet / KPIs / report history.
+    function realStepStatuses() { return (answers.stepStatuses || []).filter(e => !isOtherActivity(e.step)); }
+    // Repairs a restored draft: Other Activity must never sit TICKED alongside real
+    // steps (one Apply click, one status, and Other Activity is Done-only), and a
+    // stale Pending/Hold left on a ticked Other Activity is corrected to Done. Steps
+    // already APPLIED are left alone — a report may hold both kinds side by side.
+    function sanitizeOtherActivity(a) {
+      if (!a || typeof a !== 'object') return;
+      const ticks = Array.isArray(a.doneSteps) ? a.doneSteps : [];
+      if (ticks.some(isOtherActivity)) {
+        if (ticks.some(s => !isOtherActivity(s))) a.doneSteps = ticks.filter(s => !isOtherActivity(s));
+        else if (a.status && a.status !== 'Done') a.status = 'Done';
+      }
+    }
     // Site type cards (label + emoji logo + note). VRV/Non-VRV keep their old look.
     const SITE_TYPES = [
       { value: 'VRV',          icon: '🏢', name: 'VRV Site',      note: 'Variable Refrigerant Volume' },
@@ -53,40 +83,11 @@
       'Indoor Installation','IDU Dismental','odu unit installation','ODU Dismental','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
     ];
 
-    // Dismantle ("Dismental") steps share their base step's End Date column, so only
-    // ONE of a base/dismental pair may reach "Done". Map keeps the two mutually
-    // exclusive in the Current Status checklist. display dismental name => base step.
-    const DISMENTAL_BASE = {
-      'Copper Piping Dismental': 'Copper Piping',
-      'Drain Dismental': 'Drain',
-      'Main Ducting Dismental': 'Main Ducting',
-      'IDU Dismental': 'Indoor Installation',
-      'ODU Dismental': 'odu unit installation'
-    };
-    // The paired step (base <-> its dismantle), or '' when the step isn't in a pair.
-    function pairedStep(step) {
-      const key = compact(step);
-      for (const d in DISMENTAL_BASE) {
-        if (compact(d) === key) return DISMENTAL_BASE[d];          // dismental -> base
-        if (compact(DISMENTAL_BASE[d]) === key) return d;          // base -> dismental
-      }
-      return '';
-    }
-    // A step is "engaged" the moment it's touched this visit: locked Done from the
-    // sheet, ticked, or assigned ANY status (Done / Pending / Hold / Not Required).
-    // Touching either side of a base/dismantle pair hides the other — only one at final.
-    function stepEngaged(step) {
-      const key = compact(step);
-      if ((answers.lockedSteps || []).some(s => compact(s) === key)) return true;
-      if ((answers.doneSteps || []).some(s => compact(s) === key)) return true;
-      return (answers.stepStatuses || []).some(e => compact(e.step) === key);
-    }
-    // True when a step's pair is engaged — the step must then be hidden (mutually
-    // exclusive: once you touch the base OR its dismantle, the other disappears).
-    function pairEngaged(step) {
-      const p = pairedStep(step);
-      return p ? stepEngaged(p) : false;
-    }
+    // Dismantle ("Dismental") steps are INDEPENDENT of their base step: the sheet now
+    // carries a "Dismental End Date" column of its own, so a group can hold both
+    // "Main Ducting = Done" and "Main Ducting Dismental = Done" with a date each.
+    // Nothing hides a dismantle row any more — a dismantle that will never happen is
+    // marked "Not Required", which the sheet remembers and the form hides next visit.
 
     let answers = {};
     let currentPage = 0;
@@ -473,7 +474,8 @@
       // offer ready-made lines for Done/Pending and client-side holds. "Other Activity" never
       // gets a suggestion — the PE writes that line themselves.
       const activitySuggestions = (answers.stepStatuses || []).filter(e => !isOtherActivity(e.step) && e.status !== 'Not Required' && !(e.status === 'Hold' && e.holdReason === 'Stuck BY VAPL'));
-      const otherActivityPicked = (answers.stepStatuses || []).some(e => isOtherActivity(e.step));
+      const otherActivityPicked = otherActivityAssigned();
+      const oaTicked = otherActivityTicked();
       return `
         <div class="panel">
           <div class="twocol">
@@ -646,10 +648,23 @@
                 ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
                 ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
                 <div class="step-check-list">
-                  ${statusSteps.filter(s => !hiddenSet.has(compact(s)) && !pairEngaged(s)).map(s => {
+                  ${statusSteps.filter(s => isOtherActivity(s) || !hiddenSet.has(compact(s))).map(s => {
                     const key = compact(s);
-                    const locked = lockedSet.has(key);
+                    // Other Activity is never locked and never hidden: it is not a project
+                    // step, it never reaches the sheet, and the same site may need it on
+                    // any number of visits. Real steps still obey both flags.
+                    const locked = !isOtherActivity(s) && lockedSet.has(key);
                     const assigned = assignedMap.get(key);
+                    // Greyed out for this Apply click only — Other Activity is applied on
+                    // its own because it can only ever be "Done". Apply it, then tick the
+                    // steps and Apply again; both live happily in the same report.
+                    const blocked = !assigned && !locked && stepBlockedByOther(s);
+                    if (blocked) {
+                      return `<label class="step-check blocked" title="${isOtherActivity(s) ? 'Apply the ticked steps first, then tick Other Activity — it is applied on its own.' : 'Apply Other Activity first, then tick your steps — both can stay in this report.'}">
+                        <input type="checkbox" disabled>
+                        <span class="step-check-name">${escapeHtml(s)}</span>
+                      </label>`;
+                    }
                     if (locked) {
                       return `<label class="step-check locked on">
                         <input type="checkbox" checked disabled>
@@ -673,12 +688,14 @@
                 </div>
 
                 <div class="status-apply">
+                  ${oaTicked ? `<div class="hint-note">Other Activity can only be marked <b>Done</b> — it records what was done, not project progress.</div>` : ''}
                   <select class="dropdown-field ${statusVal ? '' : 'placeholder'}" id="statusSelect" onchange="setStatusValue(this.value)">
                     <option value="">Select status for ticked steps</option>
                     <option value="Done" ${statusVal === 'Done' ? 'selected' : ''}>Done</option>
+                    ${oaTicked ? '' : `
                     <option value="Pending" ${statusVal === 'Pending' ? 'selected' : ''}>Pending</option>
                     <option value="Hold" ${statusVal === 'Hold' ? 'selected' : ''}>Hold</option>
-                    <option value="Not Required" ${statusVal === 'Not Required' ? 'selected' : ''}>Not Required</option>
+                    <option value="Not Required" ${statusVal === 'Not Required' ? 'selected' : ''}>Not Required</option>`}
                   </select>
 
                   ${statusVal === 'Hold' ? `
@@ -899,10 +916,35 @@
             }).join('')}
           </div>`;
       }
+      // Delivery follows the STEPS, not the note. A report holding any real step goes to
+      // the client as normal, Other Activity riding along as an extra remark. Only a
+      // report with nothing BUT Other Activity is held back — and for a developer visit
+      // that judgement is per flat: the idle flats drop out, the working ones still go.
+      const flatList = isMultiFlat() ? (answers.flats || []) : [];
+      const flatOf = f => f || {};
+      const hasOther = f => (flatOf(f).stepStatuses || []).some(e => isOtherActivity(e.step));
+      const otherOnly = f => hasOther(f) && !(flatOf(f).stepStatuses || []).some(e => !isOtherActivity(e.step));
+      const me = { stepStatuses: answers.stepStatuses || [], flatNo: answers.flatNo };
+      const noteFlats = (isMultiFlat() ? flatList : [me]).map((f, i) => ({ f, i })).filter(({ f }) => hasOther(f));
+      const heldFlats = noteFlats.filter(({ f }) => otherOnly(f));
+      const allHeld = heldFlats.length > 0 && heldFlats.length === (isMultiFlat() ? flatList.length : 1);
+      const label = ({ f, i }) => String(flatOf(f).flatNo || '').trim() || ('#' + (i + 1));
+      const otherNotice = noteFlats.length ? `<div class="review-card" style="grid-column:1 / -1;border-color:#f0c8ca;background:#fff8f8;">
+            <h4>Other Activity — ${allHeld ? 'report stays in-house' : (heldFlats.length ? 'one flat stays out of the client report' : 'goes out with your report')}</h4>
+            <div style="font-size:13px;color:#8a3a3e;line-height:1.6;">
+              ${allHeld
+                ? 'Only other activity was recorded — no project step. The PDF is still created and saved, but it will <b>not</b> be emailed or WhatsApped to the client.'
+                : (heldFlats.length
+                    ? ('Flat ' + heldFlats.map(label).join(', ') + ' recorded other activity but no project step, so ' + (heldFlats.length > 1 ? 'those flats are' : 'that flat is') + ' left out of the client PDF. The rest of the visit is emailed and WhatsApped as normal.')
+                    : 'Project steps were recorded too, so this report is emailed and WhatsApped to the client as normal — the other activity simply rides along as a remark.')}
+              Nothing is lost — everything stays in the admin panel, and the Activity Notes go to the sheet's <b>Other Activity Remarks</b> column.
+            </div>
+          </div>` : '';
       return `
         ${flatBarHtml()}
         <div class="panel">
           <div class="review-grid">
+            ${otherNotice}
             ${flatsCard}
             <div class="review-card">
               <h4>Basic Details</h4>
@@ -1135,20 +1177,26 @@
     // Steps still assignable = not locked (prev-done) and not already assigned this visit.
     function toggleStep(step) {
       const key = compact(step);
-      if ((answers.lockedSteps || []).some(s => compact(s) === key)) return;
+      if (!isOtherActivity(step) && (answers.lockedSteps || []).some(s => compact(s) === key)) return;
       if ((answers.stepStatuses || []).some(e => compact(e.step) === key)) return;
       const list = answers.doneSteps || (answers.doneSteps = []);
       const at = list.findIndex(s => compact(s) === key);
       if (at > -1) {
         list.splice(at, 1);                             // untick always allowed
+        // Unticking the last Other Activity frees the status picker again.
+        if (isOtherActivity(step)) answers.status = '';
       } else {
-        if (pairEngaged(step)) return;                  // pair being worked on — mutually exclusive
+        if (stepBlockedByOther(step)) return;           // Other Activity vs real steps
         list.push(step);
+        // Other Activity has exactly one legal status, so pre-pick it.
+        if (isOtherActivity(step)) answers.status = 'Done';
       }
       renderCurrentPage();
     }
     function canApplyStatus() {
       if (!(answers.doneSteps || []).length || !answers.status) return false;
+      // Other Activity records what was done — never Pending / Hold / Not Required.
+      if (otherActivityTicked() && answers.status !== 'Done') return false;
       if (answers.status === 'Hold') {
         if (!answers.holdReason) return false;
         if (String(answers.holdReasonDetail || '').trim() === '') return false;
@@ -1628,7 +1676,12 @@
 
     // Builds a full report payload from the CURRENT top-level answers (= one flat / one report).
     function buildReportPayload() {
-      const stepStatuses = answers.stepStatuses || [];
+      // Other Activity is NOT a project step: it is stripped out here so it can never
+      // reach the progress sheet, the step counters, the KPIs or the report history.
+      // It travels as its own flag + remark instead, and the server uses that flag to
+      // build the PDF but hold the report back from the client.
+      const isOther = otherActivityAssigned();
+      const stepStatuses = realStepStatuses();
       const statusSummary = stepStatuses.map(e => e.step + ' (' + e.status + ')').join(', ');
       const holdEntry = stepStatuses.find(e => e.status === 'Hold');
       // representative single-column status (Hold > Pending > Done > Not Required).
@@ -1637,6 +1690,8 @@
         : stepStatuses.some(e => e.status === 'Done') ? 'Done'
         : (stepStatuses.length ? 'Not Required' : '');
       return {
+        otherActivity: isOther ? 'Yes' : 'No',
+        otherActivityRemarks: isOther ? String(answers.activity || '').trim() : '',
         siteType: answers.siteType,
         clientType: answers.clientType,
         developer: answers.developer,
@@ -1771,6 +1826,8 @@
       if (!Array.isArray(answers.hiddenSteps)) answers.hiddenSteps = [];
       if (!Array.isArray(answers.flats)) answers.flats = [];
       if (typeof answers.activeFlat !== 'number' || answers.activeFlat < 0) answers.activeFlat = 0;
+      sanitizeOtherActivity(answers);
+      (answers.flats || []).forEach(sanitizeOtherActivity);
       syncTeams();
       document.addEventListener('click', onDocProjectClick, true);   // close search dropdowns on outside click
       window.addEventListener('message', function (event) {

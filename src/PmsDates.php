@@ -24,7 +24,8 @@ class PmsDates
     private const NON_STEP_COLS = [
         'timestamp', 'orderid', 'order id', 'project exective by', 'project executive by',
         'project name', 'tentitive project end date', 'tentative project end date',
-        'remarks', 'work done by', 'email address', 'email', 'shipping address',
+        'remarks', 'other activity remarks', 'work done by', 'email address', 'email',
+        'shipping address',
         'total order value', 'sales person', 'order type', 'floor', 'flat no',
     ];
 
