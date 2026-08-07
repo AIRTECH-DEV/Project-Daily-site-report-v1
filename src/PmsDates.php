@@ -83,6 +83,7 @@ class PmsDates
             $info = $this->headerInfo($rows);
             $nameCol  = $this->findNamedCol($info, 'Project Name');
             $orderCol = $this->findNamedCol($info, 'OrderID');
+            $salesCol = $this->findSalesCol($info);
             if ($nameCol < 1) {
                 $this->warnings[] = "No 'Project Name' column in $title";
                 return $out;
@@ -98,6 +99,9 @@ class PmsDates
                 $row['label']       = $name;
                 $row['site_type']   = $siteType === 'VRV' ? 'VRV' : 'Non-VRV';
                 $row['order_id']    = $orderCol > 0 ? trim((string)$this->cell($rows, $r, $orderCol)) : '';
+                // Sales person is a GENERAL-tab column only — developer building
+                // tabs do not carry it, so their rows stay blank (see below).
+                $row['sales_person'] = $salesCol > 0 ? trim((string)$this->cell($rows, $r, $salesCol)) : '';
                 $row['source']      = $title;
                 $out[$row['project_key']] = $row;
             }
@@ -141,6 +145,7 @@ class PmsDates
                 $row['label']       = $developer . ' › ' . $building . ' › ' . $flat;
                 $row['site_type']   = '';
                 $row['order_id']    = $orderCol > 0 ? trim((string)$this->cell($rows, $r, $orderCol)) : '';
+                $row['sales_person'] = '';   // developer flats: not tracked
                 $row['source']      = $developer . ' / ' . $title;
                 $out[$row['project_key']] = $row;
             }
@@ -362,6 +367,17 @@ class PmsDates
             }
         }
         return -1;
+    }
+
+    /**
+     * "Sales Person" column (1-based, or -1). It sits in the sub-header row with
+     * an empty group cell, so the exact name match is tried first; the substring
+     * fallback covers tabs spelling it "Sales Person Name" / "Salesperson".
+     */
+    private function findSalesCol(array $info): int
+    {
+        $c = $this->findNamedCol($info, 'Sales Person');
+        return $c > 0 ? $c : $this->findColContains($info, 'sales');
     }
 
     private function findColContains(array $info, string $needle): int

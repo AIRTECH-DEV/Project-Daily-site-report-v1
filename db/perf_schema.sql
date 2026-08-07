@@ -43,3 +43,7 @@ ALTER TABLE `projects` ADD COLUMN `start_source`     VARCHAR(20) DEFAULT NULL AF
 ALTER TABLE `projects` ADD COLUMN `actual_end_date`  DATE        DEFAULT NULL AFTER `start_source`;
 ALTER TABLE `projects` ADD COLUMN `sheet_target_end` DATE        DEFAULT NULL AFTER `actual_end_date`;
 ALTER TABLE `projects` ADD COLUMN `sheet_synced_at`  DATETIME    DEFAULT NULL AFTER `sheet_target_end`;
+
+-- sales_person : "Sales Person" off the GENERAL PMS tabs (VRV / Non-VRV).
+-- Developer building tabs have no such column, so those rows stay NULL.
+ALTER TABLE `projects` ADD COLUMN `sales_person` VARCHAR(190) DEFAULT NULL AFTER `primary_pe`;
