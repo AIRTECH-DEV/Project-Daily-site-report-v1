@@ -43,6 +43,60 @@ class GoogleClient
         return $this->request($method, $url, $body, $contentType);
     }
 
+    /**
+     * Streams a binary GET (Drive alt=media) straight to $sink, chunk by chunk.
+     *
+     * Never buffers the file: a consolidated multi-flat report PDF can be tens of
+     * MB and PHP-FPM would die on memory_limit halfway through a client download.
+     * Returns ['mime' => ..., 'size' => ...]; throws with the API error text on a
+     * non-2xx (that body IS buffered — it is a few hundred bytes of JSON).
+     *
+     * @param callable $sink function(string $chunk): void
+     */
+    public function download(string $url, callable $sink): array
+    {
+        $status = 0;
+        $mime   = '';
+        $size   = 0;
+        $errBody = '';
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPHEADER  => ['Authorization: Bearer ' . $this->auth->getAccessToken()],
+            CURLOPT_TIMEOUT     => 300,
+            CURLOPT_HEADERFUNCTION => function ($ch, $header) use (&$status, &$mime) {
+                if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $m)) {
+                    $status = (int)$m[1];
+                } elseif (stripos($header, 'content-type:') === 0) {
+                    $mime = trim(substr($header, 13));
+                }
+                return strlen($header);
+            },
+            CURLOPT_WRITEFUNCTION => function ($ch, $chunk) use (&$status, &$size, &$errBody, $sink) {
+                if ($status >= 200 && $status < 300) {
+                    $size += strlen($chunk);
+                    $sink($chunk);
+                } elseif (strlen($errBody) < 2000) {
+                    $errBody .= $chunk;        // error payload, keep it small
+                }
+                return strlen($chunk);
+            },
+        ]);
+        $ok = curl_exec($ch);
+        if ($ok === false) {
+            $err = curl_error($ch);
+            curl_close($ch);
+            throw new RuntimeException('cURL error on GET ' . $url . ': ' . $err);
+        }
+        curl_close($ch);
+        if ($status < 200 || $status >= 300) {
+            $data = json_decode($errBody, true);
+            $msg  = $data['error']['message'] ?? substr($errBody, 0, 300);
+            throw new RuntimeException("Google API download failed (HTTP $status): $msg");
+        }
+        return ['mime' => $mime !== '' ? $mime : 'application/octet-stream', 'size' => $size];
+    }
+
     private function request(string $method, string $url, ?string $body = null, ?string $contentType = null): array
     {
         $headers = ['Authorization: Bearer ' . $this->auth->getAccessToken()];

@@ -222,6 +222,9 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
       <div class="dh-sub"><?= Admin::e($pr['site_type']) ?> · <?= Admin::e($pr['client_type']) ?><?= $isDev ? ' · flat tracked on its own' : '' ?> · <?= (int)$pr['report_count'] ?> visit(s) · <span class="mono"><?= Admin::e($pr['order_id']) ?: '—' ?></span><?php if ($salesPerson !== ''): ?> · <span class="pill pill-type" title="Sales person (PMS sheet)"><i class="bi bi-person-badge"></i> <?= Admin::e($salesPerson) ?></span><?php endif; ?></div>
     </div>
     <div class="dh-actions">
+      <?php if (Admin::canShare()): ?>
+        <button class="btn btn-primary btn-sm" type="button" id="shBtn"><i class="bi bi-share"></i> Share with client</button>
+      <?php endif; ?>
       <a class="btn btn-ghost btn-sm" href="<?= Admin::BASE ?>/submissions.php?q=<?= urlencode($isDev ? ($pr['flat_no'] ?: $pr['developer']) : ($pr['project_name'] ?: $pr['developer'])) ?>"><i class="bi bi-card-list"></i> Reports</a>
       <?php if (!Admin::isViewer()): ?>
       <div class="kebab-wrap">
@@ -430,6 +433,8 @@ Layout::head('Project · ' . $pr['label'], 'projects', 'project');
 
 <a class="btn btn-ghost" href="<?= Admin::BASE ?>/projects.php"><i class="bi bi-arrow-left"></i> Back to projects</a>
 <?php
+require __DIR__ . '/inc/share_modal.php';   // renders only for accounts allowed to share
+
 $js = '<script>(function(){var b=document.getElementById("lcBtn"),m=document.getElementById("lcMenu");'
     . 'if(b&&m){b.addEventListener("click",function(e){e.stopPropagation();m.classList.toggle("open");});'
     . 'document.addEventListener("click",function(){m.classList.remove("open");});m.addEventListener("click",function(e){e.stopPropagation();});}})();</script>';

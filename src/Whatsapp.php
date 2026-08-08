@@ -7,12 +7,17 @@
  */
 class Whatsapp
 {
-    /** @var Sheets */ private $sheets;
-    /** @var Drive */  private $drive;
+    /** @var Sheets|null */ private $sheets;
+    /** @var Drive|null */  private $drive;
     /** @var array */  private $cfg;
     private $phoneMap = null;
 
-    public function __construct(Sheets $sheets, Drive $drive, array $waCfg)
+    /**
+     * $sheets/$drive are only needed for the report flow (Orders phone lookup +
+     * Drive link). Callers that just push a template — the share link, for one —
+     * pass null and skip loading the Google stack entirely.
+     */
+    public function __construct(?Sheets $sheets, ?Drive $drive, array $waCfg)
     {
         $this->sheets = $sheets;
         $this->drive = $drive;
@@ -149,6 +154,37 @@ class Whatsapp
         return $this->postTemplate($toPhone, $templateName, $components);
     }
 
+    /**
+     * Sends a template whose last component is a dynamic URL button — the client
+     * share link. Meta only allows the variable as the URL *suffix*, so the
+     * button parameter is the bare token and the base URL lives in the approved
+     * template itself (a token can therefore never point somewhere else).
+     *
+     * Body params are POSITIONAL here regardless of use_named_params: that flag
+     * belongs to the older daily_site_updates template, not to this one.
+     *
+     * @param string[] $bodyParams e.g. [name, project, stage, "96%"]
+     */
+    public function sendUrlButtonTemplate(string $toPhone, string $templateName, array $bodyParams, string $urlSuffix, string $languageCode = ''): array
+    {
+        $components = [];
+        if ($bodyParams) {
+            $params = [];
+            foreach ($bodyParams as $p) {
+                // WhatsApp rejects params containing newlines/tabs or 4+ spaces.
+                $params[] = ['type' => 'text', 'text' => trim(preg_replace('/\s+/u', ' ', (string)$p))];
+            }
+            $components[] = ['type' => 'body', 'parameters' => $params];
+        }
+        $components[] = [
+            'type'       => 'button',
+            'sub_type'   => 'url',
+            'index'      => '0',
+            'parameters' => [['type' => 'text', 'text' => $urlSuffix]],
+        ];
+        return $this->postTemplate($toPhone, $templateName, $components, $languageCode);
+    }
+
     /** Public phone normalizer (91XXXXXXXXXX or '' if invalid) for callers. */
     public function normalizePhone($raw): string
     {
@@ -156,7 +192,7 @@ class Whatsapp
     }
 
     /** POSTs a template message with the given components. */
-    private function postTemplate(string $toPhone, string $templateName, array $components): array
+    private function postTemplate(string $toPhone, string $templateName, array $components, string $languageCode = ''): array
     {
         $payload = [
             'messaging_product' => 'whatsapp',
@@ -164,7 +200,7 @@ class Whatsapp
             'type'     => 'template',
             'template' => [
                 'name'       => $templateName,
-                'language'   => ['code' => $this->cfg['language_code']],
+                'language'   => ['code' => $languageCode !== '' ? $languageCode : $this->cfg['language_code']],
                 'components' => $components,
             ],
         ];

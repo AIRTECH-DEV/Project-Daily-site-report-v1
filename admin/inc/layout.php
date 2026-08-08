@@ -20,6 +20,7 @@ class Layout
         'workforce'   => ['workforce.php',   'bi-people-fill',  'Workforce'],
         'performance' => ['performance.php', 'bi-trophy',       'Performance & Incentive'],
         'pipeline'    => ['pipeline.php',    'bi-diagram-2',    'Pipeline Health'],
+        'shares'      => ['shares.php',      'bi-share',        'Shared Links'],
         'settings'    => ['settings.php',    'bi-gear',         'Settings'],
         'users'       => ['users.php',       'bi-people',       'Admin Users'],
     ];
@@ -209,6 +210,19 @@ class Layout
                 'Re-process; the item returns to <b>Delivered</b> once the chain completes.',
             ],
             'legend' => 'health',
+        ],
+        'shares' => [
+            'intro' => 'Every progress link handed to a client. A link opens one project (or one building) read-only, expires by itself, and can be cut off at any time from here.',
+            'does'  => [
+                'See which client link is still live, who created it, and how many times it was opened.',
+                '<b>Revoke</b> a link the moment it should stop working — for example if it was forwarded.',
+                'Read the activity trail: sends, opens, downloads and refused attempts (recipients are stored masked).',
+            ],
+            'steps' => [
+                'Open a project and use <b>Share with client</b> to create the link.',
+                'Come back here to watch whether the client actually opened it.',
+                'Click <b>Revoke</b> when the link should die before its expiry.',
+            ],
         ],
         'settings' => [
             'intro' => 'Runtime configuration for notifications. Sets each developer\'s client email and WhatsApp recipients, the send modes (OFF/TEST/LIVE), the notify delay, and internal alert routing. Saved to config/overrides.json and applied to the next report processed.',

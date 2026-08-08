@@ -46,6 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $dn = trim($_POST['display_name'] ?? '');
                 $pw = $_POST['password'] ?? '';
                 $role = ($_POST['role'] ?? 'admin') === 'viewer' ? 'viewer' : 'admin';
+                $canShare = !empty($_POST['can_share']) ? 1 : 0;
                 if (!preg_match('/^[A-Za-z0-9_.-]{3,50}$/', $u)) {
                     $flash = 'Username must be 3–50 chars (letters, numbers, . _ -).'; $flashType = 'bad';
                 } elseif (strlen($pw) < 8) {
@@ -55,9 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($ex->fetchColumn() > 0) {
                         $flash = 'Username already exists.'; $flashType = 'bad';
                     } else {
-                        $db->prepare("INSERT INTO admin_users (username, password_hash, display_name, role, is_active) VALUES (?,?,?,?,1)")
-                           ->execute([$u, password_hash($pw, PASSWORD_DEFAULT), $dn ?: $u, $role]);
-                        Admin::audit('add_admin_user', 'admin_users', (int)$db->lastInsertId(), '', $u . ' (' . $role . ')');
+                        $db->prepare("INSERT INTO admin_users (username, password_hash, display_name, role, can_share, is_active) VALUES (?,?,?,?,?,1)")
+                           ->execute([$u, password_hash($pw, PASSWORD_DEFAULT), $dn ?: $u, $role, $canShare]);
+                        Admin::audit('add_admin_user', 'admin_users', (int)$db->lastInsertId(), '', $u . ' (' . $role . ($canShare ? ', can share' : '') . ')');
                         $flash = "User “{$u}” created.";
                     }
                 }
@@ -72,6 +73,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         Admin::audit('toggle_admin_user', 'admin_users', $uid, (string)$tu['is_active']);
                         $flash = 'User updated.';
                     }
+                }
+            } elseif ($action === 'toggle_share') {
+                // Client-share right. Kept apart from the role on purpose: it sends
+                // project data OUTSIDE the company, so a read-only viewer can hold
+                // it while a full admin need not. Admin accounts have it implicitly
+                // (they could grant it to themselves), so only viewers are toggled.
+                $uid = (int)($_POST['uid'] ?? 0);
+                $t = $db->prepare("SELECT * FROM admin_users WHERE id=?"); $t->execute([$uid]); $tu = $t->fetch();
+                if ($tu && $tu['role'] === 'admin') {
+                    $flash = 'Admin accounts can always share.'; $flashType = 'bad';
+                } elseif ($tu) {
+                    $db->prepare("UPDATE admin_users SET can_share = 1 - can_share WHERE id=?")->execute([$uid]);
+                    Admin::audit('toggle_share_permission', 'admin_users', $uid, (string)$tu['can_share'], $tu['can_share'] ? '0' : '1');
+                    // If they are signed in right now, their session must follow.
+                    $flash = "Client-share access " . ($tu['can_share'] ? 'removed from' : 'granted to') . " “{$tu['username']}”.";
                 }
             } elseif ($action === 'delete') {
                 $uid = (int)($_POST['uid'] ?? 0);
@@ -163,13 +179,27 @@ Layout::head('Admin Users', 'users');
   <div class="card2-head"><i class="bi bi-people text-primary"></i><h2>Accounts</h2><span class="sub"><?= count($users) ?> user<?= count($users) === 1 ? '' : 's' ?></span></div>
   <div class="table-wrap">
     <table class="tbl">
-      <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Client sharing</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
       <tbody>
-        <?php foreach ($users as $u): ?>
+        <?php foreach ($users as $u): $uCanShare = $u['role'] === 'admin' || !empty($u['can_share']); ?>
           <tr>
             <td class="mono"><?= Admin::e($u['username']) ?><?= (int)$u['id'] === (int)$me['id'] ? ' <span class="pill pill-info">you</span>' : '' ?></td>
             <td><?= Admin::e($u['display_name']) ?></td>
             <td><span class="pill <?= $u['role'] === 'admin' ? 'pill-info' : 'pill-muted' ?>"><?= Admin::e(ucfirst($u['role'])) ?></span></td>
+            <td>
+              <?php if ($u['role'] === 'admin'): ?>
+                <span class="pill pill-ok" title="Admin accounts can always share">Allowed</span>
+              <?php else: ?>
+                <form method="POST" style="display:inline"><?= Admin::csrfField() ?>
+                  <input type="hidden" name="action" value="toggle_share"><input type="hidden" name="uid" value="<?= (int)$u['id'] ?>">
+                  <button class="btn btn-ghost btn-sm" type="submit"
+                          title="<?= $uCanShare ? 'Remove client-share access' : 'Allow this viewer to share reports with clients' ?>">
+                    <i class="bi bi-<?= $uCanShare ? 'toggle-on text-success' : 'toggle-off' ?>"></i>
+                    <?= $uCanShare ? 'Allowed' : 'Blocked' ?>
+                  </button>
+                </form>
+              <?php endif; ?>
+            </td>
             <td><?= $u['is_active'] ? '<span class="pill pill-ok">Active</span>' : '<span class="pill pill-bad">Disabled</span>' ?></td>
             <td title="<?= Admin::e(fmtDateTime($u['last_login_at'])) ?>"><?= $u['last_login_at'] ? Admin::e(ago($u['last_login_at'])) : 'never' ?></td>
             <td>
@@ -241,6 +271,16 @@ Layout::head('Admin Users', 'users');
           <div class="fld"><label>Password</label><input class="inp" type="password" name="password" required placeholder="Min 8 characters"></div>
           <div class="fld"><label>Role</label>
             <select class="inp" name="role"><option value="admin">Admin — full access</option><option value="viewer">Viewer — read only</option></select></div>
+          <div class="fld">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" name="can_share" value="1" style="width:auto">
+              Can share progress reports with clients
+            </label>
+            <div style="color:#64748b;font-size:11.5px;margin-top:4px">
+              Lets this account create a 24-hour client link and send it by email/WhatsApp.
+              Admin accounts always have it; grant it to a viewer only if that person deals with clients.
+            </div>
+          </div>
           <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg"></i> Create User</button>
         </div>
       </form>

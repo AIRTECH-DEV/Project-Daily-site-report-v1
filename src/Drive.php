@@ -110,6 +110,32 @@ class Drive
         return $up + ['drive_file_id' => $up['id'], 'file_name' => $name, 'mime_type' => $mime];
     }
 
+    /**
+     * Streams a Drive file's bytes to $sink using the service account's own
+     * access — the file itself stays private.
+     *
+     * This is what lets a client share link serve a photo/PDF WITHOUT calling
+     * makeLinkViewable(): that permission is permanent and public, so it would
+     * outlive the 24-hour link and defeat the whole expiry.
+     *
+     * @param callable $sink function(string $chunk): void
+     * @return array ['mime' => string, 'size' => int]
+     */
+    public function download(string $fileId, callable $sink): array
+    {
+        $url = self::FILES . '/' . rawurlencode($fileId) . '?'
+            . http_build_query(['alt' => 'media', 'supportsAllDrives' => 'true']);
+        return $this->client->download($url, $sink);
+    }
+
+    /** File metadata (name/mime/size) without fetching the bytes. */
+    public function meta(string $fileId): array
+    {
+        $url = self::FILES . '/' . rawurlencode($fileId) . '?'
+            . http_build_query(['fields' => 'id,name,mimeType,size', 'supportsAllDrives' => 'true']);
+        return $this->client->get($url);
+    }
+
     /** Shares a file as anyone-with-link viewer (so report links open for clients). */
     public function makeLinkViewable(string $fileId): void
     {

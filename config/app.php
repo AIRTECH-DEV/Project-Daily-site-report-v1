@@ -166,6 +166,39 @@ $cfg = [
         'include_empty' => 0,       // also mail PEs with no activity that week
     ],
 
+    // ---- Client share links (share.php) ---------------------------------
+    // A link is a bearer credential: whoever holds the URL sees that ONE project
+    // (or building / developer) read-only, until it expires. Keep ttl_hours low.
+    // Runtime-tunable from admin/settings.php -> overrides.json ("share").
+    'share' => [
+        'ttl_hours'   => 24,     // hard expiry from the moment the link is minted
+        'max_views'   => 300,    // per-link view cap (forwarded-link blast radius)
+        'retain_days' => 30,     // purge dead links + their events after this
+        // Public base URL of the app. Blank = derive from the current request
+        // (fine on one host); set it on the server so links minted by the CLI
+        // worker / cron are absolute and correct.
+        'base_url'    => '',     // e.g. https://pms.vakhariaairtech.com/pms
+        // 'query' = /share.php?t=<token> (works anywhere, incl. XAMPP)
+        // 'path'  = /s/<token>  — prettier, and what the WhatsApp URL-button
+        //           template appends its suffix to. NEEDS the nginx location
+        //           rule from DEPLOY_GCP.md §12 before you switch it on.
+        'link_style'  => 'query',
+        // WhatsApp: an APPROVED template with a dynamic URL button whose suffix
+        // is the token. Body vars are positional: {name, project, step, percent}.
+        'wa_template' => 'project_progress_link',
+        'wa_language' => 'en',
+        'waba_id'     => '1568163707846136',
+        // Email subject prefix for a share (kept apart from the daily report).
+        'subject_prefix' => 'Project progress: ',
+        // Defaults for what a client may see. The share dialog can tighten these
+        // per link, never loosen past this list.
+        'defaults'    => [
+            'photos'      => 1,
+            'pe_names'    => 0,            // engineer names stay internal
+            'hold_detail' => 'client_only',// client-side holds spelled out, ours neutral
+        ],
+    ],
+
     // ---- Project Engineers (site-report "Assigned Engineer" dropdown) ----
     // Seed roster. The admin panel (admin/users.php) writes the live roster to
     // config/overrides.json ("engineers"), which replaces this list. Entries may
@@ -228,6 +261,12 @@ if (is_file($secretsFile)) {
         if (isset($secrets['app_backend']) && is_array($secrets['app_backend'])) {
             $cfg['app_backend'] = array_merge($cfg['app_backend'], $secrets['app_backend']);
         }
+        // Client share links: the PUBLIC base URL and link style are per-server
+        // (dev XAMPP is …/share.php?t=…, prod is https://…/pms/s/<token>), so they
+        // live here rather than in the shared, git-tracked defaults above.
+        if (isset($secrets['share']) && is_array($secrets['share'])) {
+            $cfg['share'] = array_merge($cfg['share'], $secrets['share']);
+        }
     }
 }
 
@@ -288,6 +327,26 @@ if (is_file($overridesFile)) {
             if (isset($p['test_to']))       { $cfg['pe_weekly']['test_to']       = (string)$p['test_to']; }
             if (isset($p['cc_manager']))    { $cfg['pe_weekly']['cc_manager']    = (int)!empty($p['cc_manager']); }
             if (isset($p['include_empty'])) { $cfg['pe_weekly']['include_empty'] = (int)!empty($p['include_empty']); }
+        }
+        // Client share links (TTL / view cap / public base URL / link style).
+        if (isset($ov['share']) && is_array($ov['share'])) {
+            $s = $ov['share'];
+            if (isset($s['ttl_hours']) && (int)$s['ttl_hours'] >= 1 && (int)$s['ttl_hours'] <= 168) {
+                $cfg['share']['ttl_hours'] = (int)$s['ttl_hours'];
+            }
+            if (isset($s['max_views']) && (int)$s['max_views'] >= 0) {
+                $cfg['share']['max_views'] = (int)$s['max_views'];
+            }
+            if (isset($s['base_url']))   { $cfg['share']['base_url']   = rtrim((string)$s['base_url'], '/'); }
+            if (!empty($s['link_style']) && in_array($s['link_style'], ['query', 'path'], true)) {
+                $cfg['share']['link_style'] = $s['link_style'];
+            }
+            if (!empty($s['wa_template'])) { $cfg['share']['wa_template'] = (string)$s['wa_template']; }
+            if (!empty($s['wa_language'])) { $cfg['share']['wa_language'] = (string)$s['wa_language']; }
+            if (!empty($s['waba_id']))     { $cfg['share']['waba_id']     = (string)$s['waba_id']; }
+            if (isset($s['defaults']) && is_array($s['defaults'])) {
+                $cfg['share']['defaults'] = array_merge($cfg['share']['defaults'], $s['defaults']);
+            }
         }
         // Project Engineer roster — admin panel owns it once it writes the key.
         if (isset($ov['engineers']) && is_array($ov['engineers']) && $ov['engineers']) {
