@@ -328,10 +328,16 @@ server {
 
     # Client share links: /pms/s/<token> -> share.php (token as PATH_INFO).
     # This is also the URL baked into the approved WhatsApp template, so the path
-    # must stay exactly /pms/s/<token>. The masked access log keeps the token —
-    # a live 24-hour credential — out of /var/log.
-    location ~ ^/pms/s/(?<sharetoken>[A-Za-z0-9_-]{43})$ {
-        include snippets/fastcgi-php.conf;
+    # must stay exactly /pms/s/<token>. Two things that WILL bite if changed:
+    #   - the regex is QUOTED, else nginx reads {43} as a config block and
+    #     refuses to start ("missing closing parenthesis");
+    #   - it includes fastcgi_params, NOT snippets/fastcgi-php.conf, whose
+    #     `try_files $fastcgi_script_name =404` 404s the request before PHP runs
+    #     (there is no file at /pms/s/<token> on disk).
+    # The masked access log keeps the token — a live 24-hour credential — out of
+    # /var/log.
+    location ~ "^/pms/s/(?<sharetoken>[A-Za-z0-9_-]{43})$" {
+        include fastcgi_params;
         fastcgi_pass unix:/run/php/php8.3-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $document_root/pms/share.php;
         fastcgi_param SCRIPT_NAME     /pms/share.php;

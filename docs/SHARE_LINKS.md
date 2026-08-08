@@ -141,6 +141,14 @@ LIVE so nothing quietly goes to the test inbox instead of the client.
 `link_style: path` **requires** the `/pms/s/` nginx location (DEPLOY_GCP.md §9) and must
 match the URL baked into the approved template.
 
+Two nginx gotchas, both hit during the first prod rollout:
+
+* the location regex must be **quoted** — unquoted, nginx parses `{43}` as a config
+  block and refuses to start (`pcre2_compile() failed: missing closing parenthesis`);
+* it must include **`fastcgi_params`**, not `snippets/fastcgi-php.conf` — that snippet
+  ends with `try_files $fastcgi_script_name =404`, and since no file exists at
+  `/pms/s/<token>`, nginx 404s the request before PHP ever runs.
+
 ## 6. Files
 
 | File | Role |
