@@ -185,20 +185,31 @@ if ($token === '') {
     }
 }
 
-try {
-    $db = (new Db($cfg['db']))->pdo();
-} catch (Throwable $e) {
+/**
+ * Any database trouble — server down, or share_schema.sql not imported yet on a
+ * fresh deploy — must read as "come back later", never as a 500 with a PHP trace
+ * on a page a client is looking at.
+ */
+function share_unavailable(): void
+{
     http_response_code(503);
+    header('Retry-After: 600');
     share_headers();
     share_head('Temporarily unavailable');
     echo '<div class="err-card"><div class="err-ic" style="background:#fff5df;color:#b56c00"><i class="bi bi-tools"></i></div>'
        . '<h2 style="margin:0 0 10px;font-size:21px">Temporarily unavailable</h2>'
-       . '<p style="margin:0;color:var(--muted)">Please try again in a few minutes.</p></div>';
+       . '<p style="margin:0;color:var(--muted)">We could not load this page just now. Please try again in a few minutes.</p></div>';
     share_foot();
     exit;
 }
 
-$res  = ShareLink::resolve($db, $token, (int)($shareCfg['max_views'] ?? 300));
+try {
+    $db = (new Db($cfg['db']))->pdo();
+    $res = ShareLink::resolve($db, $token, (int)($shareCfg['max_views'] ?? 300));
+} catch (Throwable $e) {
+    error_log('share.php: ' . $e->getMessage());
+    share_unavailable();
+}
 if ($res['state'] !== 'ok') {
     if ($res['state'] === 'unknown' && !share_probe_ok($db, client_ip())) {
         share_dead('blocked');
@@ -222,7 +233,12 @@ $selfBase = 'share.php?t=' . rawurlencode($token);
 /* ---------------- file proxy ---------------- */
 
 if (isset($_GET['f'])) {
-    $att = ShareData::attachmentInScope($db, $link, (int)$_GET['f'], $opts);
+    try {
+        $att = ShareData::attachmentInScope($db, $link, (int)$_GET['f'], $opts);
+    } catch (Throwable $e) {
+        error_log('share.php file: ' . $e->getMessage());
+        share_unavailable();
+    }
     if (!$att) {
         ShareLink::log($db, (int)$link['id'], 'denied', 'file', null, 'file out of scope: ' . (int)$_GET['f'],
             client_ip(), $ua, (string)$link['token_hash']);
@@ -310,9 +326,13 @@ if (isset($_GET['f'])) {
 
 /* ---------------- page ---------------- */
 
-ShareLink::touch($db, $link, $ua, client_ip());
-
-$units = ShareData::scopeProjects($db, $link);
+try {
+    ShareLink::touch($db, $link, $ua, client_ip());
+    $units = ShareData::scopeProjects($db, $link);
+} catch (Throwable $e) {
+    error_log('share.php scope: ' . $e->getMessage());
+    share_unavailable();
+}
 if (!$units) {
     share_dead('unknown');
 }
@@ -367,14 +387,24 @@ if ($isIndex) {
 }
 
 // ---- one unit ----
-$pr = ShareData::pickProject($db, $link, $wantKey);
+try {
+    $pr = ShareData::pickProject($db, $link, $wantKey);
+} catch (Throwable $e) {
+    error_log('share.php unit: ' . $e->getMessage());
+    share_unavailable();
+}
 if (!$pr) {
     ShareLink::log($db, (int)$link['id'], 'denied', null, null, 'unit out of scope',
         client_ip(), $ua, (string)$link['token_hash']);
     share_dead('unknown');
 }
 
-$view    = ShareData::projectView($db, $pr, $opts);
+try {
+    $view = ShareData::projectView($db, $pr, $opts);
+} catch (Throwable $e) {
+    error_log('share.php view: ' . $e->getMessage());
+    share_unavailable();
+}
 $isDev   = (string)$pr['client_type'] === 'Developer';
 $dotTone = ['Done' => 'ok', 'Hold' => 'bad', 'Pending' => 'warn', 'Inprogress' => 'warn'];
 $lcTone  = ['Not Started' => 'muted', 'Active' => 'info', 'At Risk' => 'warn', 'On Hold' => 'bad',
