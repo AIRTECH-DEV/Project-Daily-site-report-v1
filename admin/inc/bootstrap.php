@@ -114,6 +114,44 @@ class Admin
         }
     }
 
+    /**
+     * May this account hand a share link to a client?
+     *
+     * Sharing sends real project data OUTSIDE the company, so it is its own
+     * right rather than a side effect of the role: a viewer account can be
+     * granted it (admin/users.php), and admins hold it implicitly because they
+     * can grant it to themselves anyway.
+     */
+    public static function canShare(): bool
+    {
+        static $cached = null;
+        if ($cached !== null) {
+            return $cached;
+        }
+        if ((self::user()['role'] ?? '') === 'admin') {
+            return $cached = true;
+        }
+        // Read the flag per request, not from the session: revoking the right
+        // must take effect on the viewer's very next page load, not whenever
+        // they happen to log in again.
+        try {
+            $st = self::db()->prepare("SELECT can_share FROM admin_users WHERE id = ? AND is_active = 1");
+            $st->execute([(int)self::user()['id']]);
+            $cached = (bool)$st->fetchColumn();
+        } catch (Throwable $e) {
+            $cached = !empty($_SESSION['admin_can_share']);   // DB hiccup: fall back to login-time value
+        }
+        return $cached;
+    }
+
+    public static function requireSharer(): void
+    {
+        if (!self::canShare()) {
+            http_response_code(403);
+            exit('Forbidden: your account cannot share reports with clients.');
+        }
+    }
+
     public static function login(array $u): void
     {
         session_regenerate_id(true);
@@ -121,6 +159,7 @@ class Admin
         $_SESSION['admin_user'] = $u['username'];
         $_SESSION['admin_name'] = $u['display_name'] ?: $u['username'];
         $_SESSION['admin_role'] = $u['role'];
+        $_SESSION['admin_can_share'] = (int)($u['can_share'] ?? 0);
     }
 
     public static function logout(): void

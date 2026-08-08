@@ -40,4 +40,16 @@ return [
         'url'     => '',
         'api_key' => '',
     ],
+
+    // Client share links (share.php). PUBLIC base URL of this install + how the
+    // link is shaped. Per server, because dev and prod differ:
+    //   prod: base_url 'https://project.vakhariaairtech.com/pms', link_style 'path'
+    //         -> https://project.vakhariaairtech.com/pms/s/<token>
+    //         REQUIRES the /pms/s/ nginx location (DEPLOY_GCP.md §12b); it is also
+    //         the URL baked into the approved WhatsApp template, so it must match.
+    //   dev : leave blank + link_style 'query' -> http://localhost/pms/share.php?t=…
+    'share' => [
+        'base_url'   => '',
+        'link_style' => 'query',   // 'path' on the server, 'query' on XAMPP
+    ],
 ];

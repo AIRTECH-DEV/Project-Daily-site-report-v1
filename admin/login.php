@@ -32,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $dbDown) {
         if ($username === '' || $password === '') {
             $error = 'Enter your username and password.';
         } else {
-            $st = Admin::db()->prepare("SELECT id, username, password_hash, display_name, role FROM admin_users WHERE username = ? AND is_active = 1");
+            $st = Admin::db()->prepare("SELECT id, username, password_hash, display_name, role, can_share FROM admin_users WHERE username = ? AND is_active = 1");
             $st->execute([$username]);
             $user = $st->fetch();
             if ($user && password_verify($password, $user['password_hash'])) {

@@ -285,12 +285,13 @@ sudo chmod 640 config/google-service-account.json config/secrets.php   # secrets
 
 ## 8. Import the database schema
 
-Three idempotent files (`CREATE TABLE IF NOT EXISTS`) — import all three:
+Four idempotent files (`CREATE TABLE IF NOT EXISTS`) — import all four:
 ```bash
 cd /var/www/html/pms
 sudo mysql pms < db/schema.sql            # core: submissions, process_log, attachments
 sudo mysql pms < db/admin_schema.sql      # admin auth (admin_users, rate_limits, audit_logs)
 sudo mysql pms < db/admin_ext_schema.sql  # admin master (projects, alerts, workers, …)
+sudo mysql pms < db/share_schema.sql      # client share links + admin_users.can_share
 sudo mysql pms -e 'SHOW TABLES;'          # verify
 ```
 
@@ -325,10 +326,30 @@ server {
         fastcgi_read_timeout 120;
     }
 
+    # Client share links: /pms/s/<token> -> share.php (token as PATH_INFO).
+    # This is also the URL baked into the approved WhatsApp template, so the path
+    # must stay exactly /pms/s/<token>. The masked access log keeps the token —
+    # a live 24-hour credential — out of /var/log.
+    location ~ ^/pms/s/(?<sharetoken>[A-Za-z0-9_-]{43})$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/pms/share.php;
+        fastcgi_param SCRIPT_NAME     /pms/share.php;
+        fastcgi_param PATH_INFO       /$sharetoken;
+        fastcgi_read_timeout 300;          # streams photos/PDFs from Drive
+        access_log /var/log/nginx/pms_share.log share_masked;
+    }
+
     # Block web access to secrets, runtime storage and the SQL schema
     location ~ ^/pms/(config|storage|db)/ { deny all; return 404; }
     location ~ /\.(?!well-known) { deny all; }
 }
+EOF
+
+# Log format that never records a share token (add once, in the http{} block)
+sudo tee /etc/nginx/conf.d/pms_share_log.conf >/dev/null <<'EOF'
+log_format share_masked '$remote_addr - [$time_local] "$request_method /pms/s/*** $server_protocol" '
+                        '$status $body_bytes_sent "$http_user_agent"';
 EOF
 
 sudo ln -s /etc/nginx/sites-available/pms /etc/nginx/sites-enabled/
@@ -338,6 +359,10 @@ sudo nginx -t && sudo systemctl reload nginx
 
 **Verify the secret block:** `curl -s http://localhost/pms/config/secrets.php` and
 `.../config/app.php` must return **403/404**, not PHP source.
+
+**Verify share links:** `curl -s -o /dev/null -w '%{http_code}\n' https://project.vakhariaairtech.com/pms/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`
+must return **404** (the generic "link not found" page), not an nginx 404 HTML page —
+that proves share.php is being reached.
 
 ---
 
@@ -367,6 +392,11 @@ Add:
 # per-step date grid. Read-only over the sheets; nightly is plenty (a Marking start
 # date is typed by hand). 20:00 UTC = 01:30 IST — the VM stays on UTC by design.
 0 20 * * * /usr/bin/php /var/www/html/pms/scripts/perf_sync.php >> /var/www/html/pms/storage/logs/perf_sync_cron.log 2>&1
+
+# Client share links — drop dead links + their audit rows once the retention
+# window passes, and clear stale photo thumbnails. Expiry itself is enforced on
+# every request; this is only housekeeping.
+30 20 * * * /usr/bin/php /var/www/html/pms/scripts/share_purge.php >> /var/www/html/pms/storage/logs/share_purge_cron.log 2>&1
 ```
 Check: `sudo crontab -u www-data -l`.
 
@@ -440,15 +470,24 @@ must be `document` **and** the `daily_site_update_doc` template must be **APPROV
 
 ## 13. Domain + HTTPS
 
-The admin login sends a password, so use TLS.
-1. DNS: add an **A record** `pms.vakhariaairtech.com` → `SERVER_IP`.
+The admin login sends a password — and a client share link IS a credential — so TLS is
+mandatory, not optional.
+
+**Live domain: `project.vakhariaairtech.com` → 35.234.208.82** (already resolving, cert
+installed). The steps below are what set it up / how to redo it elsewhere.
+
+1. DNS: add an **A record** `project.vakhariaairtech.com` → `SERVER_IP`.
 2. Set the server name + issue a Let's Encrypt cert:
 ```bash
-sudo sed -i 's/server_name _;/server_name pms.vakhariaairtech.com;/' /etc/nginx/sites-available/pms
+sudo sed -i 's/server_name _;/server_name project.vakhariaairtech.com;/' /etc/nginx/sites-available/pms
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d pms.vakhariaairtech.com   # auto-configures HTTPS + renewal
+sudo certbot --nginx -d project.vakhariaairtech.com   # auto-configures HTTPS + renewal
 ```
-App is now at `https://pms.vakhariaairtech.com/pms/`. Certbot installs a renew timer.
+App is now at `https://project.vakhariaairtech.com/pms/`. Certbot installs a renew timer.
+
+> The approved WhatsApp template `project_progress_link` has
+> `https://project.vakhariaairtech.com/pms/s/{{1}}` **baked into its URL button** and Meta
+> does not allow editing it. Changing the domain means submitting a new template.
 
 ---
 
@@ -463,6 +502,10 @@ App is now at `https://pms.vakhariaairtech.com/pms/`. Certbot installs a renew t
 * **DB:** `pms_user` is not root, bound to `127.0.0.1`; keep MySQL off the public net.
 * **Secrets blocked from HTTP** by §9 — verify the 403/404 curl test.
 * **Admin panel:** strong password; consider IP-allowlisting `/pms/admin` in Nginx.
+* **Client share links** ([docs/SHARE_LINKS.md](docs/SHARE_LINKS.md)): HTTPS only — a link
+  is a bearer credential, so plain HTTP leaks it. Keep the masked `share_masked` access
+  log, keep `share.ttl_hours` low, and grant the share permission (admin → Admin Users)
+  only to staff who deal with clients.
 
 ---
 
