@@ -122,7 +122,39 @@ function share_head(string $title, string $sub = '', string $expiry = ''): void
   .err-card{max-width:560px;margin:9vh auto;background:#fff;border:1px solid var(--line);border-radius:18px;
             padding:34px 30px;text-align:center;box-shadow:0 12px 34px rgba(22,31,45,.07)}
   .err-ic{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;margin:0 auto 16px;font-size:30px}
+  .doc-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .doc-row .up-body{flex:1;min-width:150px}
+  .table-wrap{-webkit-overflow-scrolling:touch}
+
+  /* --- scales down to a phone -----------------------------------------
+     The hero row is sized here rather than inline: an inline
+     grid-template-columns beats every media query in admin.css, which is
+     exactly how six tiles ended up squeezed onto a 390px screen. */
+  .proj-hero.sh-hero{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:1100px){ .proj-hero.sh-hero{grid-template-columns:repeat(2,1fr)} }
+  @media(max-width:900px){
+    .sh-top{gap:10px}
+    .sh-exp{margin-left:0;order:3;width:100%;justify-content:center}
+    .detail-head{padding:16px}
+    .detail-head h2{font-size:18px}
+    .card2-head h2{font-size:16px}
+    .phero{min-height:92px;padding:14px}
+    .phero .ph-v{font-size:18px}
+    .phero.ph-flip .ph-l{font-size:18px}
+    .photo-grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:9px}
+    table.tbl th,table.tbl td{padding:10px 12px}
+    .tbl .col-ico{display:none}       /* decorative — the status pill says it all */
+  }
   @media(max-width:720px){.sh-top{padding:10px 14px}.sh-wrap{padding:14px 12px 40px}}
+  @media(max-width:560px){
+    .proj-hero.sh-hero{grid-template-columns:1fr}
+    .sh-top img{height:28px}
+    .sh-brand{font-size:14.5px}
+    .unit-grid{grid-template-columns:1fr}
+    .doc-row .btn{flex:1;justify-content:center}
+    .sh-foot{font-size:12px;padding:16px 12px 34px}
+    .err-card{padding:26px 18px;margin:6vh auto}
+  }
 </style>
 </head><body>
 <header class="sh-top">
@@ -228,7 +260,22 @@ if (!is_array($opts)) {
 }
 $ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
 $expiryLeft = ShareLink::timeLeft((string)$link['expires_at']);
-$selfBase = 'share.php?t=' . rawurlencode($token);
+
+/**
+ * Self-links must be ABSOLUTE and must stay on the URL shape the client arrived
+ * on. A relative "share.php?…" resolves to /pms/s/share.php?… when the page was
+ * opened as /pms/s/<token> — which is not a route, so every photo and PDF 404'd.
+ *
+ * Staying on /pms/s/<token>?f=… also keeps the token inside the location that
+ * writes the masked access log; hopping to /pms/share.php?t=… would print it in
+ * the normal log on every image request.
+ */
+$scriptDir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/pms/share.php'))), '/');
+$viaPath   = trim((string)($_SERVER['PATH_INFO'] ?? '')) !== '';
+$selfUrl   = $viaPath
+    ? $scriptDir . '/s/' . rawurlencode($token)
+    : $scriptDir . '/share.php?t=' . rawurlencode($token);
+$selfArg   = $selfUrl . ($viaPath ? '?' : '&');   // append "f=12" / "u=…" to this
 
 /* ---------------- file proxy ---------------- */
 
@@ -371,7 +418,7 @@ if ($isIndex) {
               $tot = (int)$u['steps_total']; $dn = (int)$u['steps_done'];
               $p = $tot > 0 ? min(100, (int)round($dn * 100 / $tot)) : 0;
             ?>
-              <a class="unit" href="<?= h($selfBase . '&u=' . rawurlencode((string)$u['project_key'])) ?>">
+              <a class="unit" href="<?= h($selfArg . 'u=' . rawurlencode((string)$u['project_key'])) ?>">
                 <div class="unit-t"><?= h(trim((string)$u['flat_no']) ?: $u['label']) ?></div>
                 <div class="unit-m"><?= h((string)$u['lifecycle']) ?> · <?= h(snip((string)$u['current_step'], 30)) ?: '—' ?></div>
                 <div class="unit-bar"><i style="width:<?= $p ?>%"></i></div>
@@ -415,7 +462,7 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
 ?>
 
 <?php if (!$isIndex && (string)$link['scope'] !== 'project'): ?>
-  <div class="breadcrumb2"><a href="<?= h($selfBase) ?>">← All units</a></div>
+  <div class="breadcrumb2"><a href="<?= h($selfUrl) ?>">← All units</a></div>
 <?php endif; ?>
 
 <div class="card2">
@@ -430,7 +477,7 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
   </div>
 </div>
 
-<div class="proj-hero" style="grid-template-columns:repeat(4,1fr)">
+<div class="proj-hero sh-hero">
   <div class="phero g-blue"><div class="ph-v"><?= h((string)$pr['current_step']) ?: '—' ?></div><div class="ph-l">Current stage</div></div>
   <div class="phero g-cyan ph-prog">
     <div><div class="ph-v"><?= (int)$pr['steps_done'] ?>/<?= (int)$pr['steps_total'] ?> <small>steps</small></div><div class="ph-l">Progress</div></div>
@@ -448,7 +495,7 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
       <div class="card2-body">
         <div class="table-wrap">
           <table class="tbl">
-            <thead><tr><th style="width:34px"></th><th>Stage</th><th>Status</th><th>Planned</th><th>Started</th><th>Completed</th><?php if ($view['show_pe']): ?><th>Engineer</th><?php endif; ?><th>Note</th></tr></thead>
+            <thead><tr><th class="col-ico" style="width:34px"></th><th>Stage</th><th>Status</th><th>Planned</th><th>Started</th><th>Completed</th><?php if ($view['show_pe']): ?><th>Engineer</th><?php endif; ?><th>Note</th></tr></thead>
             <tbody>
               <?php foreach ($view['steps'] as $st):
                 $stt  = $st['status'] ?: '—';
@@ -456,7 +503,7 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
                 $ico  = $stt === 'Done' ? 'bi-check-lg' : ($stt === 'Hold' ? 'bi-pause' : ($stt === 'Pending' ? 'bi-hourglass-split' : 'bi-circle'));
               ?>
                 <tr>
-                  <td><span class="si-dot <?= h($tone) ?>" style="width:22px;height:22px;font-size:10px"><i class="bi <?= h($ico) ?>"></i></span></td>
+                  <td class="col-ico"><span class="si-dot <?= h($tone) ?>" style="width:22px;height:22px;font-size:10px"><i class="bi <?= h($ico) ?>"></i></span></td>
                   <td style="font-weight:600"><?= h($st['name']) ?></td>
                   <td><?php if ($st['status']): ?><span class="pill pill-<?= h($tone) ?>"><?= h($stt) ?></span><?php else: ?><span class="info-val soft">not started</span><?php endif; ?></td>
                   <td><?= h($st['planned'] ? fmtDate($st['planned']) : '—') ?></td>
@@ -507,16 +554,16 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
       <?php if ($view['docs']): ?>
         <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
           <?php foreach ($view['docs'] as $d): ?>
-            <div class="up-item" style="align-items:center">
+            <div class="up-item doc-row">
               <span class="pdf-ic" style="flex-shrink:0"><i class="bi bi-file-earmark-pdf"></i></span>
               <div class="up-body">
                 <div class="info-val" style="font-size:13px;font-weight:600"><?= h(ucfirst(str_replace('_', ' ', (string)$d['kind']))) ?></div>
                 <div class="info-val soft" style="font-size:11.5px"><?= h(fmtDate((string)$d['created_at'])) ?></div>
               </div>
               <a class="btn btn-ghost btn-sm" target="_blank" rel="noreferrer noopener"
-                 href="<?= h($selfBase . '&f=' . (int)$d['id']) ?>"><i class="bi bi-eye"></i> Preview</a>
+                 href="<?= h($selfArg . 'f=' . (int)$d['id']) ?>"><i class="bi bi-eye"></i> Preview</a>
               <a class="btn btn-primary btn-sm"
-                 href="<?= h($selfBase . '&f=' . (int)$d['id'] . '&dl=1') ?>"><i class="bi bi-download"></i> Download</a>
+                 href="<?= h($selfArg . 'f=' . (int)$d['id'] . '&dl=1') ?>"><i class="bi bi-download"></i> Download</a>
             </div>
           <?php endforeach; ?>
         </div>
@@ -530,8 +577,8 @@ share_head($title, $isDev ? trim((string)$pr['developer']) : 'Project progress',
       <?php if (!$view['photos']): ?><div class="t-empty" style="padding:20px">No photos shared.</div><?php else: ?>
         <div class="photo-grid">
           <?php foreach (array_slice($view['photos'], 0, 24) as $p): ?>
-            <a href="<?= h($selfBase . '&f=' . (int)$p['id']) ?>" target="_blank" rel="noreferrer noopener">
-              <img loading="lazy" src="<?= h($selfBase . '&f=' . (int)$p['id'] . '&th=1') ?>" alt="Site photo">
+            <a href="<?= h($selfArg . 'f=' . (int)$p['id']) ?>" target="_blank" rel="noreferrer noopener">
+              <img loading="lazy" src="<?= h($selfArg . 'f=' . (int)$p['id'] . '&th=1') ?>" alt="Site photo">
             </a>
           <?php endforeach; ?>
         </div>
