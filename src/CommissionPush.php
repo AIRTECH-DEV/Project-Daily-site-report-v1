@@ -123,6 +123,11 @@ class CommissionPush
             'stage'             => $commAt ? 'commissioned' : 'pre_commissioned',
             'preCommissionedAt' => $preAt   ? gmdate('c', strtotime((string)$preAt))   : null,
             'commissionedAt'    => $readyAt ? gmdate('c', strtotime((string)$readyAt)) : null,
+            // Equipment schedule captured at Pre-Commissioning — model no., serial
+            // no. and location per unit. The app prefills its machine list from
+            // this, so the technician photographs machines instead of typing
+            // serials. Empty array when the report never reached PMS.
+            'machines'          => PreCommissioningMachines::forProject($this->db, (string)$p['project_key']),
         ];
     }
 

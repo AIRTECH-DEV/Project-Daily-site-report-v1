@@ -20,6 +20,7 @@ require_once $ROOT . '/src/JobQueue.php';
 require_once $ROOT . '/src/Orders.php';
 require_once $ROOT . '/src/NotificationService.php';
 require_once $ROOT . '/src/PreCommissioningPdf.php';
+require_once $ROOT . '/src/PreCommissioningMachines.php';
 require_once $ROOT . '/src/SubmitService.php';
 const CFG = ['timezone' => 'Asia/Kolkata'];
 
