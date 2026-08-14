@@ -53,13 +53,26 @@ class CommissionPush
             return ['pushed' => 0, 'failed' => 0, 'note' => 'app_backend.url blank — push OFF'];
         }
         $this->ensureColumns();
+        // The candidate query joins it, so a database that has not seen a
+        // pre-commissioning report yet would otherwise fail the whole run.
+        try { PreCommissioningMachines::ensureTable($this->db); } catch (Throwable $e) {}
 
+        // A project whose machine list arrived AFTER its push has to go again, or
+        // the technician never sees it. That is the normal order of events for
+        // anything pushed before the pre-commissioning capture existed, and for
+        // any project where the report is filed after the hand-off. Safe to
+        // repeat: the backend upserts on project_key and never reopens a job that
+        // has already been reported, and a successful push moves app_pushed_at
+        // past the rows, so this settles after one extra send.
         $rows = $this->db->query(
-            "SELECT project_key, label, project_name, site_type, client_type, developer,
-                    building, flat_no, order_id, commissioned_at, pre_commissioned_at
-               FROM projects
-              WHERE app_pushed_at IS NULL
-                AND (pre_commissioned_at IS NOT NULL OR lifecycle IN ('Commissioned','Closed'))
+            "SELECT p.project_key, p.label, p.project_name, p.site_type, p.client_type, p.developer,
+                    p.building, p.flat_no, p.order_id, p.commissioned_at, p.pre_commissioned_at
+               FROM projects p
+              WHERE (p.pre_commissioned_at IS NOT NULL OR p.lifecycle IN ('Commissioned','Closed'))
+                AND (p.app_pushed_at IS NULL
+                     OR EXISTS (SELECT 1 FROM precommissioning_machines m
+                                 WHERE m.project_key = p.project_key
+                                   AND m.created_at > p.app_pushed_at))
               LIMIT " . (int)$limit
         )->fetchAll(PDO::FETCH_ASSOC);
 
