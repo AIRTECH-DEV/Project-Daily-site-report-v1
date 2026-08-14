@@ -73,6 +73,7 @@ class SubmitService
         // two Drive folders, two admin projects, and a phone/email lookup that
         // misses. The dropdown is site-names-only now, but a saved draft or a
         // hand-typed entry can still arrive holding the client's billing name.
+        $orderId = '';
         if (!$isDeveloper) {
             $rec = (new Orders($this->sheets, $this->cfg))
                 ->resolve((string)($p['siteType'] ?? ''), (string)($p['project'] ?? ''));
@@ -84,6 +85,7 @@ class SubmitService
                     $patch['project'] = $rec['canonical'];
                 }
                 if ($rec['order_id'] !== '') {
+                    $orderId = $rec['order_id'];
                     $patch['order_id'] = $rec['order_id'];
                 }
                 if ($patch) {
@@ -165,6 +167,7 @@ class SubmitService
                 foreach ($reports as $ri => $rep) {
                     $tag = $isMulti ? ('Flat' . $this->safeTag($rep['flatNo'] ?? ($ri + 1)) . '_') : '';
                     $artifacts = [];
+                    $workbook  = null;   // uploaded .xls/.xlsx, still on disk at extraction time
                     $file = $rep['preCommissioningFile'] ?? null;
                     if (is_array($file) && !empty($file['base64'])) {
                         $bytes = base64_decode((string)$file['base64'], true);
@@ -176,6 +179,7 @@ class SubmitService
                         $path = $preDir . '/' . substr((string)$job['public_id'], 0, 12) . '_' . $name;
                         file_put_contents($path, $bytes);
                         $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => $mime];
+                        $workbook = $path;
                     } elseif (!empty($rep['preCommissioningReport']) && is_array($rep['preCommissioningReport'])) {
                         $baseReport = $rep['preCommissioningReport'];
                         $machineReports = !empty($baseReport['machineReports']) && is_array($baseReport['machineReports'])
@@ -193,6 +197,25 @@ class SubmitService
                             $artifacts[] = ['path' => $path, 'name' => $name, 'mime' => 'application/pdf'];
                         }
                     }
+                    // Model no. / serial no. / location per unit -> precommissioning_machines,
+                    // so CommissionPush can hand the machine list to the technician's app and
+                    // nobody re-types it. Runs BEFORE the upload loop, which unlinks the
+                    // workbook once Drive has it. Entirely additive — a parse failure is a
+                    // warning, never a lost report, so it gets its own try/catch.
+                    try {
+                        $machines = $workbook !== null
+                            ? PreCommissioningMachines::fromWorkbook($workbook)
+                            : PreCommissioningMachines::fromForm((array)($rep['preCommissioningReport'] ?? []));
+                        PreCommissioningMachines::store(
+                            $this->app->db()->pdo(),
+                            $this->projectKeyOf($p, $rep, $orderId),
+                            (int)$job['submission_id'],
+                            $machines
+                        );
+                    } catch (Throwable $e) {
+                        $warnings[] = 'Machine list not captured for the commissioning app: ' . $e->getMessage();
+                    }
+
                     foreach ($artifacts as $artifact) {
                         $path = $artifact['path']; $name = $artifact['name']; $mime = $artifact['mime'];
                         if (!is_file($path)) { continue; }
@@ -487,6 +510,25 @@ class SubmitService
     {
         $t = preg_replace('/[^A-Za-z0-9]+/', '', (string)$v);
         return $t !== '' ? $t : 'x';
+    }
+
+    /**
+     * Mirror of helpers.php projectKey() over a raw payload — the admin sync will
+     * key the same visit the same way, and precommissioning_machines has to line
+     * up with projects.project_key for CommissionPush to find the machines again.
+     * $rep is the per-flat report on a multi-flat developer visit (only the flat
+     * number varies; developer/building/order id belong to the whole visit).
+     */
+    private function projectKeyOf(array $p, array $rep, string $orderId): string
+    {
+        if (($p['clientType'] ?? '') === 'Developer') {
+            return 'D|' . strtolower(trim(($p['developer'] ?? '') . '|' . ($p['building'] ?? '') . '|'
+                . ($rep['flatNo'] ?? ($p['flatNo'] ?? ''))));
+        }
+        $orderId = strtolower(trim($orderId));
+        return $orderId !== ''
+            ? 'O|' . $orderId
+            : 'G|' . strtolower(trim((string)($p['project'] ?? '')));
     }
 
     /**
