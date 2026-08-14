@@ -303,11 +303,15 @@ class PreCommissioningMachines
         if ($projectKey === '' || !$machines) { return 0; }
         self::ensureTable($db);
 
-        $db->prepare("DELETE FROM precommissioning_machines WHERE project_key = ?")->execute([$projectKey]);
+        $db->prepare("DELETE FROM `precommissioning_machines` WHERE `project_key` = ?")->execute([$projectKey]);
+        // Every identifier quoted: `system` is a RESERVED WORD in MySQL 8 (prod)
+        // and an unquoted one is a 1064 syntax error. MariaDB — XAMPP, where this
+        // is developed — accepts it bare, so this passes locally and fails only
+        // in production.
         $ins = $db->prepare(
-            "INSERT INTO precommissioning_machines
-               (project_key, submission_id, machine_no, unit_no, unit_role,
-                model, serial, location, system, invoice_no, invoice_date)
+            "INSERT INTO `precommissioning_machines`
+               (`project_key`, `submission_id`, `machine_no`, `unit_no`, `unit_role`,
+                `model`, `serial`, `location`, `system`, `invoice_no`, `invoice_date`)
              VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         );
         $n = 0;
@@ -334,11 +338,13 @@ class PreCommissioningMachines
     public static function forProject(PDO $db, string $projectKey): array
     {
         try {
+            // `system` quoted — reserved in MySQL 8. See store().
             $st = $db->prepare(
-                "SELECT machine_no, unit_no, unit_role, model, serial, location, system, invoice_no, invoice_date
-                   FROM precommissioning_machines
-                  WHERE project_key = ?
-                  ORDER BY machine_no, unit_no"
+                "SELECT `machine_no`, `unit_no`, `unit_role`, `model`, `serial`, `location`,
+                        `system`, `invoice_no`, `invoice_date`
+                   FROM `precommissioning_machines`
+                  WHERE `project_key` = ?
+                  ORDER BY `machine_no`, `unit_no`"
             );
             $st->execute([$projectKey]);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
