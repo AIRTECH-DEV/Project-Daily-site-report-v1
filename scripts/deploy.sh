@@ -11,8 +11,8 @@ git fetch --all --prune
 git reset --hard origin/main        # exact match to main; gitignored secrets untouched
 
 echo "-> Fixing permissions..."
-find "$APP_DIR" -type d -exec chmod 2775 {} \;
-find "$APP_DIR" -type f -exec chmod 664 {} \;
+find "$APP_DIR" -type d -exec chmod 2775 {} \; || true
+find "$APP_DIR" -type f -exec chmod 664 {} \; || true
 chmod -R 2775 "$APP_DIR/storage" || true
 chmod 640 "$APP_DIR/config/google-service-account.json" "$APP_DIR/config/secrets.php" 2>/dev/null || true
 
