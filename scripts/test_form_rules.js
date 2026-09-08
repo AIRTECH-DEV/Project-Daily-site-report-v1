@@ -289,6 +289,51 @@ group('EDGE — Other Activity does not disturb the rest of the form');
   ok('...and accepts one', s.isStep2Valid() === true);
 }
 
+group('NEW — "Other Activity" in the team "what work done" dropdown');
+{
+  const s = fresh({ teams: [{ people: [{ name: 'Ravi', techType: 'VAPL-Technician', contractorName: '' }], workDone: [] }] });
+  ok('offered as the last work option', s.WORK_DONE_OPTIONS[s.WORK_DONE_OPTIONS.length - 1] === 'Other Activity');
+  ok('listed exactly once', s.WORK_DONE_OPTIONS.filter(w => s.compact(w) === s.compact('Other Activity')).length === 1);
+  ok('a team with no work picked still blocks Save & Next', s.isStep1Valid() === false);
+
+  s.addTeamWork(0, 'Other Activity');
+  ok('picking it satisfies the team', s.answers.teams[0].workDone.join(',') === 'Other Activity');
+  applyStep(s, 'Marking');
+  ok('...and unblocks Save & Next', s.isStep1Valid() === true, s.missingFields().join(' | '));
+
+  const p = s.buildReportPayload();
+  ok('it rides along in Work Done BY', p.workDoneBy === 'Ravi [VAPL-Technician] - Other Activity', p.workDoneBy);
+  ok('the team keeps it in teams[] for the workers table', p.teams[0].workDone.join(',') === 'Other Activity');
+  ok('picking it is NOT the same as filing an Other-Activity report', p.otherActivity === 'No');
+  ok('...so the real step still reaches the sheet', names(p.stepStatuses) === 'Marking=Done', names(p.stepStatuses));
+
+  // Re-picking the same work is a no-op, and the dropdown drops what is already taken.
+  s.addTeamWork(0, 'Other Activity');
+  ok('cannot be added twice', s.answers.teams[0].workDone.length === 1);
+  ok('dropped from the dropdown once picked', !s.renderStep1().includes('<option value="Other Activity">'));
+  s.removeTeamWork(0, 'Other Activity');
+  ok('and can be removed again', s.answers.teams[0].workDone.length === 0);
+}
+
+group('NEW — "Other Activity" survives a fully-locked project');
+{
+  // Every real work option already done on the sheet: the old build had NOTHING left to
+  // pick and quietly made "work done" optional. Other Activity has no sheet column, so
+  // it is never locked and the team is always asked what it did.
+  const probe = fresh();
+  const allReal = probe.WORK_DONE_OPTIONS.filter(w => probe.compact(w) !== probe.compact('Other Activity'));
+  const s = fresh({
+    lockedSteps: allReal,
+    teams: [{ people: [{ name: 'Ravi', techType: 'VAPL-Technician', contractorName: '' }], workDone: [] }],
+  });
+  const avail = s.availableWorkOptions();
+  ok('only Other Activity is left to pick', avail.length === 1 && avail[0] === 'Other Activity', avail.join(','));
+  ok('so the team must still say what it did', s.isStep1Valid() === false);
+  s.addTeamWork(0, 'Other Activity');
+  applyStep(s, 'Other Activity');
+  ok('...and Other Activity satisfies it', s.isStep1Valid() === true, s.missingFields().join(' | '));
+}
+
 console.log('\n──────────────────────────────');
 console.log(fail === 0 ? `ALL ${pass} CHECKS PASSED` : `${pass} passed, ${fail} FAILED`);
 if (fail) { failures.forEach(f => console.log('  * ' + f)); process.exitCode = 1; }

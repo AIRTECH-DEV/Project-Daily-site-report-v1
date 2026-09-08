@@ -77,11 +77,16 @@
     const HOLD_REASONS = ['Stuck BY Client', 'Stuck BY VAPL', 'Other'];
     const TECH_TYPES = ['VAPL-Technician', 'VAPL-Helper', 'Contractor'];
     // Per-person "what work done" dropdown options (independent of the status steps).
+    // "Other Activity" is appended as the catch-all for labour that is not one of the
+    // sheet steps. It is plain text like every other pick here — it only feeds the
+    // "Work Done BY" summary and the workers table, never the progress sheet, so it
+    // does NOT make the report an "other activity only" one (that is decided by the
+    // Current Status checklist alone).
     const WORK_DONE_OPTIONS = [
       'Marking','Civil Opening','Support',
       'Underdake Insulation','Copper Piping','Copper Piping Dismental','Cable','Drain','Drain Dismental','LS Pressure Testing','IDU/ODU Pressure Testing','Main Ducting','Main Ducting Dismental','Collar','Fresh Air - PVC PIPE / Duct',
       'Indoor Installation','IDU Dismental','odu unit installation','ODU Dismental','Final Nitrogen Testing','Grill Installation','Fan Installation','Disk Valve','Pre-Commissining','Commissining'
-    ];
+    ].concat(OTHER_ACTIVITY);
 
     // Dismantle ("Dismental") steps are INDEPENDENT of their base step: the sheet now
     // carries a "Dismental End Date" column of its own, so a group can hold both
@@ -1481,8 +1486,10 @@
       team.workDone = team.workDone.filter(x => compact(x) !== compact(work));
       renderCurrentPage();
     }
-    // "What work done" options minus steps already done (locked from the sheet). When this
-    // is empty there is nothing left to pick, so "work done" can't be required.
+    // "What work done" options minus steps already done (locked from the sheet). A locked
+    // sheet step never includes "Other Activity" (it has no column), so the list always
+    // keeps at least that one row — the old "everything locked -> work done optional"
+    // escape hatch is now "everything locked -> pick Other Activity".
     function availableWorkOptions() {
       const lockedSet = new Set((answers.lockedSteps || []).map(compact));
       return WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
