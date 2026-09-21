@@ -96,6 +96,22 @@ group('ITEM 2 — project must be picked from the list');
   ok('...and the reason named is the project', s2.missingFields().some(m => /Project \/ Client/.test(m)), s2.missingFields().join(' | '));
 }
 
+group('ITEM 3 - LS Material Delivery stays repeatable');
+{
+  const tickable = list => /<input type="checkbox"(?![^>]*disabled)[^>]*onchange="toggleStep\('LS Material Delivery'\)"/.test(list);
+  const s = fresh({
+    lockedSteps: ['LS Material Delivery', 'Marking'],
+    hiddenSteps: ['LS Material Delivery'],
+  });
+  ok('an earlier delivery date does not lock the step', tickable(checklist(s)), checklist(s).slice(0, 300));
+  s.toggleStep('LS Material Delivery');
+  ok('the repeatable step can be selected again', s.answers.doneSteps.includes('LS Material Delivery'));
+  s.answers.status = 'Done'; s.applyStepStatus();
+  ok('the repeated visit is included in the report payload',
+     names(s.buildReportPayload().stepStatuses).includes('LS Material Delivery=Done'));
+  ok('normal completed steps remain locked', /step-check locked[^]*?Marking/.test(checklist(s)));
+}
+
 /* ---------------------------------------------------------------- ITEM 4 */
 group('ITEM 4 — Other Activity: Done only');
 {

@@ -411,7 +411,7 @@ class Pms
     /**
      * Step names counted as done on a row:
      *   - grouped steps whose "Status" sub-cell reads "Done", plus
-     *   - single-column DATE steps (e.g. "LS Material Delivery") that hold any value.
+     *   - single-column DATE steps that hold any value, except repeatable LS delivery.
      * Over-returning is harmless: the front-end only locks names in its STATUS_STEPS.
      */
     private function readDoneSteps(array $rows, int $row, array $info): array
@@ -463,7 +463,11 @@ class Pms
             // A "Not Required" date step is hidden, not done — don't count it here.
             $val = trim((string)$this->cell($rows, $row, $i + 1));
             if ($val !== '' && Sheets::normalizeKey($val) !== 'not required') {
-                $add($name);
+                // LS material can arrive on multiple visits, so a stored date must
+                // never lock that step in the form.
+                if (!$this->isRepeatableStep($name)) {
+                    $add($name);
+                }
             }
         }
         return $out;
@@ -519,7 +523,9 @@ class Pms
                 continue;
             }
             if (Sheets::normalizeKey($this->cell($rows, $row, $i + 1)) === 'not required') {
-                $add($name);
+                if (!$this->isRepeatableStep($name)) {
+                    $add($name);
+                }
             }
         }
         return $out;
@@ -790,7 +796,15 @@ class Pms
             if (Sheets::normalizeKey($info['subVals'][$statusCol - 1] ?? '') !== 'status') {
                 if ($stat === 'Done') {
                     $cur = $this->cell($rows, $row, $statusCol);
-                    if ($cur === '' || $cur === null) {
+                    if ($this->isRepeatableStep($step)) {
+                        $this->sheets->setCell(
+                            $ssId,
+                            $title,
+                            $row,
+                            $statusCol,
+                            $this->appendSheetDate($cur, $this->today())
+                        );
+                    } elseif ($cur === '' || $cur === null) {
                         $this->sheets->setCell($ssId, $title, $row, $statusCol, $this->today());
                     }
                 } elseif ($stat === 'Not Required') {
@@ -1254,6 +1268,32 @@ class Pms
     private function today(): string
     {
         return (new DateTime('now', new DateTimeZone($this->cfg['timezone'])))->format('d-M-Y');
+    }
+
+    /** A step whose single sheet cell records a comma-separated visit-date history. */
+    private function isRepeatableStep(string $step): bool
+    {
+        return Sheets::compactKey($step) === Sheets::compactKey('LS Material Delivery');
+    }
+
+    /** Preserve an existing date (including a Sheets serial) and append one more date. */
+    private function appendSheetDate($current, string $date): string
+    {
+        if ($current === null || trim((string)$current) === ''
+            || Sheets::normalizeKey($current) === 'not required') {
+            return $date;
+        }
+        $existing = trim((string)$current);
+        if (is_numeric($current)) {
+            $serial = (float)$current;
+            if ($serial >= 1 && $serial <= 80000) {
+                $ts = ($serial - 25569) * 86400;
+                if ($ts > 0) {
+                    $existing = gmdate('d-M-Y', (int)round($ts));
+                }
+            }
+        }
+        return $existing . ', ' . $date;
     }
 
     /** Convert an input[type=date] value (YYYY-MM-DD) to sheet date format d-M-Y. */

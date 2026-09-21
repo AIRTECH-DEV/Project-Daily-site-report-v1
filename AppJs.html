@@ -36,6 +36,9 @@
     // suggestion — the PE types what they did in Activity Notes themselves.
     const OTHER_ACTIVITY = 'Other Activity';
     function isOtherActivity(step) { return compact(step) === compact(OTHER_ACTIVITY); }
+    // Material may arrive over several visits, so this step never becomes locked.
+    const REPEATABLE_STEPS = new Set(['LS Material Delivery'].map(compact));
+    function isRepeatableStep(step) { return REPEATABLE_STEPS.has(compact(step)); }
     // One report may carry BOTH real step progress and an Other Activity note. What it
     // may not do is mix them in the SAME Apply click: the status picker applies one
     // status to everything ticked, and Other Activity only ever means "Done". So tick
@@ -268,8 +271,8 @@
         .withSuccessHandler(function (res) {
           progressLoading = false;
           res = res || {};
-          answers.lockedSteps = Array.isArray(res.doneSteps) ? res.doneSteps : [];
-          answers.hiddenSteps = Array.isArray(res.notRequiredSteps) ? res.notRequiredSteps : [];
+          answers.lockedSteps = Array.isArray(res.doneSteps) ? res.doneSteps.filter(s => !isRepeatableStep(s)) : [];
+          answers.hiddenSteps = Array.isArray(res.notRequiredSteps) ? res.notRequiredSteps.filter(s => !isRepeatableStep(s)) : [];
           answers.generatedOrderId = res.orderId || '';
           // Drop any fresh tick / assignment now locked (done) or hidden (marked Not Required) in the sheet.
           const gone = new Set(answers.lockedSteps.concat(answers.hiddenSteps).map(compact));
@@ -653,12 +656,11 @@
                 ${!siteType ? `<div class="hint-note">Select site type first.</div>` : `
                 ${progressLoading ? `<div class="hint-note">Loading previous progress...</div>` : ''}
                 <div class="step-check-list">
-                  ${statusSteps.filter(s => isOtherActivity(s) || !hiddenSet.has(compact(s))).map(s => {
+                  ${statusSteps.filter(s => isOtherActivity(s) || isRepeatableStep(s) || !hiddenSet.has(compact(s))).map(s => {
                     const key = compact(s);
-                    // Other Activity is never locked and never hidden: it is not a project
-                    // step, it never reaches the sheet, and the same site may need it on
-                    // any number of visits. Real steps still obey both flags.
-                    const locked = !isOtherActivity(s) && lockedSet.has(key);
+                    // Other Activity is never locked because it is not a sheet step. LS
+                    // Material Delivery is also repeatable because each visit appends a date.
+                    const locked = !isOtherActivity(s) && !isRepeatableStep(s) && lockedSet.has(key);
                     const assigned = assignedMap.get(key);
                     // Greyed out for this Apply click only — Other Activity is applied on
                     // its own because it can only ever be "Done". Apply it, then tick the
@@ -1182,7 +1184,7 @@
     // Steps still assignable = not locked (prev-done) and not already assigned this visit.
     function toggleStep(step) {
       const key = compact(step);
-      if (!isOtherActivity(step) && (answers.lockedSteps || []).some(s => compact(s) === key)) return;
+      if (!isOtherActivity(step) && !isRepeatableStep(step) && (answers.lockedSteps || []).some(s => compact(s) === key)) return;
       if ((answers.stepStatuses || []).some(e => compact(e.step) === key)) return;
       const list = answers.doneSteps || (answers.doneSteps = []);
       const at = list.findIndex(s => compact(s) === key);
@@ -1492,7 +1494,7 @@
     // escape hatch is now "everything locked -> pick Other Activity".
     function availableWorkOptions() {
       const lockedSet = new Set((answers.lockedSteps || []).map(compact));
-      return WORK_DONE_OPTIONS.filter(w => !lockedSet.has(compact(w)));
+      return WORK_DONE_OPTIONS.filter(w => isRepeatableStep(w) || !lockedSet.has(compact(w)));
     }
     function teamsValid() {
       if (answers.noTeam) return true;          // "No team working" -> whole section optional

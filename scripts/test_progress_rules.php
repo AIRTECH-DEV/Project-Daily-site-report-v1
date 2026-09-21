@@ -85,6 +85,57 @@ function readBack(string $method, array $dataRow): array {
     return $m->invoke($pms, $grid, 3, $hi->invoke($pms, $grid));
 }
 
+/** Single-column LS delivery fixture plus one grouped status column for header detection. */
+function stampLs($existing): FakeSheets {
+    $grid = [
+        ['Project Name', 'LS Material Delivery', 'Main Ducting'],
+        ['',             '',                     'status'],
+        ['ACME SITE',    $existing,              ''],
+    ];
+    $sheets = new FakeSheets($grid);
+    $pms = new Pms($sheets, CFG);
+    $ref = new ReflectionClass(Pms::class);
+    $hi = $ref->getMethod('headerInfo'); $hi->setAccessible(true);
+    $ur = $ref->getMethod('updateRow'); $ur->setAccessible(true);
+    $ur->invoke($pms, 'SS', 'TAB', $grid, 3, $hi->invoke($pms, $grid),
+        ['stepStatuses' => [['step' => 'LS Material Delivery', 'status' => 'Done']]], false);
+    return $sheets;
+}
+
+group('ITEM 3 - repeatable LS Material Delivery dates');
+{
+    $pms = new Pms(new FakeSheets([]), CFG);
+    $today = new ReflectionMethod(Pms::class, 'today'); $today->setAccessible(true);
+    $date = $today->invoke($pms);
+
+    $s = stampLs('');
+    ok('first delivery writes today into the one date column', $s->written(2) === $date, var_export($s->written(2), true));
+
+    $s = stampLs('12-Aug-2026');
+    ok('later delivery appends with a comma and preserves the first date',
+       $s->written(2) === '12-Aug-2026, ' . $date, var_export($s->written(2), true));
+
+    $s = stampLs($date);
+    ok('multiple selections on the same date are still recorded',
+       $s->written(2) === $date . ', ' . $date, var_export($s->written(2), true));
+
+    $grid = [
+        ['Project Name', 'LS Material Delivery', 'Main Ducting'],
+        ['',             '',                     'status'],
+        ['ACME SITE',    '12-Aug-2026',          ''],
+    ];
+    $sheet = new FakeSheets($grid);
+    $probe = new Pms($sheet, CFG);
+    $ref = new ReflectionClass(Pms::class);
+    $hi = $ref->getMethod('headerInfo'); $hi->setAccessible(true);
+    $read = $ref->getMethod('readDoneSteps'); $read->setAccessible(true);
+    $done = $read->invoke($probe, $grid, 3, $hi->invoke($probe, $grid));
+    ok('an existing LS date is not returned as a locked step', !in_array('LS Material Delivery', $done, true), implode('|', $done));
+
+    ok('analytics reads the earliest date from the comma-separated history',
+       PmsDates::toYmd('21-Sep-2026, 12-Aug-2026') === '2026-08-12');
+}
+
 /* ------------------------------------------------------------------ ITEM 1 */
 group('ITEM 1 â€” dismantle Done stamps its OWN "Dismental End Date"');
 {

@@ -284,6 +284,18 @@ class PmsDates
         if ($s === '') {
             return null;
         }
+        // Repeatable date steps are stored as "date, date, ..." in one cell.
+        // Use the earliest visit when deriving the project's start date.
+        if (strpos($s, ',') !== false) {
+            $dates = [];
+            foreach (explode(',', $s) as $part) {
+                $d = self::toYmd(trim($part));
+                if ($d !== null) {
+                    $dates[] = $d;
+                }
+            }
+            return $dates ? min($dates) : null;
+        }
         foreach (['d-M-Y H:i:s', 'd-M-Y', 'Y-m-d H:i:s', 'Y-m-d', 'd/m/Y', 'd-m-Y'] as $fmt) {
             $d = DateTime::createFromFormat($fmt, $s);
             if ($d instanceof DateTime) {
